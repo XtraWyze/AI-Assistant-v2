@@ -63,6 +63,10 @@ def build_default_registry() -> ToolRegistry:
     from wyzer.tools.get_time import GetTimeTool
     from wyzer.tools.get_system_info import GetSystemInfoTool
     from wyzer.tools.open_website import OpenWebsiteTool
+
+    # Location / Weather tools
+    from wyzer.tools.get_location import GetLocationTool
+    from wyzer.tools.get_weather_forecast import GetWeatherForecastTool
     
     # Phase 6 tools - LocalLibrary
     from wyzer.tools.local_library_refresh import LocalLibraryRefreshTool
@@ -99,6 +103,10 @@ def build_default_registry() -> ToolRegistry:
     registry.register(GetTimeTool())
     registry.register(GetSystemInfoTool())
     registry.register(OpenWebsiteTool())
+
+    # Register location/weather tools
+    registry.register(GetLocationTool())
+    registry.register(GetWeatherForecastTool())
     
     # Register LocalLibrary tools
     registry.register(LocalLibraryRefreshTool())

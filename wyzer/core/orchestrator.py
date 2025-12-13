@@ -365,6 +365,9 @@ TOOL USAGE GUIDANCE:
 - For switching the default audio output device (speakers/headset): use set_audio_output_device with device="name" (fuzzy match allowed)
 - For monitor info: use monitor_info to check available monitors
 - For library management: use local_library_refresh to rebuild the index
+- For location: use get_location (approximate IP-based)
+- For weather/forecast: use get_weather_forecast (optionally pass location; otherwise it uses IP-based location)
+    - If user asks for Fahrenheit, pass units="fahrenheit" (or units="imperial")
 
 MULTI-INTENT SUPPORT (NEW):
 - You can now execute MULTIPLE tools in sequence for complex requests
