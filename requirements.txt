@@ -1,0 +1,21 @@
+# Wyzer Phase 4 Requirements
+# Audio
+sounddevice>=0.4.6
+numpy>=1.24.0
+
+# VAD & Hotword
+silero-vad>=4.0.0
+openwakeword>=0.6.0
+onnxruntime>=1.16.0
+
+# STT
+faster-whisper>=0.10.0
+
+# Utilities
+rich>=13.7.0
+
+# Phase 4: LLM integration (no additional dependencies - uses urllib from stdlib)
+
+# Note: torch may be auto-installed by silero-vad or faster-whisper
+# If you need CPU-only torch, install manually: pip install torch --index-url https://download.pytorch.org/whl/cpu
+# Note: tflite-runtime not available on newer Python. Use ONNX models with onnxruntime instead.
