@@ -16,8 +16,8 @@ class TTSRouter:
     def __init__(
         self,
         engine: str = "piper",
-        piper_exe_path: str = "./assets/piper/piper.exe",
-        piper_model_path: str = "./assets/piper/en_US-voice.onnx",
+        piper_exe_path: str = "./wyzer/assets/piper/piper.exe",
+        piper_model_path: str = "./wyzer/assets/piper/en_US-lessac-medium.onnx",
         piper_speaker_id: Optional[int] = None,
         output_device: Optional[int] = None,
         enabled: bool = True

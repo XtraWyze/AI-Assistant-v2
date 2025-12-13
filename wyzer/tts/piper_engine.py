@@ -15,8 +15,8 @@ class PiperTTSEngine:
     
     def __init__(
         self,
-        exe_path: str = "./assets/piper/piper.exe",
-        model_path: str = "./assets/piper/en_US-voice.onnx",
+        exe_path: str = "./wyzer/assets/piper/piper.exe",
+        model_path: str = "./wyzer/assets/piper/en_US-lessac-medium.onnx",
         speaker_id: Optional[int] = None
     ):
         """

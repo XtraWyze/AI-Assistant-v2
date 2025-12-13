@@ -100,7 +100,8 @@ class LLMEngine:
                 "options": {
                     "temperature": 0.4,
                     "top_p": 0.9,
-                    "num_ctx": 4096
+                    "num_ctx": 4096,
+                    "num_predict": 100
                 }
             }
             

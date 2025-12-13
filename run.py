@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wyzer AI Assistant - Phase 1-3
+Wyzer AI Assistant - Phase 5
 Entry point for running the assistant.
 
 Usage:
@@ -104,6 +104,50 @@ Examples:
         help="LLM request timeout in seconds (default: 30)"
     )
     
+    # TTS arguments (Phase 5)
+    parser.add_argument(
+        "--tts",
+        type=str,
+        default="on",
+        choices=["on", "off"],
+        help="Enable/disable TTS (default: on)"
+    )
+    
+    parser.add_argument(
+        "--tts-engine",
+        type=str,
+        default="piper",
+        choices=["piper"],
+        help="TTS engine to use (default: piper)"
+    )
+    
+    parser.add_argument(
+        "--piper-exe",
+        type=str,
+        default="./wyzer/assets/piper/piper.exe",
+        help="Path to Piper executable (default: ./wyzer/assets/piper/piper.exe)"
+    )
+    
+    parser.add_argument(
+        "--piper-model",
+        type=str,
+        default="./wyzer/assets/piper/en_US-lessac-medium.onnx",
+        help="Path to Piper voice model (default: ./wyzer/assets/piper/en_US-lessac-medium.onnx)"
+    )
+    
+    parser.add_argument(
+        "--tts-device",
+        type=str,
+        default=None,
+        help="Audio output device index for TTS"
+    )
+    
+    parser.add_argument(
+        "--no-speak-interrupt",
+        action="store_true",
+        help="Disable barge-in (hotword interrupt during speaking)"
+    )
+    
     return parser.parse_args()
 
 
@@ -130,9 +174,18 @@ def main():
             logger.info("Use --list-devices to see available devices")
             return 1
     
+    # Parse TTS output device
+    tts_output_device = None
+    if args.tts_device:
+        try:
+            tts_output_device = int(args.tts_device)
+        except ValueError:
+            logger.error(f"Invalid TTS device index: {args.tts_device}")
+            return 1
+    
     # Print startup banner
     print("\n" + "=" * 60)
-    print("  Wyzer AI Assistant - Phase 4")
+    print("  Wyzer AI Assistant - Phase 5")
     print("=" * 60)
     print(f"  Whisper Model: {args.model}")
     print(f"  Whisper Device: {args.whisper_device}")
@@ -143,6 +196,11 @@ def main():
     if args.llm == "ollama":
         print(f"  LLM Model: {args.ollama_model}")
         print(f"  LLM URL: {args.ollama_url}")
+    print(f"  TTS Enabled: {args.tts == 'on'}")
+    if args.tts == "on":
+        print(f"  TTS Engine: {args.tts_engine}")
+        print(f"  Piper Model: {args.piper_model}")
+        print(f"  Barge-in Enabled: {not args.no_speak_interrupt}")
     print(f"  Sample Rate: {Config.SAMPLE_RATE}Hz")
     print(f"  Log Level: {args.log_level}")
     print("=" * 60 + "\n")
@@ -165,7 +223,13 @@ def main():
             llm_mode=args.llm,
             ollama_model=args.ollama_model,
             ollama_url=args.ollama_url,
-            llm_timeout=args.llm_timeout
+            llm_timeout=args.llm_timeout,
+            tts_enabled=(args.tts == "on"),
+            tts_engine=args.tts_engine,
+            piper_exe_path=args.piper_exe,
+            piper_model_path=args.piper_model,
+            tts_output_device=tts_output_device,
+            speak_hotword_interrupt=not args.no_speak_interrupt
         )
         
         logger.info("Starting assistant... (Press Ctrl+C to stop)")

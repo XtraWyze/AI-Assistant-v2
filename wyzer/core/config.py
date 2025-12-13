@@ -28,7 +28,7 @@ class Config:
     HOTWORD_THRESHOLD: float = float(os.environ.get("WYZER_HOTWORD_THRESHOLD", "0.5"))
     HOTWORD_MODEL_PATH: str = os.environ.get("WYZER_HOTWORD_MODEL_PATH", "")
     HOTWORD_COOLDOWN_SEC: float = float(os.environ.get("WYZER_HOTWORD_COOLDOWN_SEC", "1.5"))
-    POST_IDLE_DRAIN_SEC: float = float(os.environ.get("WYZER_POST_IDLE_DRAIN_SEC", "0.35"))
+    POST_IDLE_DRAIN_SEC: float = float(os.environ.get("WYZER_POST_IDLE_DRAIN_SEC", "0.5"))
     
     # STT settings
     WHISPER_MODEL: str = os.environ.get("WYZER_WHISPER_MODEL", "small")
@@ -55,7 +55,10 @@ class Config:
     TTS_OUTPUT_DEVICE: Optional[int] = None if not os.environ.get("WYZER_TTS_OUTPUT_DEVICE") else int(os.environ.get("WYZER_TTS_OUTPUT_DEVICE"))
     SPEAK_HOTWORD_INTERRUPT: bool = os.environ.get("WYZER_SPEAK_HOTWORD_INTERRUPT", "true").lower() in ("true", "1", "yes")
     POST_SPEAK_DRAIN_SEC: float = float(os.environ.get("WYZER_POST_SPEAK_DRAIN_SEC", "0.35"))
-    SPEAK_START_COOLDOWN_SEC: float = float(os.environ.get("WYZER_SPEAK_START_COOLDOWN_SEC", "0.2"))
+    SPEAK_START_COOLDOWN_SEC: float = float(os.environ.get("WYZER_SPEAK_START_COOLDOWN_SEC", "1.8"))
+    POST_BARGEIN_IGNORE_SEC: float = float(os.environ.get("WYZER_POST_BARGEIN_IGNORE_SEC", "3.0"))
+    POST_BARGEIN_REQUIRE_SPEECH_START: bool = os.environ.get("WYZER_POST_BARGEIN_REQUIRE_SPEECH_START", "true").lower() in ("true", "1", "yes")
+    POST_BARGEIN_WAIT_FOR_SPEECH_SEC: float = float(os.environ.get("WYZER_POST_BARGEIN_WAIT_FOR_SPEECH_SEC", "2.0"))
     
     # Queue settings
     AUDIO_QUEUE_MAX_SIZE: int = int(os.environ.get("WYZER_AUDIO_QUEUE_MAX_SIZE", "100"))
