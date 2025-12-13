@@ -64,11 +64,59 @@ def build_default_registry() -> ToolRegistry:
     from wyzer.tools.get_system_info import GetSystemInfoTool
     from wyzer.tools.open_website import OpenWebsiteTool
     
+    # Phase 6 tools - LocalLibrary
+    from wyzer.tools.local_library_refresh import LocalLibraryRefreshTool
+    from wyzer.tools.open_target import OpenTargetTool
+    
+    # Phase 6 tools - Window management
+    from wyzer.tools.window_manager import (
+        FocusWindowTool,
+        MinimizeWindowTool,
+        MaximizeWindowTool,
+        CloseWindowTool,
+        MoveWindowToMonitorTool
+    )
+    
+    # Phase 6 tools - Monitor info
+    from wyzer.tools.monitor_info import MonitorInfoTool
+    
+    # Phase 6 tools - Media controls
+    from wyzer.tools.media_controls import (
+        MediaPlayPauseTool,
+        MediaNextTool,
+        MediaPreviousTool,
+        VolumeUpTool,
+        VolumeDownTool,
+        VolumeMuteToggleTool
+    )
+    
     registry = ToolRegistry()
     
     # Register default tools
     registry.register(GetTimeTool())
     registry.register(GetSystemInfoTool())
     registry.register(OpenWebsiteTool())
+    
+    # Register LocalLibrary tools
+    registry.register(LocalLibraryRefreshTool())
+    registry.register(OpenTargetTool())
+    
+    # Register window management tools
+    registry.register(FocusWindowTool())
+    registry.register(MinimizeWindowTool())
+    registry.register(MaximizeWindowTool())
+    registry.register(CloseWindowTool())
+    registry.register(MoveWindowToMonitorTool())
+    
+    # Register monitor info tool
+    registry.register(MonitorInfoTool())
+    
+    # Register media control tools
+    registry.register(MediaPlayPauseTool())
+    registry.register(MediaNextTool())
+    registry.register(MediaPreviousTool())
+    registry.register(VolumeUpTool())
+    registry.register(VolumeDownTool())
+    registry.register(VolumeMuteToggleTool())
     
     return registry

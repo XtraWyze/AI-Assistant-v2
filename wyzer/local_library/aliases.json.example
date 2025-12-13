@@ -1,0 +1,19 @@
+{
+  "_comment": "User-defined aliases for LocalLibrary. Add your custom shortcuts here.",
+  "_example_folder": {
+    "type": "folder",
+    "target": "C:\\Path\\To\\Folder"
+  },
+  "_example_file": {
+    "type": "file",
+    "target": "C:\\Path\\To\\File.txt"
+  },
+  "_example_app": {
+    "type": "app",
+    "target": "C:\\Path\\To\\Application.exe"
+  },
+  "_example_url": {
+    "type": "url",
+    "target": "https://example.com"
+  }
+}

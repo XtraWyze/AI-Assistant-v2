@@ -27,21 +27,42 @@ def test_tools():
     print("=" * 60 + "\n")
     
     from wyzer.core.orchestrator import handle_user_text
+    from wyzer.tools.registry import build_default_registry
     
+    # Build registry to test tool imports
+    print("Building tool registry...")
+    try:
+        registry = build_default_registry()
+        tools = registry.list_tools()
+        print(f"Loaded {len(tools)} tools\n")
+    except Exception as e:
+        print(f"ERROR loading registry: {e}\n")
+        import traceback
+        traceback.print_exc()
+        return
+    
+    # Test queries
     test_queries = [
         "what time is it",
         "what's the system information",
-        "open https://example.com"
+        "show me monitor info",
+        "open downloads",
+        "pause music"
     ]
     
+    print("Running test queries...\n")
     for query in test_queries:
         print(f"User: {query}")
-        result = handle_user_text(query)
-        print(f"Wyzer: {result.get('reply', '(no reply)')}")
+        try:
+            result = handle_user_text(query)
+            print(f"Wyzer: {result.get('reply', '(no reply)')}")
+            print(f"Latency: {result.get('latency_ms', 0)}ms")
+        except Exception as e:
+            print(f"ERROR: {e}")
         print()
     
     print("=" * 60)
-    print("Test complete. Set WYZER_TOOLS_TEST=0 to run normally.")
+    print("Test complete. Unset WYZER_TOOLS_TEST to run normally.")
     print("=" * 60 + "\n")
 
 
@@ -219,7 +240,7 @@ def main():
     
     # Print startup banner
     print("\n" + "=" * 60)
-    print("  Wyzer AI Assistant - Phase 5")
+    print("  Wyzer AI Assistant - Phase 6")
     print("=" * 60)
     print(f"  Whisper Model: {args.model}")
     print(f"  Whisper Device: {args.whisper_device}")

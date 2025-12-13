@@ -490,7 +490,7 @@ class WyzerAssistant:
                 "reply": result_dict.get("reply", ""),
                 "confidence": 0.8,
                 "model": Config.OLLAMA_MODEL,
-                "latency_ms": 0  # Orchestrator handles its own timing
+                "latency_ms": result_dict.get("latency_ms", 0)
             }
         except Exception as e:
             self.logger.error(f"Error in background thinking: {e}")

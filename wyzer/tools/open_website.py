@@ -13,14 +13,14 @@ class OpenWebsiteTool(ToolBase):
         """Initialize open_website tool"""
         super().__init__()
         self._name = "open_website"
-        self._description = "Open a website URL in the default browser"
+        self._description = "Open a website URL in the default browser (accepts 'facebook', 'youtube', 'github.com', or full URLs)"
         self._args_schema = {
             "type": "object",
             "properties": {
                 "url": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Full URL starting with http:// or https://"
+                    "description": "Website name or URL (e.g., 'facebook', 'youtube.com', or 'https://example.com')"
                 }
             },
             "required": ["url"],
@@ -37,14 +37,33 @@ class OpenWebsiteTool(ToolBase):
         Returns:
             Dict with status and url, or error
         """
-        url = kwargs.get("url", "")
+        url = kwargs.get("url", "").strip()
         
-        # Validate URL format
-        if not url.startswith("http://") and not url.startswith("https://"):
+        if not url:
             return {
                 "error": {
                     "type": "invalid_url",
-                    "message": "URL must start with http:// or https://"
+                    "message": "URL cannot be empty"
+                }
+            }
+        
+        # Normalize URL: add https:// if no scheme present
+        if not url.startswith("http://") and not url.startswith("https://"):
+            # Check if it looks like a valid domain or common shorthand
+            # Accept formats like: "facebook", "facebook.com", "openfacebook.com", "youtube"
+            if "." not in url:
+                # Simple name like "facebook" or "youtube" -> add .com
+                url = f"https://{url}.com"
+            else:
+                # Has dot, assume it's a domain like "facebook.com"
+                url = f"https://{url}"
+        
+        # Basic validation: reject obviously invalid URLs
+        if " " in url or url.count("://") > 1:
+            return {
+                "error": {
+                    "type": "invalid_url",
+                    "message": "URL format is invalid"
                 }
             }
         

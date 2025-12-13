@@ -8,11 +8,21 @@ import urllib.request
 import urllib.error
 from typing import Dict, Any
 from wyzer.core.config import Config
+from wyzer.core.logger import get_logger
 from wyzer.tools.registry import build_default_registry
 from wyzer.tools.validation import validate_args
 
 # Module-level singleton registry
 _registry = None
+_logger = None
+
+
+def get_logger_instance():
+    """Get or create logger instance"""
+    global _logger
+    if _logger is None:
+        _logger = get_logger()
+    return _logger
 
 
 def get_registry():
@@ -31,8 +41,10 @@ def handle_user_text(text: str) -> Dict[str, str]:
         text: User's input text
         
     Returns:
-        Dict with "reply" key containing the final response
+        Dict with "reply" and "latency_ms" keys
     """
+    start_time = time.perf_counter()
+    
     try:
         registry = get_registry()
         
@@ -51,18 +63,40 @@ def handle_user_text(text: str) -> Dict[str, str]:
             final_response = _call_llm_with_tool_result(
                 text, tool_name, tool_args, tool_result, registry
             )
-            return {"reply": final_response.get("reply", "I executed the action.")}
+            
+            # Calculate latency
+            end_time = time.perf_counter()
+            latency_ms = int((end_time - start_time) * 1000)
+            
+            return {
+                "reply": final_response.get("reply", "I executed the action."),
+                "latency_ms": latency_ms
+            }
         else:
             # No tool needed, return direct reply
-            return {"reply": llm_response.get("reply", "")}
+            end_time = time.perf_counter()
+            latency_ms = int((end_time - start_time) * 1000)
+            
+            return {
+                "reply": llm_response.get("reply", ""),
+                "latency_ms": latency_ms
+            }
             
     except Exception as e:
         # Safe fallback on any error
-        return {"reply": f"I encountered an error: {str(e)}"}
+        end_time = time.perf_counter()
+        latency_ms = int((end_time - start_time) * 1000)
+        
+        return {
+            "reply": f"I encountered an error: {str(e)}",
+            "latency_ms": latency_ms
+        }
 
 
 def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute a tool with validation"""
+    """Execute a tool with validation and logging"""
+    logger = get_logger_instance()
+    
     # Check tool exists
     tool = registry.get(tool_name)
     if tool is None:
@@ -78,17 +112,26 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
     if not is_valid:
         return {"error": error}
     
+    # Log BEFORE execution
+    logger.info(f"[TOOLS] Executing {tool_name} args={tool_args}")
+    
     # Execute tool
     try:
         result = tool.run(**tool_args)
+        
+        # Log AFTER execution
+        logger.info(f"[TOOLS] Result {result}")
+        
         return result
     except Exception as e:
-        return {
+        error_result = {
             "error": {
                 "type": "execution_error",
                 "message": str(e)
             }
         }
+        logger.info(f"[TOOLS] Result {error_result}")
+        return error_result
 
 
 def _call_llm(user_text: str, registry) -> Dict[str, Any]:
@@ -106,6 +149,26 @@ def _call_llm(user_text: str, registry) -> Dict[str, Any]:
 
 Available tools:
 {tools_desc}
+
+TOOL USAGE GUIDANCE:
+- For "open X" requests: ALWAYS use open_target for folders/apps (downloads, documents, chrome, notepad, etc.). Use open_website ONLY for explicit URLs/websites.
+- For window control: use focus_window, minimize_window, maximize_window, close_window, or move_window_to_monitor
+- For media control: use media_play_pause, media_next, media_previous for playback; volume_up, volume_down, volume_mute_toggle for audio
+- For monitor info: use monitor_info to check available monitors
+- For library management: use local_library_refresh to rebuild the index
+
+EXAMPLES:
+User: "open downloads"
+Response: {{"tool": "open_target", "args": {{"query": "downloads"}}}}
+
+User: "launch chrome"
+Response: {{"tool": "open_target", "args": {{"query": "chrome"}}}}
+
+User: "open youtube"
+Response: {{"tool": "open_website", "args": {{"url": "youtube"}}}}
+
+User: "pause music"
+Response: {{"tool": "media_play_pause", "args": {{}}}}
 
 RESPONSE FORMAT: You must respond with valid JSON only (no markdown, no code blocks).
 Option 1 - Direct reply (no tool needed):

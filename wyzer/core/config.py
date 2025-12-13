@@ -66,6 +66,18 @@ class Config:
     # Logging
     LOG_LEVEL: str = os.environ.get("WYZER_LOG_LEVEL", "INFO")
     
+    # Tool Safety Settings (Phase 6)
+    ENABLE_FORCE_CLOSE: bool = os.environ.get("WYZER_ENABLE_FORCE_CLOSE", "false").lower() in ("true", "1", "yes")
+    ALLOWED_APPS_TO_LAUNCH: List[str] = os.environ.get(
+        "WYZER_ALLOWED_APPS_TO_LAUNCH",
+        "notepad,calc,calculator,paint,explorer,chrome,firefox,edge,vscode,cmd,powershell"
+    ).split(",")
+    ALLOWED_PROCESSES_TO_CLOSE: List[str] = os.environ.get(
+        "WYZER_ALLOWED_PROCESSES_TO_CLOSE",
+        ""
+    ).split(",") if os.environ.get("WYZER_ALLOWED_PROCESSES_TO_CLOSE") else []
+    REQUIRE_EXPLICIT_APP_MATCH: bool = os.environ.get("WYZER_REQUIRE_EXPLICIT_APP_MATCH", "true").lower() in ("true", "1", "yes")
+    
     @classmethod
     def get_frame_duration_ms(cls) -> float:
         """Get frame duration in milliseconds"""
