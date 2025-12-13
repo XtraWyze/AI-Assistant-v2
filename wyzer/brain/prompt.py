@@ -1,6 +1,10 @@
 """
 Prompt engineering for Wyzer AI Assistant.
 System prompts and conversation formatting.
+
+NOTE: As of Phase 6 Multi-Intent enhancement, the main tool-aware prompts
+are defined in wyzer.core.orchestrator for tool execution planning.
+This module contains the base conversational prompt for non-tool interactions.
 """
 
 SYSTEM_PROMPT = """You are Wyzer, a local voice assistant running entirely on the user's device.
@@ -22,7 +26,15 @@ Response style:
 - Use natural, conversational language
 - If you truly don't know something, say so briefly and move on
 
-Remember: You are a LOCAL assistant focused on quick, helpful conversation."""
+Remember: You are a LOCAL assistant focused on quick, helpful conversation.
+
+---
+MULTI-INTENT SUPPORT (Phase 6):
+When tools are available (via orchestrator), you can execute multiple actions
+in sequence by returning an "intents" array with ordered tool calls.
+See wyzer.core.orchestrator._call_llm() for the full tool-aware prompt format.
+---
+"""
 
 
 def format_prompt(user_input: str) -> str:

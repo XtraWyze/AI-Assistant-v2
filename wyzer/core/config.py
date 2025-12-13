@@ -26,6 +26,9 @@ class Config:
     # Hotword settings
     HOTWORD_KEYWORDS: List[str] = os.environ.get("WYZER_HOTWORD_KEYWORDS", "hey jarvis,jarvis").split(",")
     HOTWORD_THRESHOLD: float = float(os.environ.get("WYZER_HOTWORD_THRESHOLD", "0.5"))
+    # Require this many consecutive frames above threshold before triggering.
+    # Helps prevent false triggers from noise / TTS bleed-through.
+    HOTWORD_TRIGGER_STREAK: int = int(os.environ.get("WYZER_HOTWORD_TRIGGER_STREAK", "3"))
     HOTWORD_MODEL_PATH: str = os.environ.get("WYZER_HOTWORD_MODEL_PATH", "")
     HOTWORD_COOLDOWN_SEC: float = float(os.environ.get("WYZER_HOTWORD_COOLDOWN_SEC", "1.5"))
     POST_IDLE_DRAIN_SEC: float = float(os.environ.get("WYZER_POST_IDLE_DRAIN_SEC", "0.5"))

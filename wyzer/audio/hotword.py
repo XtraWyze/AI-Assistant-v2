@@ -46,6 +46,9 @@ class HotwordDetector:
         
         # Rising-edge detection: track previous scores per model
         self.prev_scores: dict = {}
+
+        # Consecutive-frame streak tracking (per model key)
+        self.streak_counts: dict = {}
         
         if not OPENWAKEWORD_AVAILABLE:
             raise RuntimeError(
@@ -180,11 +183,32 @@ class HotwordDetector:
                     
                     # Get previous score for this model (default to 0.0)
                     prev_score = self.prev_scores.get(model_key, 0.0)
+
+                    # Update streak count
+                    prev_streak = self.streak_counts.get(model_key, 0)
+                    if score >= self.threshold:
+                        streak = prev_streak + 1
+                    else:
+                        streak = 0
+                    self.streak_counts[model_key] = streak
                     
-                    # Rising-edge detection: trigger only when crossing threshold
-                    if prev_score < self.threshold and score >= self.threshold:
-                        self.logger.info(f"Hotword detected: '{keyword}' (score: {score:.3f}, prev: {prev_score:.3f})")
-                        detected_keyword = keyword
+                    # Trigger only when we *reach* the required streak count.
+                    # This filters out one-off spikes while keeping latency low.
+                    required_streak = max(1, int(getattr(Config, "HOTWORD_TRIGGER_STREAK", 1)))
+                    if required_streak == 1:
+                        # Backward-compatible rising-edge behavior
+                        if prev_score < self.threshold and score >= self.threshold:
+                            self.logger.info(
+                                f"Hotword detected: '{keyword}' (score: {score:.3f}, prev: {prev_score:.3f}, streak: {streak})"
+                            )
+                            detected_keyword = keyword
+                    else:
+                        # Require N consecutive frames >= threshold
+                        if prev_streak < required_streak and streak >= required_streak:
+                            self.logger.info(
+                                f"Hotword detected: '{keyword}' (score: {score:.3f}, prev: {prev_score:.3f}, streak: {streak})"
+                            )
+                            detected_keyword = keyword
                     
                     # Update previous score
                     self.prev_scores[model_key] = score
@@ -249,6 +273,7 @@ class HotwordDetector:
     def reset(self) -> None:
         """Reset detector state including previous scores"""
         self.prev_scores = {}
+        self.streak_counts = {}
         if self.model:
             # openWakeWord model doesn't need explicit reset for frame-by-frame
             pass

@@ -71,8 +71,7 @@ class WyzerAssistant:
         # Hotword cooldown tracking
         self.last_hotword_time: float = 0.0
         
-        # Post-barge-in hotword ignore window (prevents immediate re-trigger)
-        self._ignore_hotword_until_ts: float = 0.0
+        # Post-barge-in speech gating
         self._bargein_pending_speech: bool = False
         self._bargein_wait_speech_deadline_ts: float = 0.0
         self._speaking_start_ts: float = 0.0
@@ -254,17 +253,7 @@ class WyzerAssistant:
         """
         # In IDLE, check for hotword (if enabled)
         if self.enable_hotword and self.hotword:
-            # Check if in post-barge-in ignore window
             current_time = time.time()
-            if current_time < self._ignore_hotword_until_ts:
-                # Hotword detection temporarily disabled after barge-in
-                return
-            
-            # Additionally check if waiting for speech after barge-in
-            if self._bargein_pending_speech:
-                # Still waiting for speech start after barge-in, keep hotword disabled
-                return
-            
             detected_keyword, score = self.hotword.detect(audio_frame)
             
             if detected_keyword:
@@ -575,25 +564,22 @@ class WyzerAssistant:
         if not self.speak_hotword_interrupt or not self.enable_hotword or not self.hotword:
             return
         
-        # Check if in post-barge-in ignore window
         current_time = time.time()
-        if current_time < self._ignore_hotword_until_ts:
-            # Hotword detection temporarily disabled after previous barge-in
-            return
+
+        # Always run hotword detection to keep detector state up-to-date,
+        # then decide whether to act on a detection.
+        detected_keyword, score = self.hotword.detect(audio_frame)
         
         # Check if speaking just started (prevent immediate interrupt from residual hotword)
         time_since_speak_start = current_time - self._speaking_start_ts
         if time_since_speak_start <= Config.SPEAK_START_COOLDOWN_SEC:
-            # Too soon after speaking started, ignore hotword
+            # Too soon after speaking started, ignore hotword triggers
             return
         
         # Additionally check if waiting for speech after barge-in
         if self._bargein_pending_speech:
             # Still waiting for speech start after previous barge-in
             return
-        
-        # Check for hotword
-        detected_keyword, score = self.hotword.detect(audio_frame)
         
         if detected_keyword:
             # Check cooldown period
@@ -608,19 +594,14 @@ class WyzerAssistant:
             self.logger.info(f"Hotword '{detected_keyword}' detected - interrupting speech (barge-in)")
             self.last_hotword_time = current_time
             
-            # Set post-barge-in ignore window to prevent immediate re-trigger
-            self._ignore_hotword_until_ts = current_time + Config.POST_BARGEIN_IGNORE_SEC
-            
             # Set barge-in pending speech flags
             if Config.POST_BARGEIN_REQUIRE_SPEECH_START:
                 self._bargein_pending_speech = True
                 self._bargein_wait_speech_deadline_ts = current_time + Config.POST_BARGEIN_WAIT_FOR_SPEECH_SEC
                 self.logger.info(
-                    f"Post-barge-in hotword ignore for {Config.POST_BARGEIN_IGNORE_SEC}s; "
+                    f"Post-barge-in speech gating enabled; "
                     f"waiting for speech start up to {Config.POST_BARGEIN_WAIT_FOR_SPEECH_SEC}s"
                 )
-            else:
-                self.logger.info(f"Post-barge-in hotword ignore for {Config.POST_BARGEIN_IGNORE_SEC}s")
             
             # Stop TTS immediately
             self.tts_stop_event.set()
@@ -631,10 +612,6 @@ class WyzerAssistant:
             
             # Drain audio queue to remove stale frames
             self._drain_audio_queue(Config.POST_SPEAK_DRAIN_SEC)
-            
-            # Reset hotword detector state to prevent re-triggering
-            if self.hotword:
-                self.hotword.reset()
             
             # Transition directly to LISTENING
             self.state.transition_to(AssistantState.LISTENING)
@@ -663,10 +640,6 @@ class WyzerAssistant:
             else:
                 # Drain queue and reset to IDLE
                 self._drain_audio_queue(Config.POST_SPEAK_DRAIN_SEC)
-                
-                # Reset hotword detector to prevent re-triggering
-                if self.hotword:
-                    self.hotword.reset()
                 
                 self.speaking_thread = None
                 self.state.transition_to(AssistantState.IDLE)

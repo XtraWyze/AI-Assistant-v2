@@ -1,16 +1,23 @@
 """
 Orchestrator for Wyzer AI Assistant - Phase 6
 Coordinates LLM reasoning and tool execution.
+Supports multi-intent commands (Phase 6 enhancement).
 """
 import json
 import time
 import urllib.request
 import urllib.error
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from wyzer.core.config import Config
 from wyzer.core.logger import get_logger
 from wyzer.tools.registry import build_default_registry
 from wyzer.tools.validation import validate_args
+from wyzer.core.intent_plan import (
+    normalize_plan,
+    validate_intents,
+    ExecutionResult,
+    ExecutionSummary
+)
 
 # Module-level singleton registry
 _registry = None
@@ -33,35 +40,52 @@ def get_registry():
     return _registry
 
 
-def handle_user_text(text: str) -> Dict[str, str]:
+def handle_user_text(text: str) -> Dict[str, Any]:
     """
-    Handle user text input with optional tool execution.
+    Handle user text input with optional multi-intent tool execution.
     
     Args:
         text: User's input text
         
     Returns:
-        Dict with "reply" and "latency_ms" keys
+        Dict with "reply", "latency_ms", and optional "execution_summary" keys
     """
     start_time = time.perf_counter()
+    logger = get_logger_instance()
     
     try:
         registry = get_registry()
         
-        # First LLM call: interpret user intent
+        # First LLM call: interpret user intent(s)
         llm_response = _call_llm(text, registry)
         
-        # Check if LLM wants to use a tool
-        if "tool" in llm_response and llm_response.get("tool"):
-            tool_name = llm_response["tool"]
-            tool_args = llm_response.get("args", {})
+        # Normalize LLM response to standard IntentPlan format
+        intent_plan = normalize_plan(llm_response)
+        
+        # Check if there are any intents to execute
+        if intent_plan.intents:
+            # Log parsed plan (tool names only)
+            tool_names = [intent.tool for intent in intent_plan.intents]
+            logger.info(f"[INTENT PLAN] Executing {len(intent_plan.intents)} intent(s): {', '.join(tool_names)}")
             
-            # Execute tool
-            tool_result = _execute_tool(registry, tool_name, tool_args)
+            # Validate all intents before execution
+            try:
+                validate_intents(intent_plan.intents, registry)
+            except ValueError as e:
+                # Validation failed - return error
+                end_time = time.perf_counter()
+                latency_ms = int((end_time - start_time) * 1000)
+                return {
+                    "reply": f"I cannot execute that request: {str(e)}",
+                    "latency_ms": latency_ms
+                }
             
-            # Second LLM call: generate final reply with tool result
-            final_response = _call_llm_with_tool_result(
-                text, tool_name, tool_args, tool_result, registry
+            # Execute intents sequentially
+            execution_summary = _execute_intents(intent_plan.intents, registry)
+            
+            # Second LLM call: generate final reply with execution results
+            final_response = _call_llm_with_execution_summary(
+                text, execution_summary, registry
             )
             
             # Calculate latency
@@ -70,20 +94,33 @@ def handle_user_text(text: str) -> Dict[str, str]:
             
             return {
                 "reply": final_response.get("reply", "I executed the action."),
-                "latency_ms": latency_ms
+                "latency_ms": latency_ms,
+                "execution_summary": {
+                    "ran": [
+                        {
+                            "tool": r.tool,
+                            "ok": r.ok,
+                            "result": r.result,
+                            "error": r.error
+                        }
+                        for r in execution_summary.ran
+                    ],
+                    "stopped_early": execution_summary.stopped_early
+                }
             }
         else:
-            # No tool needed, return direct reply
+            # No intents needed, return direct reply
             end_time = time.perf_counter()
             latency_ms = int((end_time - start_time) * 1000)
             
             return {
-                "reply": llm_response.get("reply", ""),
+                "reply": intent_plan.reply or llm_response.get("reply", ""),
                 "latency_ms": latency_ms
             }
             
     except Exception as e:
         # Safe fallback on any error
+        logger.error(f"[ORCHESTRATOR ERROR] {str(e)}")
         end_time = time.perf_counter()
         latency_ms = int((end_time - start_time) * 1000)
         
@@ -91,6 +128,51 @@ def handle_user_text(text: str) -> Dict[str, str]:
             "reply": f"I encountered an error: {str(e)}",
             "latency_ms": latency_ms
         }
+
+
+def _execute_intents(intents, registry) -> ExecutionSummary:
+    """
+    Execute multiple intents sequentially and collect results.
+    
+    Args:
+        intents: List of Intent objects to execute
+        registry: Tool registry
+        
+    Returns:
+        ExecutionSummary with results of all executed intents
+    """
+    logger = get_logger_instance()
+    results = []
+    stopped_early = False
+    
+    for idx, intent in enumerate(intents):
+        logger.info(f"[INTENT {idx + 1}/{len(intents)}] Executing: {intent.tool}")
+        
+        # Execute the tool
+        tool_result = _execute_tool(registry, intent.tool, intent.args)
+        
+        # Check if execution was successful
+        has_error = "error" in tool_result
+        
+        # Create execution result
+        exec_result = ExecutionResult(
+            tool=intent.tool,
+            ok=not has_error,
+            result=tool_result if not has_error else None,
+            error=str(tool_result.get("error")) if has_error else None
+        )
+        
+        results.append(exec_result)
+        
+        # If error occurred and continue_on_error is False, stop execution
+        if has_error and not intent.continue_on_error:
+            logger.info(f"[INTENT {idx + 1}/{len(intents)}] Failed, stopping execution")
+            stopped_early = True
+            break
+        
+        logger.info(f"[INTENT {idx + 1}/{len(intents)}] {'Success' if not has_error else 'Failed (continuing)'}")
+    
+    return ExecutionSummary(ran=results, stopped_early=stopped_early)
 
 
 def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
@@ -139,7 +221,7 @@ def _call_llm(user_text: str, registry) -> Dict[str, Any]:
     Call LLM for initial intent interpretation.
     
     Returns:
-        Dict with either {"reply": "..."} or {"tool": "...", "args": {...}}
+        Dict with either {"reply": "..."} or {"intents": [...]} or legacy formats
     """
     # Build tool list for prompt
     tools_list = registry.list_tools()
@@ -153,41 +235,110 @@ Available tools:
 TOOL USAGE GUIDANCE:
 - For "open X" requests: ALWAYS use open_target for folders/apps (downloads, documents, chrome, notepad, etc.). Use open_website ONLY for explicit URLs/websites.
 - For window control: use focus_window, minimize_window, maximize_window, close_window, or move_window_to_monitor
+  - move_window_to_monitor: Use monitor="primary" for primary monitor, or monitor=0/1/2 for specific monitor index
 - For media control: use media_play_pause, media_next, media_previous for playback; volume_up, volume_down, volume_mute_toggle for audio
 - For monitor info: use monitor_info to check available monitors
 - For library management: use local_library_refresh to rebuild the index
 
+MULTI-INTENT SUPPORT (NEW):
+- You can now execute MULTIPLE tools in sequence for complex requests
+- Use "intents" array to specify multiple actions in order
+- Each intent has: {{"tool": "tool_name", "args": {{...}}, "continue_on_error": false}}
+- Keep intents under 5 per request
+- Preserve order - they execute sequentially
+
 EXAMPLES:
 User: "open downloads"
-Response: {{"tool": "open_target", "args": {{"query": "downloads"}}}}
+Response: {{"intents": [{{"tool": "open_target", "args": {{"query": "downloads"}}}}], "reply": "Opening downloads"}}
 
-User: "launch chrome"
-Response: {{"tool": "open_target", "args": {{"query": "chrome"}}}}
+User: "launch chrome and open youtube"
+Response: {{"intents": [{{"tool": "open_target", "args": {{"query": "chrome"}}}}, {{"tool": "open_website", "args": {{"url": "youtube"}}}}], "reply": "Launching Chrome and opening YouTube"}}
 
-User: "open youtube"
-Response: {{"tool": "open_website", "args": {{"url": "youtube"}}}}
+User: "pause music and mute volume"
+Response: {{"intents": [{{"tool": "media_play_pause", "args": {{}}}}, {{"tool": "volume_mute_toggle", "args": {{}}}}], "reply": "Pausing and muting"}}
 
-User: "pause music"
-Response: {{"tool": "media_play_pause", "args": {{}}}}
+User: "move chrome to primary monitor"
+Response: {{"intents": [{{"tool": "move_window_to_monitor", "args": {{"process": "chrome", "monitor": "primary"}}}}], "reply": "Moving Chrome to your primary monitor"}}
+
+User: "what time is it"
+Response: {{"intents": [{{"tool": "get_time", "args": {{}}}}], "reply": ""}}
+
+User: "hello"
+Response: {{"reply": "Hello! How can I help you?"}}
 
 RESPONSE FORMAT: You must respond with valid JSON only (no markdown, no code blocks).
 Option 1 - Direct reply (no tool needed):
 {{"reply": "your response here"}}
 
-Option 2 - Use a tool:
-{{"tool": "tool_name", "args": {{"key": "value"}}, "reply": "optional brief message"}}
+Option 2 - Single tool:
+{{"intents": [{{"tool": "tool_name", "args": {{"key": "value"}}}}], "reply": "brief message"}}
+
+Option 3 - Multiple tools (for multi-step requests):
+{{"intents": [{{"tool": "tool1", "args": {{}}}}, {{"tool": "tool2", "args": {{}}}}], "reply": "brief message"}}
 
 Rules:
 - Keep replies to 1-2 sentences
 - Be direct and helpful
-- Use tools when appropriate to answer the user's question
-- If using a tool, I will run it and ask you again for the final reply
+- Use intents when appropriate to answer the user's question
+- Preserve order for multi-step actions
+- If using tools, I will run them and ask you again for the final reply
 
 User: {user_text}
 
 Your response (JSON only):"""
 
     return _ollama_request(prompt)
+
+
+def _call_llm_with_execution_summary(
+    user_text: str,
+    execution_summary: ExecutionSummary,
+    registry
+) -> Dict[str, Any]:
+    """
+    Call LLM after tool execution(s) to generate final reply.
+    
+    Args:
+        user_text: Original user request
+        execution_summary: Summary of executed intents
+        registry: Tool registry
+        
+    Returns:
+        Dict with {"reply": "..."}
+    """
+    # Build a summary of what was executed
+    summary_parts = []
+    for result in execution_summary.ran:
+        if result.ok:
+            summary_parts.append(
+                f"- Executed '{result.tool}' successfully. Result: {json.dumps(result.result)}"
+            )
+        else:
+            summary_parts.append(
+                f"- Failed to execute '{result.tool}'. Error: {result.error}"
+            )
+    
+    if execution_summary.stopped_early:
+        summary_parts.append("- Execution stopped early due to error")
+    
+    summary_text = "\n".join(summary_parts)
+    
+    prompt = f"""You are Wyzer, a local voice assistant.
+
+The user asked: {user_text}
+
+I executed the following actions:
+{summary_text}
+
+Now provide a natural, concise reply to the user (1-2 sentences) based on these results.
+
+RESPONSE FORMAT: JSON only (no markdown):
+{{"reply": "your natural response to the user"}}
+
+Your response (JSON only):"""
+
+    response = _ollama_request(prompt)
+    return response
 
 
 def _call_llm_with_tool_result(

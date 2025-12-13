@@ -496,7 +496,7 @@ class MoveWindowToMonitorTool(ToolBase):
     def __init__(self):
         super().__init__()
         self._name = "move_window_to_monitor"
-        self._description = "Move a window to a specific monitor with positioning"
+        self._description = "Move a window to a specific monitor with positioning (use 'primary' or monitor index)"
         self._args_schema = {
             "type": "object",
             "properties": {
@@ -509,9 +509,11 @@ class MoveWindowToMonitorTool(ToolBase):
                     "description": "Process name (e.g., 'chrome.exe', 'notepad')"
                 },
                 "monitor": {
-                    "type": "integer",
-                    "description": "Monitor index (0-based)",
-                    "minimum": 0
+                    "description": "Monitor index (0-based) or 'primary' for primary monitor",
+                    "oneOf": [
+                        {"type": "integer", "minimum": 0},
+                        {"type": "string", "enum": ["primary"]}
+                    ]
                 },
                 "position": {
                     "type": "string",
@@ -529,7 +531,7 @@ class MoveWindowToMonitorTool(ToolBase):
         
         title = kwargs.get("title")
         process = kwargs.get("process")
-        monitor_index = kwargs.get("monitor", 0)
+        monitor_spec = kwargs.get("monitor", 0)
         position = kwargs.get("position", "maximize")
         
         if not title and not process:
@@ -544,16 +546,40 @@ class MoveWindowToMonitorTool(ToolBase):
             # Get monitors
             monitors = _enumerate_monitors()
             
-            if monitor_index >= len(monitors):
-                return {
-                    "error": {
-                        "type": "invalid_monitor",
-                        "message": f"Monitor index {monitor_index} out of range (0-{len(monitors)-1})"
-                    },
-                    "latency_ms": int((time.perf_counter() - start_time) * 1000)
-                }
-            
-            monitor = monitors[monitor_index]
+            # Handle "primary" keyword
+            if isinstance(monitor_spec, str) and monitor_spec.lower() == "primary":
+                # Find primary monitor
+                primary_monitor = None
+                for mon in monitors:
+                    if mon.get("primary", False):
+                        primary_monitor = mon
+                        break
+                
+                if primary_monitor is None:
+                    return {
+                        "error": {
+                            "type": "invalid_monitor",
+                            "message": "No primary monitor found"
+                        },
+                        "latency_ms": int((time.perf_counter() - start_time) * 1000)
+                    }
+                
+                monitor = primary_monitor
+                monitor_index = monitor["index"]
+            else:
+                # Use numeric index
+                monitor_index = int(monitor_spec)
+                
+                if monitor_index >= len(monitors):
+                    return {
+                        "error": {
+                            "type": "invalid_monitor",
+                            "message": f"Monitor index {monitor_index} out of range (0-{len(monitors)-1})"
+                        },
+                        "latency_ms": int((time.perf_counter() - start_time) * 1000)
+                    }
+                
+                monitor = monitors[monitor_index]
             
             # Find window
             hwnd = _find_window(title, process)
