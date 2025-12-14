@@ -347,6 +347,14 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             tts_start_ms: Optional[int] = None
 
             tts_interrupted = False
+            
+            # Determine if we should show follow-up prompt
+            # - Show prompt for tool calls (has tool_calls) and non-question statements
+            # - Don't show prompt if response is a question (ends with ?)
+            show_followup_prompt = True
+            if reply and reply.rstrip().endswith("?"):
+                # Response is a question - don't show prompt, just listen
+                show_followup_prompt = False
 
             # If user interrupted while we were processing, do not speak stale reply.
             if request_gen != interrupt_generation:
@@ -359,6 +367,7 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             if tts_text:
                 tts_start_ms = now_ms()
                 tts_meta = msg.get("meta") or {}
+                tts_meta["show_followup_prompt"] = show_followup_prompt
                 tts_controller.enqueue(tts_text, meta=tts_meta)
 
             total_ms = now_ms() - start_ms
@@ -383,6 +392,8 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                         "user_text": user_text,
                         "is_followup": meta.get("is_followup", False),  # Preserve followup flag
                         "followup_chain": meta.get("followup_chain"),  # Preserve chain count
+                        "show_followup_prompt": show_followup_prompt,  # Whether to show prompt
+                        "has_tool_calls": bool(tool_calls),  # Whether response involved tools
                     },
                 },
             )

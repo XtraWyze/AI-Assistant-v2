@@ -959,6 +959,7 @@ class WyzerAssistantMultiprocess:
 
         # Brain speaking flag (driven by worker LOG events)
         self._brain_speaking: bool = False
+        self._show_followup_prompt: bool = True  # Whether to show "Is there anything else?" prompt
 
         self._exit_after_tts: bool = False
 
@@ -1380,6 +1381,9 @@ class WyzerAssistantMultiprocess:
                 user_text = str(meta.get("user_text") or "").strip()
                 is_followup = meta.get("is_followup", False)
                 
+                # Capture whether to show follow-up prompt (set by brain worker)
+                self._show_followup_prompt = meta.get("show_followup_prompt", True)
+                
                 # Check if this is an exit phrase in FOLLOWUP mode
                 if is_followup and user_text and self.followup_manager.is_exit_phrase(user_text):
                     self.logger.info("[FOLLOWUP] Exit phrase detected - ending followup window")
@@ -1421,7 +1425,7 @@ class WyzerAssistantMultiprocess:
     def _start_followup_window(self) -> None:
         """
         Start a FOLLOWUP listening window after TTS completes (multiprocess).
-        Enqueues a follow-up prompt and transitions to FOLLOWUP state.
+        Enqueues a follow-up prompt (if appropriate) and transitions to FOLLOWUP state.
         """
         if not Config.FOLLOWUP_ENABLED:
             # FOLLOWUP disabled, go back to IDLE
@@ -1429,9 +1433,9 @@ class WyzerAssistantMultiprocess:
             self.logger.info(f"Ready. Listening for hotword: {Config.HOTWORD_KEYWORDS}")
             return
         
-        # Send follow-up prompt to brain worker for TTS
-        prompt = "Is there anything else?"
-        if self._core_to_brain_q:
+        # Send follow-up prompt only if the response wasn't a question
+        if self._show_followup_prompt and self._core_to_brain_q:
+            prompt = "Is there anything else?"
             req_id = new_id()
             safe_put(
                 self._core_to_brain_q,
