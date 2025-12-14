@@ -111,6 +111,62 @@ def main() -> int:
             "expect_tool": None,
             "expect_llm_calls": 1,
         },
+        {
+            "text": "volume 35",
+            "expect_route": "tool_plan",
+            "expect_tool": "volume_control",
+            "expect_llm_calls": 0,
+            "expect_args": {"scope": "master", "action": "set", "level": 35},
+        },
+        {
+            "text": "sound down a bit",
+            "expect_route": "tool_plan",
+            "expect_tool": "volume_control",
+            "expect_llm_calls": 0,
+            "expect_args": {"scope": "master", "action": "change", "delta": -5},
+        },
+        {
+            "text": "mute",
+            "expect_route": "tool_plan",
+            "expect_tool": "volume_control",
+            "expect_llm_calls": 0,
+            "expect_args": {"scope": "master", "action": "mute"},
+        },
+        {
+            "text": "unmute",
+            "expect_route": "tool_plan",
+            "expect_tool": "volume_control",
+            "expect_llm_calls": 0,
+            "expect_args": {"scope": "master", "action": "unmute"},
+        },
+        {
+            "text": "what is the volume",
+            "expect_route": "tool_plan",
+            "expect_tool": "volume_control",
+            "expect_llm_calls": 0,
+            "expect_args": {"scope": "master", "action": "get"},
+        },
+        {
+            "text": "spotify volume 30",
+            "expect_route": "tool_plan",
+            "expect_tool": "volume_control",
+            "expect_llm_calls": 0,
+            "expect_args": {"scope": "app", "process": "spotify", "action": "set", "level": 30},
+        },
+        {
+            "text": "mute discord",
+            "expect_route": "tool_plan",
+            "expect_tool": "volume_control",
+            "expect_llm_calls": 0,
+            "expect_args": {"scope": "app", "process": "discord", "action": "mute"},
+        },
+        {
+            "text": "what is spotify volume",
+            "expect_route": "tool_plan",
+            "expect_tool": "volume_control",
+            "expect_llm_calls": 0,
+            "expect_args": {"scope": "app", "process": "spotify", "action": "get"},
+        },
     ]
 
     print("Hybrid router verification:")
@@ -135,6 +191,14 @@ def main() -> int:
             first_tool = tool_calls[0][0]
             if first_tool != c["expect_tool"]:
                 _fail(f"Tool mismatch for {text!r}: expected {c['expect_tool']!r}, got {first_tool!r}")
+
+            if "expect_args" in c and c["expect_args"] is not None:
+                got_args = tool_calls[0][1]
+                for k, v in (c["expect_args"] or {}).items():
+                    if got_args.get(k) != v:
+                        _fail(
+                            f"Arg mismatch for {text!r}: expected {k}={v!r}, got {k}={got_args.get(k)!r}. Full args: {got_args}"
+                        )
 
         print(
             f"- OK: {text!r} -> route={route}, llm_calls={len(llm_calls)}, tool_calls={[t for t,_ in tool_calls]}"

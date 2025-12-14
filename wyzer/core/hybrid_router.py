@@ -16,6 +16,79 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Literal
 
 
+def _strip_trailing_punct(text: str) -> str:
+    return (text or "").strip().rstrip(".?!,;:\"'")
+
+
+def _extract_volume_percent(text: str) -> Optional[int]:
+    m = re.search(r"\b(\d{1,3})\s*%?\b", text or "")
+    if not m:
+        return None
+    try:
+        v = int(m.group(1))
+    except Exception:
+        return None
+    if 0 <= v <= 100:
+        return v
+    return None
+
+
+def _parse_volume_delta_hint(text_lower: str) -> int:
+    tl = text_lower or ""
+    if any(k in tl for k in ["a little", "a bit", "slightly", "tiny bit", "small"]):
+        return 5
+    if any(k in tl for k in ["a lot", "much", "way", "significantly"]):
+        return 20
+    return 10
+
+
+def _parse_volume_scope_and_process(clause: str) -> tuple[str, str]:
+    """Return (scope, process) where scope is 'master' or 'app'.
+
+    Keep this conservative: only treat a token as an app/process hint when it looks
+    like one of the common "<proc> volume" / "volume ... for <proc>" patterns.
+    """
+    c = (clause or "").strip()
+    cl = c.lower()
+
+    # Strip common query prefixes so we don't treat them as app names.
+    cl = re.sub(r"^(?:what\s+is|what's|whats|get|check|show|tell\s+me|current)\s+", "", cl)
+    cl = re.sub(r"^the\s+", "", cl)
+
+    # "set <proc> volume ..." should treat <proc> as app.
+    m = re.match(r"^set\s+(?P<proc>.+?)\s+(?:volume|sound|audio)\b", cl)
+    if m:
+        proc = _strip_trailing_punct(m.group("proc")).strip()
+        if proc and proc not in {"the", "my", "this", "that", "volume", "sound", "audio"}:
+            return "app", proc
+
+    # "volume 30 for spotify" / "mute discord" style: trailing "for/in/on <proc>".
+    m = re.search(r"\b(?:for|in|on)\s+(?P<proc>[a-z0-9][a-z0-9 _\-\.]{1,60})$", cl)
+    if m:
+        proc = _strip_trailing_punct(m.group("proc")).strip()
+        if proc:
+            return "app", proc
+
+    # "spotify volume ..." / "chrome sound ..." (but NOT "set volume ...")
+    m = re.match(r"^(?P<first>[a-z0-9][a-z0-9 _\-\.]{1,60})\s+(?:volume|sound|audio)\b", cl)
+    if m:
+        first = _strip_trailing_punct(m.group("first")).strip()
+        if first and first not in {"the", "my", "this", "that", "set", "volume", "sound", "audio"}:
+            return "app", first
+
+    # "mute spotify" / "turn down chrome" etc.
+    m = re.match(r"^(?:turn\s+(?:up|down)|mute|unmute|quieter|louder)\s+(?P<proc>.+)$", cl)
+    if m:
+        proc = _strip_trailing_punct(m.group("proc")).strip()
+        proc_l = proc.lower()
+        if proc_l in {"it", "it up", "it down", "the volume", "volume", "sound", "audio"}:
+            return "master", ""
+        if proc and proc not in {"it", "volume", "sound", "audio"}:
+            return "app", proc
+
+    return "master", ""
+
+
 @dataclass
 class HybridDecision:
     mode: Literal["tool_plan", "llm"]
@@ -134,7 +207,100 @@ def _decide_single_clause(text: str) -> HybridDecision:
     # Minimal media/volume controls (only if tools exist; existence checked upstream).
     tl = clause.lower()
 
+    # --- True volume control (pycaw) ---
+    # If the command looks like volume/mute and the tool exists, prefer volume_control.
+    # We keep this conservative and only match obvious phrases.
+    if re.search(r"\b(?:mute|unmute|volume|sound|audio|louder|quieter|turn\s+it\s+(?:up|down))\b", tl):
+        scope, proc = _parse_volume_scope_and_process(clause)
+
+        # Get volume / what is the volume
+        is_query = bool(re.search(r"\b(?:get|check|show|tell\s+me|what\s+is|what's|whats|current)\b", tl))
+        is_volume_worded = any(k in tl for k in ["volume", "sound", "audio"])
+        if is_query and is_volume_worded and _extract_volume_percent(tl) is None and not re.search(
+            r"\b(?:up|down|louder|quieter|increase|decrease|raise|lower)\b", tl
+        ):
+            args: Dict[str, Any] = {"scope": scope, "action": "get"}
+            if scope == "app":
+                args["process"] = proc
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{"tool": "volume_control", "args": args, "continue_on_error": False}],
+                reply="",
+                confidence=0.92,
+            )
+
+        # Mute/unmute
+        if re.search(r"\bunmute\b", tl):
+            args = {"scope": scope, "action": "unmute"}
+            if scope == "app":
+                args["process"] = proc
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{"tool": "volume_control", "args": args, "continue_on_error": False}],
+                reply="",
+                confidence=0.93,
+            )
+
+        if re.search(r"\bmute\b", tl) and not re.search(r"\bunmute\b", tl):
+            args = {"scope": scope, "action": "mute"}
+            if scope == "app":
+                args["process"] = proc
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{"tool": "volume_control", "args": args, "continue_on_error": False}],
+                reply="",
+                confidence=0.93,
+            )
+
+        # Absolute set: "volume 35" / "set volume to 35" / "spotify volume 35"
+        if is_volume_worded:
+            percent = _extract_volume_percent(tl)
+            # Avoid interpreting "volume down 10" as set-to.
+            has_direction = bool(re.search(r"\b(?:up|down|increase|decrease|raise|lower|louder|quieter)\b", tl))
+            if percent is not None and not has_direction:
+                args = {"scope": scope, "action": "set", "level": int(percent)}
+                if scope == "app":
+                    args["process"] = proc
+                return HybridDecision(
+                    mode="tool_plan",
+                    intents=[{"tool": "volume_control", "args": args, "continue_on_error": False}],
+                    reply="",
+                    confidence=0.9,
+                )
+
+        # Relative change: up/down/louder/quieter, optional numeric delta.
+        if re.search(r"\b(?:volume\s+up|turn\s+up|louder|raise|increase|sound\s+up)\b", tl) or re.search(
+            r"\bturn\s+it\s+up\b", tl
+        ):
+            pct = _extract_volume_percent(tl)
+            delta = int(pct) if pct is not None else _parse_volume_delta_hint(tl)
+            args = {"scope": scope, "action": "change", "delta": int(delta)}
+            if scope == "app":
+                args["process"] = proc
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{"tool": "volume_control", "args": args, "continue_on_error": False}],
+                reply="",
+                confidence=0.88,
+            )
+
+        if re.search(r"\b(?:volume\s+down|turn\s+down|quieter|lower|decrease|sound\s+down)\b", tl) or re.search(
+            r"\bturn\s+it\s+down\b", tl
+        ):
+            pct = _extract_volume_percent(tl)
+            delta = int(pct) if pct is not None else _parse_volume_delta_hint(tl)
+            args = {"scope": scope, "action": "change", "delta": -int(delta)}
+            if scope == "app":
+                args["process"] = proc
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{"tool": "volume_control", "args": args, "continue_on_error": False}],
+                reply="",
+                confidence=0.88,
+            )
+
     if re.search(r"\b(?:mute|unmute)\b", tl):
+        # Fallback for older setups without volume_control.
         return HybridDecision(
             mode="tool_plan",
             intents=[{"tool": "volume_mute_toggle", "args": {}, "continue_on_error": False}],
