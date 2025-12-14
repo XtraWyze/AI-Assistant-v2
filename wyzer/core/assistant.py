@@ -1436,6 +1436,9 @@ class WyzerAssistantMultiprocess:
         # Send follow-up prompt only if the response wasn't a question
         if self._show_followup_prompt and self._core_to_brain_q:
             prompt = "Is there anything else?"
+            # Print as response in console
+            print(f"\nWyzer: {prompt}\n")
+            
             req_id = new_id()
             safe_put(
                 self._core_to_brain_q,
