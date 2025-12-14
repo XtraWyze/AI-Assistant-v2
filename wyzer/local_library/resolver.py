@@ -21,8 +21,8 @@ def resolve_target(query: str) -> Dict[str, Any]:
             "candidates": [...]  # alternative matches
         }
     """
-    # Normalize query
-    query_lower = query.strip().lower()
+    # Normalize query - strip punctuation that STT might have added
+    query_lower = query.strip().lower().rstrip(".?!,;:\"'")
     
     # Check if query suggests game intent
     game_intent_keywords = ["play", "launch", "start game", "open game"]

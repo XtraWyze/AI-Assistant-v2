@@ -51,7 +51,7 @@ _FASTPATH_EXPLICIT_TOOL_RE = re.compile(r"^(?:tool|run|execute)\s+(?P<tool>[a-zA
 
 def _user_explicitly_requested_library_refresh(user_text: str) -> bool:
     tl = (user_text or "").lower()
-    has_noun = any(k in tl for k in ["library", "libary", "index"])
+    has_noun = any(k in tl for k in ["library", "libary", "index", "apps", "app", "applications"])
     has_verb = any(k in tl for k in ["refresh", "rebuild", "rescan", "scan", "reindex", "re-index", "update"])
     return has_noun and has_verb
 
