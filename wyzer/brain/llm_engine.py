@@ -6,6 +6,7 @@ import json
 import time
 import urllib.request
 import urllib.error
+import socket
 from typing import Dict, Optional
 from wyzer.core.logger import get_logger
 from wyzer.brain.prompt import format_prompt
@@ -17,7 +18,7 @@ class LLMEngine:
     def __init__(
         self,
         base_url: str = "http://127.0.0.1:11434",
-        model: str = "llama3.1:latest",
+        model: str = "llama3.2:3b",
         timeout: int = 30,
         enabled: bool = True
     ):
@@ -62,6 +63,10 @@ class LLMEngine:
                 models = [m.get("name", "") for m in data.get("models", [])]
                 self.logger.debug(f"Available models: {models}")
         except urllib.error.URLError as e:
+            reason = getattr(e, "reason", None)
+            is_timeout = isinstance(reason, socket.timeout) or "timed out" in str(e).lower()
+            if is_timeout:
+                raise TimeoutError(f"Timed out reaching Ollama at {self.base_url}") from e
             raise ConnectionError(f"Cannot reach Ollama at {self.base_url}") from e
     
     def think(self, text: str) -> Dict[str, any]:
@@ -142,19 +147,40 @@ class LLMEngine:
             }
             
         except urllib.error.URLError as e:
-            # Connection error
+            # Connection vs timeout
             latency_ms = int((time.time() - start_time) * 1000)
-            
-            if "Connection refused" in str(e) or "timed out" in str(e).lower():
-                error_msg = "I couldn't reach the local model. Is Ollama running?"
+            reason = getattr(e, "reason", None)
+            is_timeout = isinstance(reason, socket.timeout) or "timed out" in str(e).lower()
+
+            if is_timeout:
+                error_msg = (
+                    f"Ollama is taking too long to respond (timeout: {self.timeout}s). "
+                    "Try increasing --llm-timeout / WYZER_LLM_TIMEOUT, or use a smaller model."
+                )
+                self.logger.warning(f"Ollama request timed out after {self.timeout}s: {e}")
+            elif "Connection refused" in str(e) or "actively refused" in str(e).lower():
+                error_msg = "I couldn't reach Ollama. Is it running?"
                 self.logger.error(f"Ollama connection failed: {e}")
                 self.logger.info("Try: ollama serve")
             else:
-                error_msg = "I encountered a network error trying to reach the local model."
+                error_msg = "I encountered a network error trying to reach Ollama."
                 self.logger.error(f"Network error: {e}")
-            
+
             return {
                 "reply": error_msg,
+                "confidence": 0.3,
+                "model": self.model,
+                "latency_ms": latency_ms
+            }
+
+        except socket.timeout as e:
+            latency_ms = int((time.time() - start_time) * 1000)
+            self.logger.warning(f"Ollama request timed out after {self.timeout}s: {e}")
+            return {
+                "reply": (
+                    f"Ollama is taking too long to respond (timeout: {self.timeout}s). "
+                    "Try increasing --llm-timeout / WYZER_LLM_TIMEOUT, or use a smaller model."
+                ),
                 "confidence": 0.3,
                 "model": self.model,
                 "latency_ms": latency_ms

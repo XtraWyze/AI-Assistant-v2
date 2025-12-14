@@ -151,8 +151,8 @@ Examples:
     parser.add_argument(
         "--ollama-model",
         type=str,
-        default="llama3.1:latest",
-        help="Ollama model name (default: llama3.1:latest)"
+        default="llama3.2:3b",
+        help="Ollama model name (default: llama3.2:3b)"
     )
     
     parser.add_argument(
@@ -234,7 +234,7 @@ def main():
     if args.profile == "low_end":
         whisper_compute_type = "int8"
         # Optional: allow user to provide a smaller Ollama model via env
-        if args.ollama_model == "llama3.1:latest":
+        if args.ollama_model == "llama3.2:3b":
             low_end_model = os.environ.get("WYZER_OLLAMA_MODEL_LOW_END")
             if low_end_model:
                 args.ollama_model = low_end_model
