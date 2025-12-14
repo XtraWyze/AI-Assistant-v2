@@ -1,0 +1,38 @@
+{
+  "generated_at": "2025-12-14T20:43:34Z",
+  "drives": [
+    {
+      "name": "C:\\",
+      "mountpoint": "C:\\",
+      "fstype": "NTFS",
+      "total_gb": 930.63,
+      "used_gb": 875.8,
+      "free_gb": 54.83,
+      "percent_used": 94.1,
+      "is_removable": null,
+      "label": null
+    },
+    {
+      "name": "D:\\",
+      "mountpoint": "D:\\",
+      "fstype": "NTFS",
+      "total_gb": 953.87,
+      "used_gb": 407.22,
+      "free_gb": 546.65,
+      "percent_used": 42.7,
+      "is_removable": null,
+      "label": null
+    },
+    {
+      "name": "E:\\",
+      "mountpoint": "E:\\",
+      "fstype": "exFAT",
+      "total_gb": 238.47,
+      "used_gb": 160.04,
+      "free_gb": 78.43,
+      "percent_used": 67.1,
+      "is_removable": null,
+      "label": null
+    }
+  ]
+}

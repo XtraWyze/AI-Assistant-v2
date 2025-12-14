@@ -121,7 +121,9 @@ def handle_user_text(text: str) -> Dict[str, Any]:
             if _hybrid_tool_plan_is_registered(hybrid_decision.intents, registry):
                 logger.info(f"[HYBRID] route=tool_plan confidence={hybrid_decision.confidence:.2f}")
                 execution_summary, executed_intents = execute_tool_plan(hybrid_decision.intents, registry)
-                reply = (hybrid_decision.reply or "").strip() or _format_fastpath_reply(
+                # Always use _format_fastpath_reply to properly handle tool execution failures.
+                # The hybrid_decision.reply is just a prediction; we need to verify execution succeeded.
+                reply = _format_fastpath_reply(
                     text, executed_intents, execution_summary
                 )
 
@@ -1216,11 +1218,60 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
                 return f"{weather} in {loc}."
             return "Here's the forecast."
 
+        if tool == "system_storage_scan":
+            drives = result.get("drives", [])
+            if drives:
+                summaries = []
+                for drive in drives:
+                    name = drive.get("name", "").rstrip(":\\").strip()  # Remove backslash/colon
+                    free_gb = drive.get("free_gb", 0)
+                    total_gb = drive.get("total_gb", 0)
+                    if name and free_gb is not None and total_gb:
+                        # Round with 0.5 threshold (0.5+ rounds up)
+                        free_gb_rounded = int(free_gb + 0.5)
+                        total_gb_rounded = int(total_gb + 0.5)
+                        summaries.append(f"{name} has {free_gb_rounded} gigs free of {total_gb_rounded} gigs total")
+                if summaries:
+                    return "Storage scan complete. " + ", ".join(summaries) + "."
+            return "Storage scan complete."
+
+        if tool == "system_storage_list":
+            drives = result.get("drives", [])
+            if drives:
+                summaries = []
+                for drive in drives:
+                    name = drive.get("name", "").rstrip(":\\").strip()  # Remove backslash/colon
+                    free_gb = drive.get("free_gb", 0)
+                    if name and free_gb is not None:
+                        # Round with 0.5 threshold (0.5+ rounds up)
+                        free_gb_rounded = int(free_gb + 0.5)
+                        summaries.append(f"{name} has {free_gb_rounded} gigs free")
+                if summaries:
+                    return "You have " + ", ".join(summaries) + "."
+            return "Storage information retrieved."
+
+        if tool == "system_storage_open":
+            opened = result.get("opened")
+            if opened:
+                # Remove backslash/colon for cleaner speech output
+                opened_clean = opened.rstrip(":\\").strip()
+                return f"Opened {opened_clean}."
+            return "Drive opened."
+
         return None
 
     # Prefer first failure.
-    for r in execution_summary.ran:
+    for idx, r in enumerate(execution_summary.ran):
         if not r.ok:
+            # Provide more specific error messages based on tool and error type
+            if r.tool == "open_target":
+                # Try to extract what wasn't found from the query in intents
+                query = ""
+                if idx < len(intents):
+                    query = (intents[idx].args or {}).get("query", "")
+                if query:
+                    return f"Could not find {query}."
+                return "Could not find that target."
             return "I couldn't complete that." if not r.error else f"I couldn't complete that: {r.error}"
 
     if not execution_summary.ran:
@@ -1296,9 +1347,11 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
 
     # Multi-intent: summarize key actions + include the last info response (if any).
     opened: List[str] = []
+    closed: List[str] = []
     audio_switched: Optional[str] = None
     info_sentence: Optional[str] = None
     volume_fragments: List[str] = []
+    media_fragments: List[str] = []
 
     for idx, intent in enumerate(intents[: len(execution_summary.ran)]):
         res = execution_summary.ran[idx].result or {}
@@ -1319,6 +1372,25 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
             url = args.get("url")
             if isinstance(url, str) and url.strip():
                 opened.append(url.strip())
+            continue
+
+        if intent.tool == "close_window":
+            title = args.get("title")
+            if isinstance(title, str) and title.strip():
+                closed.append(title.strip())
+            continue
+
+        # Media controls
+        if intent.tool == "media_play_pause":
+            media_fragments.append("Toggled play/pause")
+            continue
+
+        if intent.tool == "media_next":
+            media_fragments.append("Skipped to next")
+            continue
+
+        if intent.tool == "media_previous":
+            media_fragments.append("Skipped to previous")
             continue
 
         if intent.tool == "set_audio_output_device":
@@ -1378,12 +1450,35 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
         else:
             action_fragments.append("Opened " + ", ".join(unique_opened[:-1]) + f", and {unique_opened[-1]}")
 
+    if closed:
+        unique_closed: List[str] = []
+        seen: set[str] = set()
+        for c in closed:
+            key = c.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_closed.append(c)
+
+        if len(unique_closed) == 1:
+            action_fragments.append(f"Closed {unique_closed[0]}")
+        elif len(unique_closed) == 2:
+            action_fragments.append(f"Closed {unique_closed[0]} and {unique_closed[1]}")
+        else:
+            action_fragments.append("Closed " + ", ".join(unique_closed[:-1]) + f", and {unique_closed[-1]}")
+
+    if media_fragments:
+        action_fragments.extend(media_fragments)
+
     if audio_switched:
-        action_fragments.append(f"set audio output to {audio_switched}")
+        action_fragments.append(f"Set audio output to {audio_switched}")
 
     if volume_fragments:
         # Keep the last 2 volume-related statements to stay concise.
-        action_fragments.extend(volume_fragments[-2:])
+        for frag in volume_fragments[-2:]:
+            # Capitalize first letter
+            capitalized = frag[0].upper() + frag[1:] if frag else frag
+            action_fragments.append(capitalized)
 
     action_sentence: Optional[str] = None
     if action_fragments:
@@ -1570,6 +1665,11 @@ TOOL USAGE GUIDANCE:
 - For switching the default audio output device (speakers/headset): use set_audio_output_device with device="name" (fuzzy match allowed)
 - For monitor info: use monitor_info to check available monitors
 - For library management: use local_library_refresh to rebuild the index ONLY when the user explicitly asks to refresh/rebuild/rescan/update the local library/index
+- For storage/drives (IMPORTANT - pick only ONE tool):
+    - system_storage_scan: Full system scan of ALL drives - use ONLY when user says "system scan", "scan my drives", or "scan disk" (no specific drive mentioned)
+    - system_storage_list: Check specific drive OR all drives - use for "scan drive E", "space on D", "what's on E", "check drive C", "how much storage" - Args: {{"drive": "E"}} if user specifies drive, empty dict if not
+    - system_storage_open: Open a drive in file manager - use for "open drive D", "open E", "show drive C" - Args: {{"drive": "D"}}
+    - RULE: If user mentions a specific drive (C, D, E, etc), NEVER use system_storage_scan. Always use system_storage_list or system_storage_open instead.
 - For creative or conversational requests (e.g., "tell me a story", jokes, roleplay, general chat): do NOT call any tools; respond directly with {{"reply": "..."}}
 - For location: use get_location (approximate IP-based)
 - For weather/forecast: use get_weather_forecast (optionally pass location; otherwise it uses IP-based location)

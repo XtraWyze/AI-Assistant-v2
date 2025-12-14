@@ -21,17 +21,25 @@ def refresh_index(mode: str = "normal") -> Dict[str, Any]:
     - Installed apps (Start Menu shortcuts + common install locations)
     - User-defined aliases (from aliases.json if present)
     - Tier 2 apps (EXEs from Program Files and user install dirs) - if mode="full"
+    - Tier 3 files (root drive scan) - if mode="tier3"
     - Games (Steam, Epic, shortcuts, folder scan, Xbox) - always refreshed
     
     Args:
-        mode: "normal" (Start Menu only) or "full" (includes Tier 2 EXE scanning)
+        mode: "normal" (Start Menu only), "full" (includes Tier 2 EXE scanning), 
+              or "tier3" (includes full file system scan)
     
     Returns:
         {"status": "ok", "counts": {...}, "latency_ms": int}
     """
+    from wyzer.core.logger import get_logger
+    logger = get_logger()
+    
     start_time = time.perf_counter()
     
     try:
+        # Log scan start
+        logger.info("[SCAN] Scanning apps...")
+        
         # Load existing index to preserve scan_meta
         existing_index = get_cached_index()
         existing_scan_meta = existing_index.get("scan_meta", {
@@ -46,6 +54,8 @@ def refresh_index(mode: str = "normal") -> Dict[str, Any]:
             "apps": {},
             "aliases": {},
             "tier2_apps": [],
+            "tier3_files": [],
+            "tier3_drives": [],
             "games": [],
             "games_scan_meta": {},
             "uwp_apps": [],
@@ -54,21 +64,25 @@ def refresh_index(mode: str = "normal") -> Dict[str, Any]:
         }
         
         # Index common folders
+        logger.info("[SCAN] Indexing folders...")
         folders = _index_common_folders()
         index_data["folders"] = folders
         
         # Index installed apps
+        logger.info("[SCAN] Indexing installed apps...")
         apps = _index_apps()
         index_data["apps"] = apps
         
         # Load user aliases if present
+        logger.info("[SCAN] Loading aliases...")
         aliases = _load_aliases()
         index_data["aliases"] = aliases
         
-        # Tier 2 EXE scanning (if mode="full")
+        # Tier 2 EXE scanning (if mode="full" or mode="tier3")
         tier2_apps = []
         tier2_errors = []
-        if mode == "full":
+        if mode in ["full", "tier3"]:
+            logger.info("[SCAN] Scanning Tier 2 applications (this may take a moment)...")
             tier2_apps, tier2_errors = _index_tier2_apps(existing_scan_meta, existing_index.get("tier2_apps", []))
             index_data["tier2_apps"] = tier2_apps
             index_data["scan_meta"]["last_refresh"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -77,11 +91,47 @@ def refresh_index(mode: str = "normal") -> Dict[str, Any]:
             tier2_apps = existing_index.get("tier2_apps", [])
             index_data["tier2_apps"] = tier2_apps
         
+        # Tier 3 file system scanning (if mode="tier3")
+        tier3_files = []
+        tier3_drives = []
+        tier3_errors = []
+        if mode == "tier3":
+            logger.info("[SCAN] Detecting available drives...")
+            tier3_drives = get_available_drives()
+            index_data["tier3_drives"] = tier3_drives
+            
+            # Scan C: drive by default
+            default_drive = None
+            for drive in tier3_drives:
+                if drive["letter"] == "C":
+                    default_drive = drive
+                    break
+            
+            if default_drive:
+                logger.info(f"[SCAN] Scanning Tier 3 files on drive {default_drive['letter']}: (this may take several minutes)...")
+                scan_result = scan_tier3_root(default_drive['letter'], max_results=5000)
+                
+                if scan_result.get("status") == "ok":
+                    tier3_files = scan_result.get("files", [])
+                    index_data["tier3_files"] = tier3_files
+                    if scan_result.get("errors", 0) > 0:
+                        tier3_errors.append(f"Tier 3 scan errors: {scan_result['errors']}")
+                else:
+                    tier3_errors.append(f"Tier 3 scan failed: {scan_result.get('message', 'Unknown error')}")
+        else:
+            # Preserve existing tier3 data in non-tier3 modes
+            tier3_files = existing_index.get("tier3_files", [])
+            tier3_drives = existing_index.get("tier3_drives", [])
+            index_data["tier3_files"] = tier3_files
+            index_data["tier3_drives"] = tier3_drives
+        
         # Index games (always refresh)
+        logger.info("[SCAN] Scanning games...")
         from wyzer.local_library.game_indexer import merge_games_into_library
         index_data = merge_games_into_library(index_data)
         
         # Index UWP apps (always refresh)
+        logger.info("[SCAN] Scanning UWP apps...")
         from wyzer.local_library.uwp_indexer import refresh_uwp_index
         uwp_result = refresh_uwp_index()
         index_data["uwp_apps"] = uwp_result.get("apps", [])
@@ -94,6 +144,7 @@ def refresh_index(mode: str = "normal") -> Dict[str, Any]:
             index_data["uwp_scan_meta"]["error"] = uwp_result["error"]
         
         # Write to library.json
+        logger.info("[SCAN] Finalizing scan...")
         save_library(index_data)
         
         end_time = time.perf_counter()
@@ -106,6 +157,8 @@ def refresh_index(mode: str = "normal") -> Dict[str, Any]:
                 "apps": len(apps),
                 "aliases": len(aliases),
                 "tier2_apps": len(tier2_apps),
+                "tier3_files": len(tier3_files),
+                "tier3_drives": len(tier3_drives),
                 "games": len(index_data.get("games", [])),
                 "uwp_apps": len(index_data.get("uwp_apps", []))
             },
@@ -114,6 +167,9 @@ def refresh_index(mode: str = "normal") -> Dict[str, Any]:
         
         if tier2_errors:
             result["tier2_errors"] = tier2_errors
+        
+        if tier3_errors:
+            result["tier3_errors"] = tier3_errors
         
         # Include games scan metadata
         if "games_scan_meta" in index_data:
@@ -328,6 +384,8 @@ def get_cached_index() -> Dict[str, Any]:
             "apps": {},
             "aliases": {},
             "tier2_apps": [],
+            "tier3_files": [],
+            "tier3_drives": [],
             "games": [],
             "games_scan_meta": {},
             "uwp_apps": [],
@@ -345,6 +403,10 @@ def get_cached_index() -> Dict[str, Any]:
         # Ensure backward compatibility
         if "tier2_apps" not in data:
             data["tier2_apps"] = []
+        if "tier3_files" not in data:
+            data["tier3_files"] = []
+        if "tier3_drives" not in data:
+            data["tier3_drives"] = []
         if "scan_meta" not in data:
             data["scan_meta"] = {"last_refresh": "", "dirs": {}}
         if "games" not in data:
@@ -369,6 +431,8 @@ def get_cached_index() -> Dict[str, Any]:
             "apps": {},
             "aliases": {},
             "tier2_apps": [],
+            "tier3_files": [],
+            "tier3_drives": [],
             "games": [],
             "games_scan_meta": {},
             "uwp_apps": [],
@@ -634,6 +698,295 @@ def _generate_friendly_name(exe_path: Path) -> str:
     return name
 
 
+# ============================================================================
+# TIER 3 FILE SYSTEM SCANNING
+# ============================================================================
+
+# Directories to EXCLUDE from tier 3 scanning (case-insensitive)
+EXCLUDE_DIRS_TIER3 = {
+    "$recycle.bin", "system volume information", "pagefile.sys", "hiberfil.sys",
+    "windows", "program files", "program files (x86)", "programdata",
+    "appdata", "application data", "temp", "tmp", "$temp", "cache",
+    "recycler", "system32", "syswow64", "drivers", "winsxs",
+    "perflogs", ".git", ".svn", "node_modules", "__pycache__",
+    ".venv", "venv", "env", ".env"
+}
+
+# File extensions to prioritize in tier 3 scans
+PRIORITIZED_EXTENSIONS = {
+    ".exe", ".msi", ".iso", ".zip", ".7z", ".rar",
+    ".doc", ".docx", ".xls", ".xlsx", ".pdf",
+    ".jpg", ".jpeg", ".png", ".gif", ".mp3", ".mp4"
+}
+
+
+def get_available_drives() -> List[Dict[str, Any]]:
+    """
+    Get list of available drives on Windows.
+    
+    Returns:
+        List of {"letter": "C", "path": "C:\\", "total_gb": float, "free_gb": float, "label": str}
+    """
+    import shutil
+    drives = []
+    
+    # Check all drive letters A-Z
+    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        drive_path = f"{letter}:\\"
+        
+        try:
+            # Check if drive exists by trying to access it
+            if os.path.exists(drive_path):
+                # Get drive space info
+                stat = shutil.disk_usage(drive_path)
+                total_gb = stat.total / (1024 ** 3)
+                free_gb = stat.free / (1024 ** 3)
+                
+                # Get drive label (volume name)
+                label = ""
+                try:
+                    # Try to get volume label from registry or ctypes
+                    import ctypes
+                    volume_label = ctypes.create_unicode_buffer(1024)
+                    ctypes.windll.kernel32.GetVolumeInformationW(
+                        ctypes.c_wchar_p(drive_path),
+                        volume_label, ctypes.sizeof(volume_label),
+                        None, None, None, None, 0
+                    )
+                    label = volume_label.value if volume_label.value else "Local Disk"
+                except Exception:
+                    label = "Local Disk"
+                
+                drives.append({
+                    "letter": letter,
+                    "path": drive_path,
+                    "total_gb": round(total_gb, 2),
+                    "free_gb": round(free_gb, 2),
+                    "label": label
+                })
+        except (OSError, PermissionError):
+            # Drive not accessible
+            pass
+    
+    return drives
+
+
+def scan_tier3_root(drive_letter: str = "C", max_results: int = 10000) -> Dict[str, Any]:
+    """
+    Perform a Tier 3 scan on a specific drive root.
+    
+    Recursively scans a drive and indexes:
+    - All executable files
+    - Common document types
+    - Media files
+    - Compressed archives
+    
+    Args:
+        drive_letter: Drive letter to scan (e.g., "C", "D")
+        max_results: Maximum files to index before stopping
+        
+    Returns:
+        {"status": "ok", "count": int, "files": [...], "latency_ms": int}
+    """
+    from wyzer.core.logger import get_logger
+    logger = get_logger()
+    
+    start_time = time.perf_counter()
+    
+    try:
+        drive_path = Path(f"{drive_letter}:\\")
+        
+        if not drive_path.exists():
+            return {
+                "status": "error",
+                "message": f"Drive {drive_letter}: not found"
+            }
+        
+        logger.info(f"[SCAN] Starting Tier 3 scan on drive {drive_letter}:")
+        
+        files = []
+        error_count = 0
+        
+        # Recursively scan the drive
+        def _recursive_tier3_scan(path: Path, depth: int = 0, max_depth: int = 10) -> None:
+            nonlocal files, error_count
+            
+            if len(files) >= max_results or depth >= max_depth:
+                return
+            
+            try:
+                for entry in path.iterdir():
+                    if len(files) >= max_results:
+                        return
+                    
+                    try:
+                        if entry.is_dir():
+                            dir_name_lower = entry.name.lower()
+                            
+                            # Skip excluded directories
+                            if any(exclude in dir_name_lower for exclude in EXCLUDE_DIRS_TIER3):
+                                continue
+                            
+                            # Recurse
+                            _recursive_tier3_scan(entry, depth + 1, max_depth)
+                        
+                        elif entry.is_file():
+                            suffix_lower = entry.suffix.lower()
+                            
+                            # Only index prioritized extensions
+                            if suffix_lower in PRIORITIZED_EXTENSIONS:
+                                try:
+                                    stat_info = entry.stat()
+                                    files.append({
+                                        "name": entry.name,
+                                        "path": str(entry),
+                                        "type": suffix_lower,
+                                        "size_mb": round(stat_info.st_size / (1024 ** 2), 2),
+                                        "mtime": stat_info.st_mtime
+                                    })
+                                except Exception:
+                                    error_count += 1
+                    
+                    except (PermissionError, OSError):
+                        error_count += 1
+            
+            except (PermissionError, OSError):
+                error_count += 1
+        
+        _recursive_tier3_scan(drive_path)
+        
+        end_time = time.perf_counter()
+        latency_ms = int((end_time - start_time) * 1000)
+        
+        logger.info(f"[SCAN] Tier 3 scan complete: {len(files)} files indexed in {latency_ms}ms")
+        
+        return {
+            "status": "ok",
+            "count": len(files),
+            "files": files,
+            "errors": error_count,
+            "latency_ms": latency_ms
+        }
+    
+    except Exception as e:
+        end_time = time.perf_counter()
+        latency_ms = int((end_time - start_time) * 1000)
+        
+        return {
+            "status": "error",
+            "message": str(e),
+            "latency_ms": latency_ms
+        }
+
+
+def scan_specific_drive(drive_path: str, max_results: int = 10000) -> Dict[str, Any]:
+    """
+    Scan a specific drive or folder path (USB, external HDD, network, etc).
+    
+    Can scan any accessible path, including:
+    - USB drives (e.g., "G:\\")
+    - External hard drives
+    - Network shares
+    - Custom folders
+    
+    Args:
+        drive_path: Path to scan (e.g., "G:\\", "D:\\Games", "\\\\network\\share")
+        max_results: Maximum files to index
+        
+    Returns:
+        {"status": "ok", "count": int, "files": [...], "latency_ms": int}
+    """
+    from wyzer.core.logger import get_logger
+    logger = get_logger()
+    
+    start_time = time.perf_counter()
+    
+    try:
+        target_path = Path(drive_path)
+        
+        if not target_path.exists():
+            return {
+                "status": "error",
+                "message": f"Path not found: {drive_path}"
+            }
+        
+        logger.info(f"[SCAN] Scanning external drive/path: {drive_path}")
+        
+        files = []
+        error_count = 0
+        
+        def _recursive_drive_scan(path: Path, depth: int = 0, max_depth: int = 10) -> None:
+            nonlocal files, error_count
+            
+            if len(files) >= max_results or depth >= max_depth:
+                return
+            
+            try:
+                for entry in path.iterdir():
+                    if len(files) >= max_results:
+                        return
+                    
+                    try:
+                        if entry.is_dir():
+                            dir_name_lower = entry.name.lower()
+                            
+                            # Skip excluded directories
+                            if any(exclude in dir_name_lower for exclude in EXCLUDE_DIRS_TIER3):
+                                continue
+                            
+                            # Recurse
+                            _recursive_drive_scan(entry, depth + 1, max_depth)
+                        
+                        elif entry.is_file():
+                            suffix_lower = entry.suffix.lower()
+                            
+                            # Index prioritized extensions
+                            if suffix_lower in PRIORITIZED_EXTENSIONS:
+                                try:
+                                    stat_info = entry.stat()
+                                    files.append({
+                                        "name": entry.name,
+                                        "path": str(entry),
+                                        "type": suffix_lower,
+                                        "size_mb": round(stat_info.st_size / (1024 ** 2), 2),
+                                        "mtime": stat_info.st_mtime
+                                    })
+                                except Exception:
+                                    error_count += 1
+                    
+                    except (PermissionError, OSError):
+                        error_count += 1
+            
+            except (PermissionError, OSError):
+                error_count += 1
+        
+        _recursive_drive_scan(target_path)
+        
+        end_time = time.perf_counter()
+        latency_ms = int((end_time - start_time) * 1000)
+        
+        logger.info(f"[SCAN] External scan complete: {len(files)} files indexed in {latency_ms}ms")
+        
+        return {
+            "status": "ok",
+            "count": len(files),
+            "path": drive_path,
+            "files": files,
+            "errors": error_count,
+            "latency_ms": latency_ms
+        }
+    
+    except Exception as e:
+        end_time = time.perf_counter()
+        latency_ms = int((end_time - start_time) * 1000)
+        
+        return {
+            "status": "error",
+            "message": str(e),
+            "latency_ms": latency_ms
+        }
+
+
 def ensure_library_exists() -> None:
     """
     Ensure library.json exists. Create empty structure if not.
@@ -646,6 +999,8 @@ def ensure_library_exists() -> None:
             "apps": {},
             "aliases": {},
             "tier2_apps": [],
+            "tier3_files": [],
+            "tier3_drives": [],
             "games": [],
             "games_scan_meta": {},
             "uwp_apps": [],

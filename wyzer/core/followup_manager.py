@@ -22,11 +22,12 @@ from wyzer.core.config import Config
 class FollowupManager:
     """Manager for FOLLOWUP listening window behavior"""
     
-    # Exit phrases: if transcript matches any of these (substring, case-insensitive),
+    # Exit phrases: if transcript matches any of these (case-insensitive),
     # exit FOLLOWUP and return to IDLE
     EXIT_PHRASES: List[str] = [
         "no",
         "nope",
+        "nothing",
         "that's all",
         "thats all",
         "stop",
@@ -112,13 +113,12 @@ class FollowupManager:
         """
         Check if transcript matches an exit phrase.
         
-        Normalizes text (lowercase, strip punctuation, strip whitespace)
-        and checks if text is PRIMARILY an exit phrase (not just contains one).
+        Normalizes text and checks if:
+        1. Text is exactly an exit phrase, OR
+        2. Text STARTS with an exit phrase (e.g., "no thanks"), OR
+        3. Text STARTS with one of the EXIT_PHRASES as first meaningful words
         
-        Uses word-boundary matching to avoid false positives like:
-        - "how much snow have we got in the past seven days" should NOT match "nothing else"
-        - "no thanks" should match "no"
-        - "stop" should match "stop"
+        Avoids false positives like matching "nothing else" in a longer question.
         
         Args:
             text: User's transcript
@@ -133,20 +133,34 @@ class FollowupManager:
         normalized = self._normalize_text(text)
         words = normalized.split()
         
-        # Check for exact phrase matches or leading phrase matches
+        if not words:
+            return False
+        
+        # Check each exit phrase
         for phrase in self.EXIT_PHRASES:
             phrase_normalized = self._normalize_text(phrase)
             phrase_words = phrase_normalized.split()
+            
+            if not phrase_words:
+                continue
             
             # Exact match
             if normalized == phrase_normalized:
                 self.logger.info(f"[FOLLOWUP] Exit phrase detected: '{text}' -> '{normalized}'")
                 return True
             
-            # If text starts with the phrase, it's probably an exit + extra words
-            # e.g., "no thanks" starts with "no"
-            if len(phrase_words) > 0 and len(words) >= len(phrase_words):
+            # Text starts with the phrase (e.g., "no thanks" starts with "no")
+            if len(words) >= len(phrase_words):
                 if words[:len(phrase_words)] == phrase_words:
+                    self.logger.info(f"[FOLLOWUP] Exit phrase detected: '{text}' -> '{normalized}'")
+                    return True
+            
+            # Check if first word alone matches a single-word exit phrase
+            # This handles cases like "Nothing" not matching "nothing else"
+            # but allows checking individual words
+            if len(phrase_words) == 1 and len(words) >= 1:
+                # Single word exit phrase - check if it's the first word
+                if words[0] == phrase_words[0]:
                     self.logger.info(f"[FOLLOWUP] Exit phrase detected: '{text}' -> '{normalized}'")
                     return True
         

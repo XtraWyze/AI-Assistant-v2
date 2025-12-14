@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 
 # Maximum number of intents allowed per request
-MAX_INTENTS = 5
+MAX_INTENTS = 7
 
 
 @dataclass

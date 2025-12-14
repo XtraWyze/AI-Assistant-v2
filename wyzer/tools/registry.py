@@ -100,6 +100,13 @@ def build_default_registry() -> ToolRegistry:
     # Phase 6 tools - Audio device switching
     from wyzer.tools.audio_output_device import SetAudioOutputDeviceTool
     
+    # System storage tools
+    from wyzer.tools.system_storage import (
+        SystemStorageScanTool,
+        SystemStorageListTool,
+        SystemStorageOpenTool
+    )
+    
     registry = ToolRegistry()
     
     # Register default tools
@@ -138,5 +145,10 @@ def build_default_registry() -> ToolRegistry:
 
     # Register audio device switching tool
     registry.register(SetAudioOutputDeviceTool())
+    
+    # Register system storage tools
+    registry.register(SystemStorageScanTool())
+    registry.register(SystemStorageListTool())
+    registry.register(SystemStorageOpenTool())
     
     return registry

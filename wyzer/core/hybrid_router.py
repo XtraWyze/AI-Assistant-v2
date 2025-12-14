@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from wyzer.core.multi_intent_parser import parse_multi_intent_with_fallback
 
 
 def _strip_trailing_punct(text: str) -> str:
@@ -116,6 +119,10 @@ def looks_multi_intent(text: str) -> bool:
     if not tl:
         return False
 
+    # Strip internal punctuation (commas, hyphens) to avoid treating speech recognition
+    # artifacts as multi-intent markers (e.g., "Scan, discy." should not split on comma)
+    tl = re.sub(r'[,\-]', ' ', tl).replace('  ', ' ')
+
     # Normalize whitespace to make marker checks more reliable.
     tl = re.sub(r"\s+", " ", tl)
     tl = f" {tl} "
@@ -131,6 +138,9 @@ _TIME_RE = re.compile(
 
 # Anchored open/launch/start.
 _OPEN_RE = re.compile(r"^(open|launch|start)\s+(.+)$", re.IGNORECASE)
+
+# Anchored close/quit/exit.
+_CLOSE_RE = re.compile(r"^(close|quit|exit)\s+(.+)$", re.IGNORECASE)
 
 # Conservative URL/domain detection: if it looks like a URL/domain, we force LLM.
 _URL_SCHEME_RE = re.compile(r"\bhttps?://", re.IGNORECASE)
@@ -174,6 +184,93 @@ def _decide_single_clause(text: str) -> HybridDecision:
             confidence=0.95,
         )
 
+    # System storage commands (check before generic open pattern).
+    tl = _strip_trailing_punct(clause).lower()
+    # Remove internal punctuation (commas, hyphens, periods) for more flexible matching
+    tl_normalized = re.sub(r'[,\-.\']', ' ', tl).replace('  ', ' ').strip()
+    
+    # "system scan" / "scan my drives" / "refresh drive index" / "scan disc" / "scan discs" / "scan discy"
+    if re.match(r"^(?:system\s+scan|scan\s+(?:my\s+)?drives?|scan\s+dis(?:c|k)[ys]?|refresh\s+drive\s+index)$", tl_normalized):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "system_storage_scan",
+                    "args": {"refresh": True},
+                    "continue_on_error": False,
+                }
+            ],
+            reply="",
+            confidence=0.95,
+        )
+
+    # "scan hard drive e" / "scan drive e" / "scan disc e" / "scan disk e" / "scan e" / "scandiske" / "scandiskd"
+    # Use word boundary and search (not match) to allow "okay scan drive c" anywhere
+    m = re.search(r"\bscan\s*(?:hard\s+)?(?:drive|disc|disk)?\s*([a-z])\b|^scandisk([a-z])$", tl_normalized)
+    if m:
+        drive_letter = m.group(1) or m.group(2)
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "system_storage_list",
+                    "args": {"refresh": False, "drive": drive_letter},
+                    "continue_on_error": False,
+                }
+            ],
+            reply="",
+            confidence=0.93,
+        )
+
+    # "list drives" / "show drives" / "how much space do i have" / "storage summary"
+    if re.search(r"\b(?:list\s+drives|show\s+drives|how\s+much\s+space\s+do\s+i\s+have|storage\s+summary)\b", tl_normalized):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "system_storage_list",
+                    "args": {"refresh": False},
+                    "continue_on_error": False,
+                }
+            ],
+            reply="",
+            confidence=0.92,
+        )
+
+    # "how much space does d drive have" / "space on d drive" / "how much storage is on d" / "what on e" / "what does e have" / "how much storage do i have on c" / "what does edrive have"
+    m = re.search(r"(?:what\s+does\s+|what\s+(?:is\s+)?on|how\s+much\s+(?:space|storage)(?:\s+(?:is|do\s+i\s+have))?\s+on|space\s+on|storage\s+on)\s*(?:drive\s+)?([a-z])|(?:what\s+does\s+)?([a-z])drive(?:\s+have)?|(?:space|storage)\s+on\s+([a-z])", tl_normalized)
+    if m:
+        drive_letter = m.group(1) or m.group(2) or m.group(3)
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "system_storage_list",
+                    "args": {"refresh": False, "drive": drive_letter},
+                    "continue_on_error": False,
+                }
+            ],
+            reply="",
+            confidence=0.91,
+        )
+
+    # "open d drive" / "open drive d" / "open hard drive d" / "open d:" / "open /mnt/storage" / "open d" (single letter)
+    m = re.match(r"^open\s+(?:hard\s+)?(?:drive\s+)?([a-z]|[a-z]:|/[a-z0-9/_\-]+)(?:\s+drive)?$", tl)
+    if m:
+        drive_token = m.group(1)
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "system_storage_open",
+                    "args": {"drive": drive_token},
+                    "continue_on_error": False,
+                }
+            ],
+            reply="",
+            confidence=0.93,
+        )
+
     # Open/launch/start X (non-URL) -> open_target.
     m = _OPEN_RE.match(clause)
     if m:
@@ -202,6 +299,33 @@ def _decide_single_clause(text: str) -> HybridDecision:
             ],
             reply=f"Opening {target}.",
             confidence=0.9,
+        )
+
+    # Close/quit/exit X -> close_window.
+    m = _CLOSE_RE.match(clause)
+    if m:
+        target = (m.group(2) or "").strip().strip('"').strip("'")
+        # If the target is missing or too ambiguous, defer to LLM.
+        if not target or target.lower() in {"it", "this", "that", "something", "anything"}:
+            return HybridDecision(mode="llm", intents=None, reply="", confidence=0.4)
+
+        # Extra defense: if target includes other action verbs, defer to LLM.
+        target_l = re.sub(r"\s+", " ", target.lower()).strip()
+        if any(v in target_l.split() for v in ["play", "pause", "resume", "then", "and", "also", "plus"]):
+            return HybridDecision(mode="llm", intents=None, reply="", confidence=0.3)
+
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "close_window",
+                    "args": {"title": target},
+                    "continue_on_error": False,
+                }
+            ],
+            reply=f"Closing {target}.",
+            confidence=0.85,
+
         )
 
     # Minimal media/volume controls (only if tools exist; existence checked upstream).
@@ -348,8 +472,19 @@ def decide(text: str) -> HybridDecision:
     if not raw:
         return HybridDecision(mode="llm", intents=None, reply="", confidence=0.0)
 
-    # Multi-intent guard: never short-circuit multi-action phrases.
+    # Try multi-intent parsing: handle "open steam and chrome" directly without LLM
     if looks_multi_intent(raw):
+        try:
+            from wyzer.core.multi_intent_parser import parse_multi_intent_with_fallback
+            result = parse_multi_intent_with_fallback(raw)
+            if result is not None:
+                intents, confidence = result
+                return HybridDecision(mode="tool_plan", intents=intents, reply="", confidence=confidence)
+        except Exception:
+            # If multi-intent parser fails, fall back to LLM
+            pass
+        
+        # If multi-intent parsing didn't work, use LLM
         return HybridDecision(mode="llm", intents=None, reply="", confidence=0.2)
 
     return _decide_single_clause(raw)
