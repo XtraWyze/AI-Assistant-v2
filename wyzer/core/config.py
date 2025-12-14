@@ -45,7 +45,7 @@ class Config:
     # LLM Brain settings (Phase 4)
     LLM_MODE: str = os.environ.get("WYZER_LLM_MODE", "ollama")  # "ollama" or "off"
     OLLAMA_BASE_URL: str = os.environ.get("WYZER_OLLAMA_URL", "http://127.0.0.1:11434")
-    OLLAMA_MODEL: str = os.environ.get("WYZER_OLLAMA_MODEL", "llama3.2:3b")
+    OLLAMA_MODEL: str = os.environ.get("WYZER_OLLAMA_MODEL", "llama3.1:latest")
     LLM_TIMEOUT: int = int(os.environ.get("WYZER_LLM_TIMEOUT", "30"))
     
     # TTS settings (Phase 5)

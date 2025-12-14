@@ -42,7 +42,7 @@ class WyzerAssistant:
         whisper_device: str = "cpu",
         audio_device: Optional[int] = None,
         llm_mode: str = "ollama",
-        ollama_model: str = "llama3.2:3b",
+        ollama_model: str = "llama3.1:latest",
         ollama_url: str = "http://127.0.0.1:11434",
         llm_timeout: int = 30,
         tts_enabled: bool = True,

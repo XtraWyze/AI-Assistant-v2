@@ -59,13 +59,13 @@ For full conversational AI capabilities:
 
 3. **Pull a model**:
    ```bash
-   # Recommended default: Smaller/faster model
+   # Recommended: Fast, capable model
+   ollama pull llama3.1:latest
+   
+   # Alternative: Smaller/faster model
    ollama pull llama3.2:3b
    
    # Alternative: Larger/more capable
-   ollama pull llama3.1:latest
-   
-   # Alternative: Much larger (very slow / high RAM)
    ollama pull llama3.1:70b
    ```
 
@@ -109,7 +109,7 @@ python run.py --no-hotword
 python run.py --tts off
 
 # Use different LLM model
-python run.py --ollama-model llama3.1:latest
+python run.py --ollama-model llama3.2:3b
 
 # STT-only mode (no LLM)
 python run.py --llm off
@@ -132,25 +132,6 @@ python run.py --device 1
 # Disable barge-in (no hotword interrupt during speaking)
 python run.py --no-speak-interrupt
 ```
-
-## Deterministic Tool Commands (No LLM)
-
-Wyzer includes a conservative fast-path that can execute some common commands without calling the LLM. For **any** registered tool, you can also use an explicit, unambiguous syntax that bypasses the LLM entirely.
-
-### Syntax
-
-- `tool <tool_name> <args>` (also accepts `run` / `execute`)
-- Chain multiple tool calls with `and`, `then`, commas, or semicolons.
-
-### Examples
-
-- Single tool (no args): `tool get_time`
-- Single required arg shorthand (schema-driven): `tool open_target downloads`
-- Key/value args: `tool volume_up steps=3`
-- JSON args: `tool set_audio_output_device {"device":"Headset","min_score":0.65}`
-- Multi-intent chain: `tool get_time; tool get_system_info, then tool open_target downloads`
-
-Note: arguments are validated against each tool's schema. If the fast-path can't parse something unambiguously, it will fall back to the normal LLM path.
 
 ### Windows Notes (multiprocess)
 
