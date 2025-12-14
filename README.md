@@ -10,9 +10,10 @@ A voice-controlled AI assistant for Windows 10/11 with hotword detection, speech
 - ✅ **Local LLM Brain**: Conversational AI using Ollama (Phase 4)
 - ✅ **Text-to-Speech**: Local, fast Piper TTS (Phase 5)
 - ✅ **Barge-in Support**: Interrupt TTS by saying the hotword (Phase 5)
+- ✅ **FOLLOWUP Listening Window**: After each response, listen for follow-ups WITHOUT hotword (deterministic, no LLM needed)
 - ✅ **Multiprocess Split (Performance)**: Realtime core stays responsive; heavy STT/LLM/tools/TTS run in a separate worker process
 - ✅ **Tool Calling (Phase 6)**: LLM can call safe, allowlisted local tools
-- ✅ **State Machine**: Clean state transitions (IDLE → LISTENING → TRANSCRIBING → THINKING → SPEAKING)
+- ✅ **State Machine**: Clean state transitions (IDLE → LISTENING → TRANSCRIBING → THINKING → SPEAKING → FOLLOWUP)
 - ✅ **Cross-platform (core)**: Windows-first; some bundled binaries/tools are Windows-specific
 - ✅ **Robust Audio**: 16kHz mono pipeline with proper buffering
 - ✅ **Spam Filtering**: Automatically filters repetition spam and garbage output
@@ -181,8 +182,9 @@ wyzer/
 ├── core/
 │   ├── config.py         # Central configuration
 │   ├── logger.py         # Logging with rich formatting
-│   ├── state.py          # State machine definitions (SPEAKING added)
+│   ├── state.py          # State machine definitions (FOLLOWUP state added)
 │   ├── ipc.py            # IPC message schema + helpers
+│   ├── followup_manager.py # FOLLOWUP listening window manager
 │   ├── brain_worker.py   # Brain Worker process (STT/LLM/tools/TTS)
 │   ├── process_manager.py# Spawns/stops brain worker
 │   └── assistant.py      # Single-process + multiprocess coordinator
@@ -193,7 +195,7 @@ wyzer/
 │   └── audio_utils.py    # Audio utilities
 ├── stt/
 │   ├── whisper_engine.py # Whisper STT engine
-│   └── stt_router.py     # STT routing (extensible)
+│   └── stt_router.py     # STT routing (extensible, supports mode parameter)
 ├── brain/                # Phase 4: LLM integration
 │   ├── llm_engine.py     # Ollama LLM client
 │   └── prompt.py         # System prompts
@@ -206,8 +208,9 @@ requirements.txt          # Dependencies
 README.md                 # This file
 
 scripts/
-   test_ipc_roundtrip.py   # Smoke: start worker, send TEXT, expect RESULT
-   test_interrupt.py       # Smoke: interrupt simulated TTS
+   test_ipc_roundtrip.py           # Smoke: start worker, send TEXT, expect RESULT
+   test_interrupt.py               # Smoke: interrupt simulated TTS
+   test_followup_manager.py        # Unit tests for FOLLOWUP manager
 ```
 
 ## Configuration
@@ -255,11 +258,111 @@ set WYZER_POST_SPEAK_DRAIN_SEC=0.35
 set WYZER_POST_BARGEIN_IGNORE_SEC=3.0
 set WYZER_POST_BARGEIN_REQUIRE_SPEECH_START=true
 set WYZER_POST_BARGEIN_WAIT_FOR_SPEECH_SEC=2.0
+
+# FOLLOWUP listening window settings
+set WYZER_FOLLOWUP_ENABLED=true
+set WYZER_FOLLOWUP_TIMEOUT_SEC=3.0
+set WYZER_FOLLOWUP_MAX_CHAIN=3
 ```
 
 Or modify defaults in [wyzer/core/config.py](wyzer/core/config.py).
 
-## Troubleshooting
+## FOLLOWUP Listening Window
+
+After Wyzer finishes speaking, it automatically enters a **FOLLOWUP** state where it listens for follow-up requests **without requiring the hotword** for ~3 seconds (configurable). This enables natural conversation chaining without saying "hey jarvis" every time.
+
+### How It Works
+
+1. **After TTS Response**: When Wyzer finishes speaking, it transitions to FOLLOWUP state
+2. **No Hotword Needed**: The microphone listens immediately—no need to say the wake word
+3. **Timer Reset on Speech**: The timer resets whenever new speech is detected
+4. **Auto-Timeout**: If silence lasts FOLLOWUP_TIMEOUT_SEC (default 3.0s), exit to IDLE and wait for hotword again
+5. **Exit Phrases**: Say phrases like "no", "stop", "that's all", "nevermind" to explicitly exit FOLLOWUP
+6. **Chaining**: Each response in FOLLOWUP creates a chain; max 3 chains (configurable) prevent infinite loops
+
+### Example Interaction
+
+```
+User: "Hey Jarvis, what's the weather?"
+Wyzer: "It's 72°F and sunny today."
+
+[FOLLOWUP starts here - hotword disabled for 3 seconds]
+
+User: "Any chance of rain?" (no hotword needed)
+Wyzer: "No rain expected this week."
+
+[FOLLOWUP restarts]
+
+User: "Tell me about humidity." (no hotword needed)
+Wyzer: "Humidity is at 45%, which is comfortable."
+
+[FOLLOWUP restarts]
+
+User: "That's all." (exit phrase detected)
+
+[Return to IDLE, waiting for hotword]
+
+User: "Hey Jarvis, ..."
+```
+
+### Configuration
+
+FOLLOWUP is controlled by three config options (environment variables or [config.py](wyzer/core/config.py)):
+
+- **WYZER_FOLLOWUP_ENABLED** (default: `true`)
+  - Enable/disable FOLLOWUP window feature
+  - Set to `false` to always return to IDLE after speaking
+
+- **WYZER_FOLLOWUP_TIMEOUT_SEC** (default: `3.0`)
+  - Seconds of silence before exiting FOLLOWUP
+  - Shorter = faster return to hotword listening; longer = more generous for follow-ups
+  - Recommended range: 2.0–5.0 seconds
+
+- **WYZER_FOLLOWUP_MAX_CHAIN** (default: `3`)
+  - Maximum consecutive follow-ups before forcing return to IDLE
+  - Prevents accidental infinite loops
+  - Recommended: 3–5
+
+### Follow-Up Prompt
+
+After each response, Wyzer automatically says **"Is there anything else?"** to signal entry into the FOLLOWUP window. This:
+- Makes it clear the user doesn't need to say the hotword
+- Confirms the assistant is ready for more requests
+- Works for both LLM responses and tool responses
+
+### Exit Phrases
+
+The following phrases (case-insensitive, punctuation-insensitive) trigger immediate exit from FOLLOWUP:
+
+- "no", "nope"
+- "stop", "cancel"
+- "that's all", "thats all"
+- "never mind", "nevermind"
+- "nothing else"
+- "all good"
+
+### Deterministic Design
+
+FOLLOWUP is **fully deterministic**:
+- No LLM calls needed to decide if user wants a follow-up
+- Timer-based and phrase-based logic only
+- Hotword loop properly respects state (only runs in IDLE)
+- Thread-safe and interrupt-safe
+
+### Disabling FOLLOWUP
+
+If you prefer the original behavior (always return to hotword after speaking):
+
+```bash
+# Via environment variable
+set WYZER_FOLLOWUP_ENABLED=false
+python run.py
+
+# Or directly in code
+Config.FOLLOWUP_ENABLED = False
+```
+
+
 
 ### Piper TTS Issues
 

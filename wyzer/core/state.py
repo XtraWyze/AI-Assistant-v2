@@ -16,6 +16,7 @@ class AssistantState(Enum):
     TRANSCRIBING = "TRANSCRIBING"
     THINKING = "THINKING"
     SPEAKING = "SPEAKING"
+    FOLLOWUP = "FOLLOWUP"
 
 
 @dataclass

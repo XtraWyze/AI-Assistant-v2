@@ -22,6 +22,7 @@ import numpy as np
 from wyzer.core.config import Config
 from wyzer.core.ipc import now_ms, safe_put
 from wyzer.core.logger import get_logger, init_logger
+from wyzer.core.followup_manager import FollowupManager
 from wyzer.stt.stt_router import STTRouter
 from wyzer.tts.tts_router import TTSRouter
 
@@ -222,6 +223,15 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
         req_id = msg.get("id") or ""
         request_gen = interrupt_generation
         start_ms = now_ms()
+        meta = msg.get("meta") or {}
+        
+        # Check if this is just a TTS prompt (not a user query to process)
+        if meta.get("is_followup_prompt"):
+            # Just TTS the prompt, don't process it through orchestrator
+            prompt_text = str(msg.get("text") or "")
+            if prompt_text:
+                tts_controller.enqueue(prompt_text, meta={"_prompt_only": True})
+            continue
 
         try:
             user_text: str = ""
@@ -263,7 +273,9 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                                     "tool_ms": 0,
                                     "tts_start_ms": None,
                                     "total_ms": now_ms() - start_ms,
-                                }
+                                },
+                                "is_followup": meta.get("is_followup", False),  # Preserve followup flag
+                                "followup_chain": meta.get("followup_chain"),  # Preserve chain count
                             },
                         },
                     )
@@ -271,6 +283,44 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
 
             else:
                 user_text = str(msg.get("text") or "")
+
+            # Check if this is an exit phrase in FOLLOWUP mode - skip orchestrator processing
+            is_followup = meta.get("is_followup", False)
+            if is_followup and user_text:
+                followup_mgr = FollowupManager()
+                if followup_mgr.is_exit_phrase(user_text):
+                    # Exit phrase detected - don't process through orchestrator, return empty
+                    reply = ""
+                    tts_text = None
+                    tool_calls = None
+                    tool_ms = 0
+                    llm_ms = 0
+                    
+                    total_ms = now_ms() - start_ms
+                    safe_put(
+                        brain_to_core_q,
+                        {
+                            "type": "RESULT",
+                            "id": req_id,
+                            "reply": reply,
+                            "tool_calls": tool_calls,
+                            "tts_text": tts_text,
+                            "meta": {
+                                "timings": {
+                                    "stt_ms": stt_ms,
+                                    "llm_ms": llm_ms,
+                                    "tool_ms": tool_ms,
+                                    "tts_start_ms": None,
+                                    "total_ms": total_ms,
+                                },
+                                "tts_interrupted": False,
+                                "user_text": user_text,
+                                "is_followup": is_followup,
+                                "followup_chain": meta.get("followup_chain"),
+                            },
+                        },
+                    )
+                    continue
 
             # LLM + tools via orchestrator
             llm_start = now_ms()
@@ -331,6 +381,8 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                         },
                         "tts_interrupted": tts_interrupted,
                         "user_text": user_text,
+                        "is_followup": meta.get("is_followup", False),  # Preserve followup flag
+                        "followup_chain": meta.get("followup_chain"),  # Preserve chain count
                     },
                 },
             )
@@ -346,6 +398,11 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                     "reply": f"(error: {err})",
                     "tool_calls": None,
                     "tts_text": None,
-                    "meta": {"timings": {"total_ms": now_ms() - start_ms}, "error": True},
+                    "meta": {
+                        "timings": {"total_ms": now_ms() - start_ms},
+                        "error": True,
+                        "is_followup": meta.get("is_followup", False),  # Preserve followup flag
+                        "followup_chain": meta.get("followup_chain"),  # Preserve chain count
+                    },
                 },
             )

@@ -85,6 +85,11 @@ class Config:
     AUTO_ALIAS_ENABLED: bool = os.environ.get("WYZER_AUTO_ALIAS_ENABLED", "true").lower() in ("true", "1", "yes")
     AUTO_ALIAS_MIN_CONFIDENCE: float = float(os.environ.get("WYZER_AUTO_ALIAS_MIN_CONFIDENCE", "0.85"))
     
+    # FOLLOWUP listening window settings
+    FOLLOWUP_ENABLED: bool = os.environ.get("WYZER_FOLLOWUP_ENABLED", "true").lower() in ("true", "1", "yes")
+    FOLLOWUP_TIMEOUT_SEC: float = float(os.environ.get("WYZER_FOLLOWUP_TIMEOUT_SEC", "3.0"))
+    FOLLOWUP_MAX_CHAIN: int = int(os.environ.get("WYZER_FOLLOWUP_MAX_CHAIN", "3"))
+    
     @classmethod
     def get_frame_duration_ms(cls) -> float:
         """Get frame duration in milliseconds"""

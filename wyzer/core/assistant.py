@@ -20,6 +20,7 @@ from typing import Optional, List, Any, Dict
 from wyzer.core.config import Config
 from wyzer.core.logger import get_logger
 from wyzer.core.state import AssistantState, RuntimeState
+from wyzer.core.followup_manager import FollowupManager
 from wyzer.audio.mic_stream import MicStream
 from wyzer.audio.vad import VadDetector
 from wyzer.audio.hotword import HotwordDetector
@@ -81,8 +82,14 @@ class WyzerAssistant:
         self.state = RuntimeState()
         self.running = False
         
+        # FOLLOWUP listening window manager
+        self.followup_manager = FollowupManager()
+        
         # Hotword cooldown tracking
         self.last_hotword_time: float = 0.0
+        
+        # Track if current speaking response is from FOLLOWUP
+        self._is_followup_response: bool = False
         
         # Post-barge-in speech gating
         self._bargein_pending_speech: bool = False
@@ -233,6 +240,10 @@ class WyzerAssistant:
                 # Check if speaking thread finished
                 elif self.state.is_in_state(AssistantState.SPEAKING):
                     self._check_speaking_complete()
+                # Check FOLLOWUP timeout
+                elif self.state.is_in_state(AssistantState.FOLLOWUP):
+                    if self.followup_manager.check_timeout():
+                        self._reset_to_idle()
                 continue
             
             # Process frame based on current state
@@ -241,6 +252,9 @@ class WyzerAssistant:
             
             elif self.state.is_in_state(AssistantState.LISTENING):
                 self._process_listening(audio_frame)
+            
+            elif self.state.is_in_state(AssistantState.FOLLOWUP):
+                self._process_followup(audio_frame)
             
             elif self.state.is_in_state(AssistantState.TRANSCRIBING):
                 # In transcribing state, drain frames to prevent queue overflow
@@ -366,6 +380,97 @@ class WyzerAssistant:
                 self.logger.warning("No speech detected in recording")
                 self._reset_to_idle()
     
+    def _process_followup(self, audio_frame: np.ndarray) -> None:
+        """
+        Process audio frame in FOLLOWUP state (no hotword, follow-up listening).
+        Similar to LISTENING but with different timeout and exit criteria.
+        
+        Args:
+            audio_frame: Audio frame to process
+        """
+        # Add frame to buffer
+        self.audio_buffer.append(audio_frame)
+        self.state.total_frames_recorded += 1
+        
+        # Check for speech using VAD
+        is_speech = self.vad.is_speech(audio_frame)
+        
+        if is_speech:
+            # Speech detected - reset the silence timer
+            if not self.state.speech_detected:
+                self.logger.debug("FOLLOWUP: Speech started")
+                self.state.speech_detected = True
+            
+            # Reset followup timeout on new speech
+            self.followup_manager.reset_speech_timer()
+            
+            self.state.speech_frames_count += 1
+            self.state.silence_frames = 0
+        else:
+            # No speech in this frame
+            if self.state.speech_detected:
+                # We've detected speech before, so this is silence after speech
+                self.state.silence_frames += 1
+        
+        # Check stop conditions for FOLLOWUP
+        should_stop = False
+        stop_reason = ""
+        
+        # 1. Silence timeout after speech (uses FOLLOWUP_TIMEOUT_SEC)
+        if (self.state.speech_detected and 
+            self.followup_manager.check_timeout()):
+            should_stop = True
+            stop_reason = "followup silence timeout"
+        
+        # 2. Max FOLLOWUP chain depth reached
+        if (self.state.speech_detected and 
+            self.state.silence_frames >= Config.get_silence_timeout_frames()):
+            if not self.followup_manager.increment_chain():
+                should_stop = True
+                stop_reason = "followup max chain depth"
+        
+        if should_stop:
+            self.logger.info(f"FOLLOWUP stopped: {stop_reason}")
+            
+            # Only transcribe if we detected some speech
+            if self.state.speech_frames_count > 0:
+                self._transcribe_followup()
+            else:
+                self.logger.info("No speech in FOLLOWUP window")
+                self.followup_manager.end_followup_window()
+                self._reset_to_idle()
+    
+    def _transcribe_followup(self) -> None:
+        """Start background transcription for FOLLOWUP response"""
+        # Transition to TRANSCRIBING
+        self.state.transition_to(AssistantState.TRANSCRIBING)
+        
+        # Concatenate audio buffer
+        audio_data = concat_audio_frames(self.audio_buffer)
+        
+        self.logger.info(
+            f"FOLLOWUP: Starting transcription of {len(audio_data)/Config.SAMPLE_RATE:.2f}s audio..."
+        )
+        
+        # Start transcription in background thread
+        self.stt_result = None
+        self.stt_thread = threading.Thread(
+            target=self._background_transcribe_followup,
+            args=(audio_data,),
+            daemon=True
+        )
+        self.stt_thread.start()
+    
+    def _background_transcribe_followup(self, audio_data: np.ndarray) -> None:
+        """Background thread for STT processing in FOLLOWUP mode"""
+        try:
+            # Use mode="followup" for STT (can be used for future mode-specific processing)
+            transcript = self.stt.transcribe(audio_data, mode="followup")
+            self.stt_result = transcript
+        except Exception as e:
+            self.logger.error(f"Error in FOLLOWUP transcription: {e}")
+            self.stt_result = None
+    
     def _transcribe_and_reset(self) -> None:
         """Start background transcription and transition to TRANSCRIBING"""
         # Clear barge-in flags when completing listening
@@ -405,19 +510,32 @@ class WyzerAssistant:
             # Thread finished
             transcript = self.stt_result
             
+            # Determine if this is a FOLLOWUP transcription
+            was_followup = self.followup_manager.is_followup_active()
+            
             # Display transcript
             if transcript:
                 self.logger.info(f"Transcript: {transcript}")
                 print(f"\nYou: {transcript}")
                 
+                # Check if this is a FOLLOWUP exit phrase
+                if was_followup and self.followup_manager.is_exit_phrase(transcript):
+                    self.logger.info("[FOLLOWUP] Exit phrase detected - ending followup window")
+                    self.followup_manager.end_followup_window()
+                    self._reset_to_idle()
+                    return
+                
                 # Pass to LLM brain if enabled
                 if self.brain:
-                    self._think_and_respond(transcript)
+                    self._think_and_respond(transcript, is_followup=was_followup)
                 else:
-                    # No brain, just show transcript and return to idle
+                    # No brain, just show transcript and return to idle/followup
                     if not self.enable_hotword:
                         self.logger.info("No-hotword mode: Exiting after transcription")
                         self.running = False
+                    elif was_followup:
+                        # Go back to FOLLOWUP listening
+                        self._re_enter_followup()
                     else:
                         self._reset_to_idle()
             else:
@@ -427,6 +545,9 @@ class WyzerAssistant:
                 if not self.enable_hotword:
                     self.logger.info("No-hotword mode: Exiting")
                     self.running = False
+                elif was_followup:
+                    # Go back to FOLLOWUP listening
+                    self._re_enter_followup()
                 else:
                     self._reset_to_idle()
     
@@ -464,8 +585,14 @@ class WyzerAssistant:
         if self.enable_hotword:
             self.logger.info(f"Ready. Listening for hotword: {Config.HOTWORD_KEYWORDS}")
     
-    def _think_and_respond(self, transcript: str) -> None:
-        """Start background LLM thinking and transition to THINKING state"""
+    def _think_and_respond(self, transcript: str, is_followup: bool = False) -> None:
+        """
+        Start background LLM thinking and transition to THINKING state
+        
+        Args:
+            transcript: User's transcript
+            is_followup: True if this came from FOLLOWUP listening
+        """
         # Transition to THINKING
         self.state.transition_to(AssistantState.THINKING)
         
@@ -475,12 +602,12 @@ class WyzerAssistant:
         self.thinking_result = None
         self.thinking_thread = threading.Thread(
             target=self._background_think,
-            args=(transcript,),
+            args=(transcript, is_followup),
             daemon=True
         )
         self.thinking_thread.start()
     
-    def _background_think(self, transcript: str) -> None:
+    def _background_think(self, transcript: str, is_followup: bool = False) -> None:
         """Background thread for LLM processing"""
         try:
             # Use orchestrator for Phase 6 tool support
@@ -492,7 +619,8 @@ class WyzerAssistant:
                 "reply": result_dict.get("reply", ""),
                 "confidence": 0.8,
                 "model": Config.OLLAMA_MODEL,
-                "latency_ms": result_dict.get("latency_ms", 0)
+                "latency_ms": result_dict.get("latency_ms", 0),
+                "is_followup": is_followup
             }
         except Exception as e:
             self.logger.error(f"Error in background thinking: {e}")
@@ -500,7 +628,8 @@ class WyzerAssistant:
                 "reply": "I encountered an error processing your request.",
                 "confidence": 0.3,
                 "model": "error",
-                "latency_ms": 0
+                "latency_ms": 0,
+                "is_followup": is_followup
             }
     
     def _check_thinking_complete(self) -> None:
@@ -508,6 +637,7 @@ class WyzerAssistant:
         if self.thinking_thread and not self.thinking_thread.is_alive():
             # Thread finished
             result = self.thinking_result
+            is_followup = result.get("is_followup", False) if result else False
             
             if result:
                 # Display response
@@ -519,12 +649,15 @@ class WyzerAssistant:
                 
                 # Speak response if TTS enabled
                 if self.tts:
-                    self._speak_and_reset(reply)
+                    self._speak_and_reset(reply, is_followup=is_followup)
                 else:
-                    # No TTS, just go to idle or exit
+                    # No TTS, just go to idle/followup or exit
                     if not self.enable_hotword:
                         self.logger.info("No-hotword mode: Exiting after response")
                         self.running = False
+                    elif is_followup:
+                        # Go back to FOLLOWUP listening
+                        self._re_enter_followup()
                     else:
                         self._reset_to_idle()
             else:
@@ -534,11 +667,20 @@ class WyzerAssistant:
                 if not self.enable_hotword:
                     self.logger.info("No-hotword mode: Exiting")
                     self.running = False
+                elif is_followup:
+                    # Go back to FOLLOWUP listening
+                    self._re_enter_followup()
                 else:
                     self._reset_to_idle()
     
-    def _speak_and_reset(self, text: str) -> None:
-        """Start background speaking and transition to SPEAKING state"""
+    def _speak_and_reset(self, text: str, is_followup: bool = False) -> None:
+        """
+        Start background speaking and transition to SPEAKING state
+        
+        Args:
+            text: Text to speak
+            is_followup: True if we should re-enter FOLLOWUP after speaking
+        """
         # Transition to SPEAKING
         self.state.transition_to(AssistantState.SPEAKING)
         
@@ -549,6 +691,7 @@ class WyzerAssistant:
         
         # Record speaking start time for cooldown check
         self._speaking_start_ts = time.time()
+        self._is_followup_response = is_followup
         
         # Start speaking in background thread
         self.speaking_thread = threading.Thread(
@@ -650,13 +793,72 @@ class WyzerAssistant:
             if not self.enable_hotword:
                 self.logger.info("No-hotword mode: Exiting after speaking")
                 self.running = False
-            else:
-                # Drain queue and reset to IDLE
+            elif self._is_followup_response:
+                # This response was in a FOLLOWUP chain, so re-enter FOLLOWUP
+                self._is_followup_response = False
                 self._drain_audio_queue(Config.POST_SPEAK_DRAIN_SEC)
-                
                 self.speaking_thread = None
-                self.state.transition_to(AssistantState.IDLE)
-                self.logger.info(f"Ready. Listening for hotword: {Config.HOTWORD_KEYWORDS}")
+                self._re_enter_followup()
+            else:
+                # Regular speaking complete - transition to FOLLOWUP
+                self._drain_audio_queue(Config.POST_SPEAK_DRAIN_SEC)
+                self.speaking_thread = None
+                self._enter_followup_after_prompt()
+    
+    def _start_followup_window(self) -> None:
+        """
+        Start a FOLLOWUP listening window after TTS completes.
+        Speaks a prompt and transitions to FOLLOWUP state.
+        """
+        if not Config.FOLLOWUP_ENABLED:
+            # FOLLOWUP disabled, go back to IDLE
+            self.state.transition_to(AssistantState.IDLE)
+            self.logger.info(f"Ready. Listening for hotword: {Config.HOTWORD_KEYWORDS}")
+            return
+        
+        # Speak a prompt to signal FOLLOWUP window
+        self._speak_followup_prompt()
+    
+    def _speak_followup_prompt(self) -> None:
+        """Speak a follow-up prompt and prepare to transition to FOLLOWUP state"""
+        # Start speaking the prompt
+        self.state.transition_to(AssistantState.SPEAKING)
+        self.logger.info("Speaking follow-up prompt...")
+        
+        # Clear stop event
+        self.tts_stop_event.clear()
+        
+        # Record speaking start time for cooldown check
+        self._speaking_start_ts = time.time()
+        self._is_followup_response = False  # Don't re-enter FOLLOWUP on completion
+        
+        # Start speaking the prompt in background thread
+        prompt = "Is there anything else?"
+        self.speaking_thread = threading.Thread(
+            target=self._background_speak,
+            args=(prompt,),
+            daemon=True
+        )
+        self.speaking_thread.start()
+    
+    def _enter_followup_after_prompt(self) -> None:
+        """Enter FOLLOWUP state after the follow-up prompt has been spoken"""
+        self.state.transition_to(AssistantState.FOLLOWUP)
+        self.audio_buffer = []
+        self.state.speech_detected = False
+        self.state.silence_frames = 0
+        self.state.speech_frames_count = 0
+        self.state.total_frames_recorded = 0
+        
+        self.followup_manager.start_followup_window()
+    
+    def _re_enter_followup(self) -> None:
+        """
+        Re-enter FOLLOWUP window during a chain.
+        Used when user's FOLLOWUP response gets processed and we respond again.
+        """
+        # Speak the follow-up prompt again
+        self._speak_followup_prompt()
     
     def _drain_audio_queue(self, duration_sec: float) -> None:
         """Drain audio queue for specified duration"""
@@ -722,6 +924,9 @@ class WyzerAssistantMultiprocess:
         self.state = RuntimeState()
         self.running = False
         self.last_hotword_time: float = 0.0
+        
+        # FOLLOWUP listening window manager
+        self.followup_manager = FollowupManager()
 
         # Post-barge-in speech gating
         self._bargein_pending_speech: bool = False
@@ -829,12 +1034,18 @@ class WyzerAssistantMultiprocess:
                 # Also allow hotword gating timeouts in LISTENING
                 if self.state.is_in_state(AssistantState.LISTENING):
                     self._process_listening_timeout_tick()
+                # Allow FOLLOWUP timeout checks
+                elif self.state.is_in_state(AssistantState.FOLLOWUP):
+                    if self.followup_manager.check_timeout():
+                        self._reset_to_idle()
                 continue
 
             if self.state.is_in_state(AssistantState.IDLE):
                 self._process_idle(audio_frame)
             elif self.state.is_in_state(AssistantState.LISTENING):
                 self._process_listening(audio_frame)
+            elif self.state.is_in_state(AssistantState.FOLLOWUP):
+                self._process_followup(audio_frame)
             else:
                 # In multiprocess mode, treat non-listening states like IDLE for hotword/barge-in.
                 self._process_idle(audio_frame)
@@ -949,6 +1160,139 @@ class WyzerAssistantMultiprocess:
             # In no-hotword mode, wait for RESULT then exit after TTS completes.
             self.state.transition_to(AssistantState.IDLE)
 
+    def _process_followup(self, audio_frame: np.ndarray) -> None:
+        """
+        Process audio frame in FOLLOWUP state (multiprocess).
+        Similar to LISTENING but with different timeout and exit criteria.
+        
+        Args:
+            audio_frame: Audio frame to process
+        """
+        # Post-barge-in speech gating
+        if self._bargein_pending_speech:
+            current_time = time.time()
+            if current_time > self._bargein_wait_speech_deadline_ts:
+                self.logger.info("Post-barge-in speech wait timeout - returning to IDLE")
+                self._clear_bargein_flags()
+                self._reset_to_idle()
+                return
+
+        self.audio_buffer.append(audio_frame)
+        self.state.total_frames_recorded += 1
+
+        # During grace period (TTS prompt playing), don't process speech
+        # This prevents picking up the prompt audio as user speech
+        if self.followup_manager.is_in_grace_period():
+            return
+
+        is_speech = self.vad.is_speech(audio_frame)
+        if is_speech:
+            if not self.state.speech_detected:
+                self.logger.debug("FOLLOWUP: Speech started")
+                self.state.speech_detected = True
+                # Reset followup timeout on new speech
+                self.followup_manager.reset_speech_timer()
+                if self._bargein_pending_speech:
+                    self.logger.debug("Speech started after barge-in - clearing pending flag")
+                    self._bargein_pending_speech = False
+            else:
+                # Continuous speech, keep resetting timer
+                self.followup_manager.reset_speech_timer()
+            self.state.speech_frames_count += 1
+            self.state.silence_frames = 0
+        else:
+            if self.state.speech_detected:
+                self.state.silence_frames += 1
+
+        should_stop = False
+        stop_reason = ""
+        
+        # Send audio early if we detect end of speech (short silence after speech ends)
+        # This avoids waiting for the full 3-second timeout
+        if self.state.speech_detected and self.state.silence_frames > 0:
+            silence_duration = self.state.silence_frames * (Config.CHUNK_SAMPLES / Config.SAMPLE_RATE)
+            # If we've had ~500ms of silence after speech, send for processing
+            if silence_duration >= 0.5:
+                should_stop = True
+                stop_reason = "speech ended (early send)"
+        
+        # Check FOLLOWUP timeout
+        if not should_stop and self.state.speech_detected and self.followup_manager.check_timeout():
+            should_stop = True
+            stop_reason = "followup silence timeout"
+        
+        # Max duration limit
+        if self.state.total_frames_recorded >= Config.get_max_record_frames():
+            should_stop = True
+            stop_reason = "max duration"
+
+        if not should_stop:
+            return
+
+        self.logger.info(f"FOLLOWUP stopped: {stop_reason}")
+
+        if self.state.speech_frames_count <= 0:
+            self.logger.info("No speech in FOLLOWUP window")
+            self.followup_manager.end_followup_window()
+            self._reset_to_idle()
+            return
+
+        self._send_audio_to_brain_followup()
+        
+        # Return to IDLE immediately so hotword stays responsive.
+        if self.enable_hotword:
+            self._reset_to_idle()
+        else:
+            # In no-hotword mode, wait for RESULT then exit after TTS completes.
+            self.state.transition_to(AssistantState.IDLE)
+
+    def _send_audio_to_brain_followup(self) -> None:
+        """Send audio to brain worker in FOLLOWUP mode"""
+        if not self._core_to_brain_q:
+            self.logger.error("Brain worker queue not available")
+            return
+
+        self._clear_bargein_flags()
+        audio_data = concat_audio_frames(self.audio_buffer)
+        self.audio_buffer = []
+
+        # Save to temp WAV (keeps IPC lightweight on slow PCs)
+        wav_path = None
+        try:
+            fd, wav_path = tempfile.mkstemp(prefix="wyzer_", suffix=".wav")
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            int16_audio = audio_to_int16(audio_data)
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(Config.SAMPLE_RATE)
+                wf.writeframes(int16_audio.tobytes())
+        except Exception as e:
+            self.logger.error(f"Failed to write temp WAV: {e}")
+            try:
+                if wav_path:
+                    os.unlink(wav_path)
+            except Exception:
+                pass
+            return
+
+        req_id = new_id()
+        # Mark as followup so orchestrator can handle exit phrases
+        safe_put(
+            self._core_to_brain_q,
+            {
+                "type": "AUDIO",
+                "id": req_id,
+                "wav_path": wav_path,
+                "pcm_bytes": None,
+                "sample_rate": Config.SAMPLE_RATE,
+                "meta": {"is_followup": True, "followup_chain": self.followup_manager.get_chain_count()},
+            },
+        )
+
     def _send_audio_to_brain(self) -> None:
         if not self._core_to_brain_q:
             self.logger.error("Brain worker queue not available")
@@ -1013,6 +1357,9 @@ class WyzerAssistantMultiprocess:
                     self._brain_speaking = True
                 elif text in {"tts_finished", "tts_interrupted"}:
                     self._brain_speaking = False
+                    # When TTS finishes, enter FOLLOWUP (if enabled and not no-hotword mode)
+                    if Config.FOLLOWUP_ENABLED and self.enable_hotword and self.state.is_in_state(AssistantState.IDLE):
+                        self._start_followup_window()
 
                 if level == "DEBUG":
                     self.logger.debug(text)
@@ -1031,6 +1378,21 @@ class WyzerAssistantMultiprocess:
             if mtype == "RESULT":
                 meta = msg.get("meta") or {}
                 user_text = str(meta.get("user_text") or "").strip()
+                is_followup = meta.get("is_followup", False)
+                
+                # Check if this is an exit phrase in FOLLOWUP mode
+                if is_followup and user_text and self.followup_manager.is_exit_phrase(user_text):
+                    self.logger.info("[FOLLOWUP] Exit phrase detected - ending followup window")
+                    self.followup_manager.end_followup_window()
+                    
+                    # Interrupt any TTS to avoid speaking the response
+                    if self._core_to_brain_q:
+                        safe_put(self._core_to_brain_q, {"type": "INTERRUPT", "reason": "followup_exit"})
+                    
+                    # Silently exit FOLLOWUP without printing or speaking the response
+                    self._reset_to_idle()
+                    continue
+                
                 if user_text:
                     print(f"\nYou: {user_text}")
 
@@ -1038,14 +1400,59 @@ class WyzerAssistantMultiprocess:
                 print(f"\nWyzer: {reply}\n")
 
                 tts_text = msg.get("tts_text")
-                if not self.enable_hotword:
+                
+                # Handle FOLLOWUP continuation
+                if is_followup and tts_text:
+                    # Spoken response in FOLLOWUP context
+                    # TTS completion will re-enter FOLLOWUP
+                    pass
+                elif not self.enable_hotword:
                     # Exit after TTS completes (if any)
                     self._exit_after_tts = bool(tts_text)
                     if not tts_text:
                         self.running = False
+                elif not is_followup and tts_text:
+                    # Normal response - will start FOLLOWUP window after TTS
+                    pass
                 continue
 
             # Unknown message types are ignored
+
+    def _start_followup_window(self) -> None:
+        """
+        Start a FOLLOWUP listening window after TTS completes (multiprocess).
+        Enqueues a follow-up prompt and transitions to FOLLOWUP state.
+        """
+        if not Config.FOLLOWUP_ENABLED:
+            # FOLLOWUP disabled, go back to IDLE
+            self.state.transition_to(AssistantState.IDLE)
+            self.logger.info(f"Ready. Listening for hotword: {Config.HOTWORD_KEYWORDS}")
+            return
+        
+        # Send follow-up prompt to brain worker for TTS
+        prompt = "Is there anything else?"
+        if self._core_to_brain_q:
+            req_id = new_id()
+            safe_put(
+                self._core_to_brain_q,
+                {
+                    "type": "TEXT",
+                    "id": req_id,
+                    "text": prompt,
+                    "meta": {"is_followup_prompt": True},
+                },
+            )
+            self.logger.info("Enqueued follow-up prompt for TTS")
+        
+        # Transition to FOLLOWUP state (will be ready when TTS finishes)
+        self.state.transition_to(AssistantState.FOLLOWUP)
+        self.audio_buffer = []
+        self.state.speech_detected = False
+        self.state.silence_frames = 0
+        self.state.speech_frames_count = 0
+        self.state.total_frames_recorded = 0
+        
+        self.followup_manager.start_followup_window()
 
     def _reset_to_idle(self) -> None:
         self._clear_bargein_flags()

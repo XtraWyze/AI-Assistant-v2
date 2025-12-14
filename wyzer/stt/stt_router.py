@@ -54,7 +54,8 @@ class STTRouter:
         self,
         audio: np.ndarray,
         language: str = "en",
-        engine: str = "whisper"
+        engine: str = "whisper",
+        mode: str = "default"
     ) -> str:
         """
         Transcribe audio using specified engine
@@ -63,7 +64,9 @@ class STTRouter:
             audio: Audio data as float32 mono at 16kHz
             language: Language code
             engine: Engine to use (currently only "whisper")
-            
+            mode: STT mode ("default", "followup", etc.)
+                  Used for potential mode-specific processing
+                  
         Returns:
             Transcribed text, or empty string if no speech
         """
