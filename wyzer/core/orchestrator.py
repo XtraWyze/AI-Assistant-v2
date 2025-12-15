@@ -986,6 +986,21 @@ def _fastpath_parse_clause(clause: str) -> Optional[List[Intent]]:
     if "refresh library" in c_lower or "rebuild library" in c_lower or c_lower == "local library refresh":
         return [Intent(tool="local_library_refresh", args={})]
 
+    # --- Audio output device listing (list/show devices) ---
+    # "list audio devices", "show audio devices", "what audio devices", "which devices are available"
+    list_devices_patterns = [
+        r"\blist\s+(?:audio\s+)?devices?\b",
+        r"\bshow\s+(?:audio\s+)?devices?\b",
+        r"\bwhat\s+(?:audio\s+)?devices?\b",
+        r"\bwhich\s+(?:audio\s+)?devices?\b",
+        r"\bavailable\s+(?:audio\s+)?devices?\b",
+        r"(?:audio|sound|output)\s+devices?\s+available\b",
+        r"\bcurrent\s+(?:audio\s+)?device\b",
+        r"\bwhich\s+(?:audio\s+)?device\s+is\s+(?:active|selected|current)\b",
+    ]
+    if any(re.search(pat, c_lower) for pat in list_devices_patterns):
+        return [Intent(tool="set_audio_output_device", args={"action": "list"})]
+
     # --- Audio output device switching (explicit only) ---
     dev = _parse_audio_device_target(c)
     if dev:
@@ -1344,6 +1359,19 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
             return f"Opening {url}." if url else "Opening."
 
         if tool == "set_audio_output_device":
+            action = str(args.get("action") or "").lower()
+            if action == "list":
+                devices = result.get("devices") if isinstance(result, dict) else []
+                current = result.get("current_device") if isinstance(result, dict) else None
+                if not devices:
+                    return "No audio devices found."
+                current_name = (current or {}).get("name") if isinstance(current, dict) else None
+                device_list = ", ".join(str(d.get("name", "Unknown")) for d in (devices or []) if isinstance(d, dict))
+                if current_name:
+                    return f"Available devices: {device_list}. Current: {current_name}."
+                return f"Available devices: {device_list}."
+            
+            # "set" action
             chosen = result.get("chosen") if isinstance(result, dict) else None
             chosen_name = (chosen or {}).get("name") if isinstance(chosen, dict) else None
             if isinstance(chosen_name, str) and chosen_name.strip():
@@ -1397,6 +1425,7 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
     opened: List[str] = []
     closed: List[str] = []
     audio_switched: Optional[str] = None
+    audio_list: Optional[str] = None
     info_sentence: Optional[str] = None
     volume_fragments: List[str] = []
     media_fragments: List[str] = []
@@ -1442,14 +1471,23 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
             continue
 
         if intent.tool == "set_audio_output_device":
-            chosen = res.get("chosen") if isinstance(res, dict) else None
-            chosen_name = (chosen or {}).get("name") if isinstance(chosen, dict) else None
-            if isinstance(chosen_name, str) and chosen_name.strip():
-                audio_switched = chosen_name.strip()
+            action = str(args.get("action") or "").lower()
+            if action == "list":
+                devices = res.get("devices") if isinstance(res, dict) else []
+                if devices and isinstance(devices, list):
+                    device_names = [str(d.get("name", "")) for d in devices if isinstance(d, dict) and d.get("name")]
+                    if device_names:
+                        audio_list = ", ".join(device_names)
             else:
-                requested = args.get("device")
-                if isinstance(requested, str) and requested.strip():
-                    audio_switched = requested.strip()
+                # "set" action
+                chosen = res.get("chosen") if isinstance(res, dict) else None
+                chosen_name = (chosen or {}).get("name") if isinstance(chosen, dict) else None
+                if isinstance(chosen_name, str) and chosen_name.strip():
+                    audio_switched = chosen_name.strip()
+                else:
+                    requested = args.get("device")
+                    if isinstance(requested, str) and requested.strip():
+                        audio_switched = requested.strip()
 
         if intent.tool == "volume_control":
             action = str(args.get("action") or "").lower()
@@ -1520,6 +1558,9 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
 
     if audio_switched:
         action_fragments.append(f"Set audio output to {audio_switched}")
+
+    if audio_list:
+        action_fragments.append(f"Available devices: {audio_list}")
 
     if volume_fragments:
         # Keep the last 2 volume-related statements to stay concise.

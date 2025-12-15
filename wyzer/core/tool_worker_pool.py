@@ -71,7 +71,7 @@ class ToolWorker(mp.Process):
         logger = get_logger()
         registry = build_default_registry()
         
-        logger.info(f"[POOL] Worker {self.worker_id} started")
+        logger.info(f"[POOL] Worker {self.worker_id} started (pid={mp.current_process().pid})")
         
         while True:
             try:

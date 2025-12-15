@@ -16,7 +16,7 @@ class Config:
     CHUNK_SAMPLES: int = SAMPLE_RATE * CHUNK_MS // 1000  # 320 samples for 20ms at 16kHz
     
     # Recording limits
-    MAX_RECORD_SECONDS: float = float(os.environ.get("WYZER_MAX_RECORD_SECONDS", "12.0"))
+    MAX_RECORD_SECONDS: float = float(os.environ.get("WYZER_MAX_RECORD_SECONDS", "5.0"))
     VAD_SILENCE_TIMEOUT: float = float(os.environ.get("WYZER_VAD_SILENCE_TIMEOUT", "1.2"))
     
     # VAD settings
@@ -42,11 +42,17 @@ class Config:
     MAX_TOKEN_REPEATS: int = int(os.environ.get("WYZER_MAX_TOKEN_REPEATS", "6"))
     MIN_TRANSCRIPT_LENGTH: int = int(os.environ.get("WYZER_MIN_TRANSCRIPT_LENGTH", "2"))
     
-    # LLM Brain settings (Phase 4)
+    # LLM Brain settings (Phase 4 - enhanced Phase 7)
     LLM_MODE: str = os.environ.get("WYZER_LLM_MODE", "ollama")  # "ollama" or "off"
     OLLAMA_BASE_URL: str = os.environ.get("WYZER_OLLAMA_URL", "http://127.0.0.1:11434")
     OLLAMA_MODEL: str = os.environ.get("WYZER_OLLAMA_MODEL", "llama3.1:latest")
     LLM_TIMEOUT: int = int(os.environ.get("WYZER_LLM_TIMEOUT", "30"))
+    OLLAMA_STREAM: bool = os.environ.get("WYZER_OLLAMA_STREAM", "true").lower() in ("true", "1", "yes")
+    OLLAMA_TEMPERATURE: float = float(os.environ.get("WYZER_OLLAMA_TEMPERATURE", "0.4"))
+    OLLAMA_TOP_P: float = float(os.environ.get("WYZER_OLLAMA_TOP_P", "0.9"))
+    OLLAMA_NUM_CTX: int = int(os.environ.get("WYZER_OLLAMA_NUM_CTX", "4096"))
+    OLLAMA_NUM_PREDICT: int = int(os.environ.get("WYZER_OLLAMA_NUM_PREDICT", "120"))
+    LLM_MAX_PROMPT_CHARS: int = int(os.environ.get("WYZER_LLM_MAX_PROMPT_CHARS", "8000"))
     
     # TTS settings (Phase 5)
     TTS_ENABLED: bool = os.environ.get("WYZER_TTS_ENABLED", "true").lower() in ("true", "1", "yes")
@@ -87,7 +93,7 @@ class Config:
     
     # FOLLOWUP listening window settings
     FOLLOWUP_ENABLED: bool = os.environ.get("WYZER_FOLLOWUP_ENABLED", "true").lower() in ("true", "1", "yes")
-    FOLLOWUP_TIMEOUT_SEC: float = float(os.environ.get("WYZER_FOLLOWUP_TIMEOUT_SEC", "3.0"))
+    FOLLOWUP_TIMEOUT_SEC: float = float(os.environ.get("WYZER_FOLLOWUP_TIMEOUT_SEC", "1.5"))
     FOLLOWUP_MAX_CHAIN: int = int(os.environ.get("WYZER_FOLLOWUP_MAX_CHAIN", "3"))
     
     # Tool Worker Pool settings (Runtime verification & warm workers)

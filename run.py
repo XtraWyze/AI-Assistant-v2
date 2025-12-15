@@ -278,6 +278,7 @@ def main():
     if args.llm == "ollama":
         print(f"  LLM Model: {args.ollama_model}")
         print(f"  LLM URL: {args.ollama_url}")
+        print(f"  LLM Streaming: {Config.OLLAMA_STREAM}")
     print(f"  TTS Enabled: {args.tts == 'on'}")
     if args.tts == "on":
         print(f"  TTS Engine: {args.tts_engine}")

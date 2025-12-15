@@ -2,5 +2,13 @@
   "vs code": {
     "type": "app",
     "target": "C:\\Program Files\\Microsoft VS Code\\Code.exe"
+  },
+  "vs code.": {
+    "type": "app",
+    "target": "C:\\Program Files\\Microsoft VS Code\\Code.exe"
+  },
+  "file explorer.": {
+    "type": "app",
+    "target": "C:\\Users\\kolyw\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\File Explorer.lnk"
   }
 }

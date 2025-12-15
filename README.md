@@ -13,6 +13,9 @@ A voice-controlled AI assistant for Windows 10/11 with hotword detection, speech
 - ✅ **FOLLOWUP Listening Window**: After each response, listen for follow-ups WITHOUT hotword (deterministic, no LLM needed)
 - ✅ **Multiprocess Split (Performance)**: Realtime core stays responsive; heavy STT/LLM/tools/TTS run in a separate worker process
 - ✅ **Tool Calling (Phase 6)**: LLM can call safe, allowlisted local tools
+- ✅ **HTTP Connection Reuse (Phase 7)**: Efficient Ollama communication with keep-alive
+- ✅ **Prompt Compaction (Phase 7)**: Automatic token reduction without losing meaning
+- ✅ **Optional Streaming (Phase 7)**: Low-latency token-by-token output (disabled by default)
 - ✅ **State Machine**: Clean state transitions (IDLE → LISTENING → TRANSCRIBING → THINKING → SPEAKING → FOLLOWUP)
 - ✅ **Cross-platform (core)**: Windows-first; some bundled binaries/tools are Windows-specific
 - ✅ **Robust Audio**: 16kHz mono pipeline with proper buffering
@@ -298,11 +301,17 @@ set WYZER_WHISPER_DEVICE=cpu
 set WYZER_MAX_TOKEN_REPEATS=6
 set WYZER_MIN_TRANSCRIPT_LENGTH=2
 
-# LLM settings (Phase 4)
+# LLM settings (Phase 4 - enhanced Phase 7)
 set WYZER_LLM_MODE=ollama
 set WYZER_OLLAMA_URL=http://127.0.0.1:11434
 set WYZER_OLLAMA_MODEL=llama3.1:latest
 set WYZER_LLM_TIMEOUT=30
+set WYZER_OLLAMA_STREAM=true
+set WYZER_OLLAMA_TEMPERATURE=0.4
+set WYZER_OLLAMA_TOP_P=0.9
+set WYZER_OLLAMA_NUM_CTX=4096
+set WYZER_OLLAMA_NUM_PREDICT=120
+set WYZER_LLM_MAX_PROMPT_CHARS=8000
 
 # TTS settings (Phase 5)
 set WYZER_TTS_ENABLED=true
@@ -611,6 +620,54 @@ To test without LLM:
 ```bash
 python run.py --llm off
 ```
+
+## Phase 7: Ollama Communication Enhancements
+
+Phase 7 improves Ollama communication speed and efficiency while maintaining backward compatibility:
+
+### Features
+- **HTTP Connection Reuse**: Uses `urllib.request.build_opener()` for persistent connections and keep-alive headers
+- **Prompt Compaction**: Automatically reduces token bloat by keeping system prompt + user input while omitting middle content
+- **Optional Streaming**: Enable token-by-token output for lower latency (disabled by default)
+- **Configurable Generation Options**: Control temperature, top-p, context size, and max tokens via environment variables
+- **Timing Metrics**: Logs connection time and per-request latency at DEBUG level
+
+### Configuration (Phase 7)
+
+All new settings are **optional** and have safe defaults:
+
+```bash
+# Enable streaming mode (token-by-token output, disabled by default)
+set WYZER_OLLAMA_STREAM=false
+
+# Generation options (these are already defaults, shown for reference)
+set WYZER_OLLAMA_TEMPERATURE=0.4      # Lower = more deterministic
+set WYZER_OLLAMA_TOP_P=0.9            # Nucleus sampling diversity
+set WYZER_OLLAMA_NUM_CTX=4096         # Context window size
+set WYZER_OLLAMA_NUM_PREDICT=120      # Max output tokens
+
+# Prompt character limit before compaction (default 8000)
+set WYZER_LLM_MAX_PROMPT_CHARS=8000
+```
+
+### How Prompt Compaction Works
+
+When a prompt exceeds `WYZER_LLM_MAX_PROMPT_CHARS`:
+1. **Keep first 1200 chars**: System prompt + key instructions
+2. **Keep last 1800 chars**: User input + immediate context
+3. **Omit middle**: Replace with `...[omitted for length]...` marker
+4. **Log at DEBUG**: Shows original length → new length
+
+This preserves semantic meaning while reducing token count for faster inference.
+
+### Streaming Mode (Advanced)
+
+To enable low-latency streaming output:
+```bash
+set WYZER_OLLAMA_STREAM=true
+```
+
+**Note**: This is advanced usage. Default non-streaming mode (returns complete response) is recommended for voice assistants.
 
 ### No Audio Input / Microphone Not Working
 

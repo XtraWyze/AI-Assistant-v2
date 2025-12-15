@@ -177,6 +177,12 @@ _MINIMIZE_RE = re.compile(r"^(minimize|shrink)\s+(.+)$", re.IGNORECASE)
 # Anchored maximize/fullscreen/expand.
 _MAXIMIZE_RE = re.compile(r"^(maximize|fullscreen|expand|full\s+screen)\s+(.+)$", re.IGNORECASE)
 
+# Anchored audio device switching: "switch audio [device] to <device>" / "set audio [device] to <device>"
+_AUDIO_DEVICE_SWITCH_RE = re.compile(
+    r"^(?:switch\s+(?:audio|sound)(?:\s+device)?\s+to|set\s+(?:audio|sound)(?:\s+device)?\s+to)\s+(.+)$",
+    re.IGNORECASE,
+)
+
 # Anchored move window to monitor.
 _MOVE_MONITOR_RE = re.compile(r"^(?:move|send)\s+(.+?)\s+to\s+(?:monitor|screen)\s+(\d+|next|previous|left|right)$", re.IGNORECASE)
 
@@ -524,6 +530,28 @@ def _decide_single_clause(text: str) -> HybridDecision:
             ],
             reply=f"Moving {target} to monitor {monitor}.",
             confidence=0.85,
+        )
+
+    # Audio device switching: "switch audio to vizio" / "set audio to headphones"
+    m = _AUDIO_DEVICE_SWITCH_RE.match(clause)
+    if m:
+        device = (m.group(1) or "").strip().strip('"').strip("'")
+        
+        # If the device is missing or too ambiguous, defer to LLM.
+        if not device or device.lower() in {"it", "this", "that", "something", "anything"}:
+            return HybridDecision(mode="llm", intents=None, reply="", confidence=0.4)
+        
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "set_audio_output_device",
+                    "args": {"device": device},
+                    "continue_on_error": False,
+                }
+            ],
+            reply=f"Switching audio to {device}.",
+            confidence=0.9,
         )
 
     # Minimal media/volume controls (only if tools exist; existence checked upstream).

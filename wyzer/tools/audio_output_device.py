@@ -284,39 +284,131 @@ def _set_default_audio_endpoint(device_id: str) -> None:
         comtypes.CoUninitialize()
 
 
+def _get_current_render_device() -> Optional[Dict[str, Any]]:
+    """Get the currently selected default render device.
+    
+    Returns:
+        Dict with 'name' and 'id' keys, or None if unable to determine.
+    """
+    try:
+        import warnings
+        from pycaw.pycaw import AudioUtilities
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"COMError attempting to get property.*",
+                category=UserWarning,
+            )
+            default_device = AudioUtilities.GetSpeakers()
+
+        if default_device:
+            name = _safe_device_name(default_device)
+            device_id = _safe_device_id(default_device)
+            if name and name.strip().lower() not in {"none", "(unknown device)"}:
+                return {
+                    "name": name,
+                    "id": device_id or "",
+                }
+    except Exception:
+        pass
+    return None
+
+
 class SetAudioOutputDeviceTool(ToolBase):
-    """Switch the system default audio output device."""
+    """List and switch the system default audio output device."""
 
     def __init__(self):
         super().__init__()
         self._name = "set_audio_output_device"
         self._description = (
-            "Switch the default Windows audio output device by fuzzy name match "
+            "List or switch the default Windows audio output device. "
+            "Can list all available devices or switch to a device by fuzzy name match "
             "(e.g., 'vizo speaker', 'logitech headset')."
         )
         self._args_schema = {
             "type": "object",
             "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "set"],
+                    "default": "list",
+                    "description": "Action to perform: 'list' to show devices or 'set' to change device",
+                },
                 "device": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Desired output device name (fuzzy match allowed)",
+                    "description": "Desired output device name (fuzzy match allowed) - required for 'set' action",
                 },
                 "min_score": {
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 100,
                     "default": 55,
-                    "description": "Minimum fuzzy match score (0-100) to accept",
+                    "description": "Minimum fuzzy match score (0-100) to accept - used for 'set' action",
                 },
             },
-            "required": ["device"],
+            "required": [],
             "additionalProperties": False,
         }
 
     def run(self, **kwargs) -> Dict[str, Any]:
         start_time = time.perf_counter()
+        
+        # Auto-detect action: if 'device' is provided, assume 'set' action
+        if "device" in kwargs and kwargs["device"]:
+            action = "set"
+        else:
+            action = (kwargs.get("action") or "list").strip().lower()
 
+        if action == "list":
+            return self._run_list_action(start_time)
+        elif action == "set":
+            return self._run_set_action(kwargs, start_time)
+        else:
+            end_time = time.perf_counter()
+            return {
+                "error": {"type": "invalid_action", "message": f"Action must be 'list' or 'set', got '{action}'"},
+                "latency_ms": int((end_time - start_time) * 1000),
+            }
+
+    def _run_list_action(self, start_time: float) -> Dict[str, Any]:
+        """List all available audio output devices and current selection."""
+        try:
+            devices = _list_render_devices()
+            current = _get_current_render_device()
+
+            device_list = []
+            for dev in devices:
+                name = _safe_device_name(dev)
+                dev_id = _safe_device_id(dev)
+                is_current = current and current["id"] == dev_id
+                device_list.append(
+                    {
+                        "name": name,
+                        "id": dev_id or "",
+                        "current": is_current,
+                    }
+                )
+
+            end_time = time.perf_counter()
+            return {
+                "status": "ok",
+                "action": "list",
+                "devices": device_list,
+                "current_device": current,
+                "count": len(device_list),
+                "latency_ms": int((end_time - start_time) * 1000),
+            }
+        except Exception as e:
+            end_time = time.perf_counter()
+            return {
+                "error": {"type": "execution_error", "message": str(e)},
+                "latency_ms": int((end_time - start_time) * 1000),
+            }
+
+    def _run_set_action(self, kwargs: Dict[str, Any], start_time: float) -> Dict[str, Any]:
+        """Set the default audio output device."""
         query = (kwargs.get("device") or "").strip()
         min_score = int(kwargs.get("min_score", 55))
 
@@ -378,7 +470,7 @@ class SetAudioOutputDeviceTool(ToolBase):
             end_time = time.perf_counter()
             return {
                 "status": "ok",
-                "action": "set_audio_output_device",
+                "action": "set",
                 "requested": query,
                 "chosen": {"name": best_name, "id": best_id, "score": score},
                 "candidates": top,
