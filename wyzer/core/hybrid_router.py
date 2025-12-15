@@ -144,7 +144,7 @@ def looks_multi_intent(text: str) -> bool:
 
 # Anchored time patterns: only match whole-utterance variants.
 _TIME_RE = re.compile(
-    r"^(what\s+time\s+is\s+it\??|time\s+is\s+it\??|current\s+time\??)$",
+    r"^(what\s+(?:time|'s\s+the\s+time)|what's\s+the\s+time|time\s+is\s+it|current\s+time|what\s+time\s+is\s+it)\??$",
     re.IGNORECASE,
 )
 
@@ -180,6 +180,12 @@ _MAXIMIZE_RE = re.compile(r"^(maximize|fullscreen|expand|full\s+screen)\s+(.+)$"
 # Anchored audio device switching: "switch audio [device] to <device>" / "set audio [device] to <device>"
 _AUDIO_DEVICE_SWITCH_RE = re.compile(
     r"^(?:switch\s+(?:audio|sound)(?:\s+device)?\s+to|set\s+(?:audio|sound)(?:\s+device)?\s+to)\s+(.+)$",
+    re.IGNORECASE,
+)
+
+# Anchored audio device listing: "list audio devices", "show audio devices", etc.
+_AUDIO_DEVICE_LIST_RE = re.compile(
+    r"^(?:list|show|display|what)(?:\s+(?:audio|sound))?(?:\s+(?:output\s+)?devices?|devices?|speakers?)?(?:\s+are\s+available)?\??$",
     re.IGNORECASE,
 )
 
@@ -353,7 +359,7 @@ def _decide_single_clause(text: str) -> HybridDecision:
             intents=[
                 {
                     "tool": "system_storage_list",
-                    "args": {"refresh": False},
+                    "args": {},
                     "continue_on_error": False,
                 }
             ],
@@ -370,7 +376,7 @@ def _decide_single_clause(text: str) -> HybridDecision:
             intents=[
                 {
                     "tool": "system_storage_list",
-                    "args": {"refresh": False, "drive": drive_letter},
+                    "args": {"drive": drive_letter},
                     "continue_on_error": False,
                 }
             ],
@@ -396,7 +402,8 @@ def _decide_single_clause(text: str) -> HybridDecision:
         )
 
     # Open/launch/start X (non-URL) -> open_target.
-    m = _OPEN_RE.match(clause)
+    clause_stripped = _strip_trailing_punct(clause)
+    m = _OPEN_RE.match(clause_stripped)
     if m:
         target = (m.group(2) or "").strip().strip('"').strip("'")
         # If the target is missing or too ambiguous, defer to LLM.
@@ -426,7 +433,7 @@ def _decide_single_clause(text: str) -> HybridDecision:
         )
 
     # Close/quit/exit X -> close_window.
-    m = _CLOSE_RE.match(clause)
+    m = _CLOSE_RE.match(clause_stripped)
     if m:
         target = (m.group(2) or "").strip().strip('"').strip("'")
         # If the target is missing or too ambiguous, defer to LLM.
@@ -453,7 +460,7 @@ def _decide_single_clause(text: str) -> HybridDecision:
         )
 
     # Minimize/shrink X -> minimize_window.
-    m = _MINIMIZE_RE.match(clause)
+    m = _MINIMIZE_RE.match(clause_stripped)
     if m:
         target = (m.group(2) or "").strip().strip('"').strip("'")
         # If the target is missing or too ambiguous, defer to LLM.
@@ -479,7 +486,7 @@ def _decide_single_clause(text: str) -> HybridDecision:
         )
 
     # Maximize/fullscreen/expand X -> maximize_window.
-    m = _MAXIMIZE_RE.match(clause)
+    m = _MAXIMIZE_RE.match(clause_stripped)
     if m:
         target = (m.group(2) or "").strip().strip('"').strip("'")
         # If the target is missing or too ambiguous, defer to LLM.
@@ -505,7 +512,7 @@ def _decide_single_clause(text: str) -> HybridDecision:
         )
 
     # Move window to monitor: "move X to monitor 2" / "send chrome to monitor next"
-    m = _MOVE_MONITOR_RE.match(clause)
+    m = _MOVE_MONITOR_RE.match(clause_stripped)
     if m:
         target = (m.group(1) or "").strip().strip('"').strip("'")
         monitor = (m.group(2) or "").strip().lower()
@@ -532,8 +539,24 @@ def _decide_single_clause(text: str) -> HybridDecision:
             confidence=0.85,
         )
 
+    # Audio device listing: "list audio devices" / "show audio devices"
+    tl_audio = _strip_trailing_punct(clause).lower()
+    if _AUDIO_DEVICE_LIST_RE.match(tl_audio):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "set_audio_output_device",
+                    "args": {"action": "list"},
+                    "continue_on_error": False,
+                }
+            ],
+            reply="",
+            confidence=0.92,
+        )
+
     # Audio device switching: "switch audio to vizio" / "set audio to headphones"
-    m = _AUDIO_DEVICE_SWITCH_RE.match(clause)
+    m = _AUDIO_DEVICE_SWITCH_RE.match(clause_stripped)
     if m:
         device = (m.group(1) or "").strip().strip('"').strip("'")
         
@@ -546,7 +569,7 @@ def _decide_single_clause(text: str) -> HybridDecision:
             intents=[
                 {
                     "tool": "set_audio_output_device",
-                    "args": {"device": device},
+                    "args": {"action": "set", "device": device},
                     "continue_on_error": False,
                 }
             ],
@@ -680,6 +703,22 @@ def _decide_single_clause(text: str) -> HybridDecision:
             intents=[{"tool": "media_play_pause", "args": {}, "continue_on_error": False}],
             reply="",
             confidence=0.8,
+        )
+
+    if re.search(r"\b(?:next\s+track|skip|next\s+song|next\s+video|next\s+media)\b", tl):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "media_next", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.85,
+        )
+
+    if re.search(r"\b(?:previous\s+track|back|prior\s+track|last\s+song|previous\s+song|previous\s+video|previous\s+media|go\s+back)\b", tl):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "media_previous", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.85,
         )
 
     return HybridDecision(mode="llm", intents=None, reply="", confidence=0.3)

@@ -1,13 +1,13 @@
 {
-  "generated_at": "2025-12-15T10:54:49Z",
+  "generated_at": "2025-12-15T11:54:12Z",
   "drives": [
     {
       "name": "C:\\",
       "mountpoint": "C:\\",
       "fstype": "NTFS",
       "total_gb": 930.63,
-      "used_gb": 883.04,
-      "free_gb": 47.59,
+      "used_gb": 883.08,
+      "free_gb": 47.55,
       "percent_used": 94.9,
       "is_removable": null,
       "label": null
