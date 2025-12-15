@@ -160,6 +160,59 @@ python run.py --no-hotword
 3. Pauses when you stop speaking (1.2s silence timeout)
 4. Transcribes, thinks, speaks response (if enabled), and exits
 
+### Verify Multiprocess Architecture
+
+To verify that Wyzer runs exactly as documented (main process spawns Core + Brain, Core stays realtime, Brain handles heavy work):
+
+```bash
+# Run architecture verification
+python scripts/verify_multiprocess.py
+```
+
+**Expected Output:**
+- ✓ Process role logs (Main, Core, Brain with PIDs)
+- ✓ Heartbeat logs from each process every ~10s
+- ✓ Queue sizes and job IDs in heartbeats
+
+**Example Log Lines:**
+```
+[ROLE] Main orchestrator startup: pid=12345 exec=C:\...\python.exe
+[ROLE] Core (realtime reactive) pid=12345 responsibilities=realtime audio/hotword/state
+[ROLE] Brain (worker process) spawned: pid=12346
+[HEARTBEAT] role=Core pid=12345 state=IDLE q_in=0 q_out=0 time_in_state=2.3s
+[HEARTBEAT] role=Brain pid=12346 q_in=0 q_out=0 last_job=abc-123 interrupt_gen=0
+```
+
+### Test Tool Worker Pool
+
+To verify the tool execution worker pool works correctly:
+
+```bash
+# Run tool pool smoke tests
+python scripts/test_tool_pool_smoke.py
+```
+
+**What It Tests:**
+- Pool initialization with configurable workers (default 3)
+- Tool submission and execution
+- JSON serialization of results
+- Comparison with in-process execution
+- Graceful shutdown
+
+**Example Output:**
+```
+[TEST 1] Pool Initialization
+✓ Pool started successfully
+  Workers: 2
+  Running: True
+
+[TEST 2] Tool Execution
+Testing tool: get_time
+  ✓ Tool executed and JSON-serializable
+    Keys: ['time', 'date', 'timezone']
+    Execution time: 5.2ms
+```
+
 ### Custom Configuration
 ```bash
 # Use medium model for better accuracy
@@ -180,37 +233,41 @@ python run.py --model medium --ollama-model llama3.2:3b --tts off
 ```
 wyzer/
 ├── core/
-│   ├── config.py         # Central configuration
-│   ├── logger.py         # Logging with rich formatting
-│   ├── state.py          # State machine definitions (FOLLOWUP state added)
-│   ├── ipc.py            # IPC message schema + helpers
-│   ├── followup_manager.py # FOLLOWUP listening window manager
-│   ├── brain_worker.py   # Brain Worker process (STT/LLM/tools/TTS)
-│   ├── process_manager.py# Spawns/stops brain worker
-│   └── assistant.py      # Single-process + multiprocess coordinator
+│   ├── config.py              # Central configuration
+│   ├── logger.py              # Logging with rich formatting
+│   ├── state.py               # State machine definitions (FOLLOWUP state added)
+│   ├── ipc.py                 # IPC message schema + helpers
+│   ├── followup_manager.py    # FOLLOWUP listening window manager
+│   ├── brain_worker.py        # Brain Worker process (STT/LLM/tools/TTS)
+│   ├── process_manager.py     # Spawns/stops brain worker
+│   ├── orchestrator.py        # LLM reasoning + tool execution
+│   ├── tool_worker_pool.py    # Persistent worker pool for tools (NEW)
+│   └── assistant.py           # Single-process + multiprocess coordinator
 ├── audio/
-│   ├── mic_stream.py     # Microphone capture
-│   ├── vad.py            # Voice activity detection
-│   ├── hotword.py        # Wake word detection
-│   └── audio_utils.py    # Audio utilities
+│   ├── mic_stream.py          # Microphone capture
+│   ├── vad.py                 # Voice activity detection
+│   ├── hotword.py             # Wake word detection
+│   └── audio_utils.py         # Audio utilities
 ├── stt/
-│   ├── whisper_engine.py # Whisper STT engine
-│   └── stt_router.py     # STT routing (extensible, supports mode parameter)
-├── brain/                # Phase 4: LLM integration
-│   ├── llm_engine.py     # Ollama LLM client
-│   └── prompt.py         # System prompts
-└── tts/                  # Phase 5: Text-to-speech
-    ├── piper_engine.py   # Piper TTS engine
-    ├── audio_player.py   # Interruptible audio playback
-    └── tts_router.py     # TTS routing
-run.py                    # Entry point
-requirements.txt          # Dependencies
-README.md                 # This file
+│   ├── whisper_engine.py      # Whisper STT engine
+│   └── stt_router.py          # STT routing (extensible, supports mode parameter)
+├── brain/                     # Phase 4: LLM integration
+│   ├── llm_engine.py          # Ollama LLM client
+│   └── prompt.py              # System prompts
+└── tts/                       # Phase 5: Text-to-speech
+    ├── piper_engine.py        # Piper TTS engine
+    ├── audio_player.py        # Interruptible audio playback
+    └── tts_router.py          # TTS routing
+run.py                         # Entry point
+requirements.txt               # Dependencies
+README.md                      # This file
 
 scripts/
-   test_ipc_roundtrip.py           # Smoke: start worker, send TEXT, expect RESULT
-   test_interrupt.py               # Smoke: interrupt simulated TTS
-   test_followup_manager.py        # Unit tests for FOLLOWUP manager
+   verify_multiprocess.py              # Verify architecture (NEW)
+   test_tool_pool_smoke.py             # Test tool worker pool (NEW)
+   test_ipc_roundtrip.py               # Smoke: start worker, send TEXT, expect RESULT
+   test_interrupt.py                   # Smoke: interrupt simulated TTS
+   test_followup_manager.py            # Unit tests for FOLLOWUP manager
 ```
 
 ## Configuration
@@ -263,6 +320,15 @@ set WYZER_POST_BARGEIN_WAIT_FOR_SPEECH_SEC=2.0
 set WYZER_FOLLOWUP_ENABLED=true
 set WYZER_FOLLOWUP_TIMEOUT_SEC=3.0
 set WYZER_FOLLOWUP_MAX_CHAIN=3
+
+# Tool Worker Pool settings (warm workers for tool execution)
+set WYZER_TOOL_POOL_ENABLED=true
+set WYZER_TOOL_POOL_WORKERS=3
+set WYZER_TOOL_POOL_TIMEOUT_SEC=15
+
+# Runtime verification & telemetry
+set WYZER_HEARTBEAT_INTERVAL_SEC=10.0
+set WYZER_VERIFY_MODE=false
 ```
 
 Or modify defaults in [wyzer/core/config.py](wyzer/core/config.py).

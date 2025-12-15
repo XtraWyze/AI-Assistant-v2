@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "timestamp": 1765780855.4383461,
+  "timestamp": 1765783320.1390784,
   "folders": {
     "desktop": "C:\\Users\\kolyw\\Desktop",
     "downloads": "C:\\Users\\kolyw\\Downloads",
@@ -36274,14 +36274,14 @@
       "letter": "C",
       "path": "C:\\",
       "total_gb": 930.63,
-      "free_gb": 47.95,
+      "free_gb": 48.11,
       "label": "Local Disk"
     },
     {
       "letter": "D",
       "path": "D:\\",
       "total_gb": 953.87,
-      "free_gb": 492.42,
+      "free_gb": 444.58,
       "label": "New Volume"
     },
     {
@@ -36443,8 +36443,22 @@
       "install_path": "D:\\SteamLibrary\\steamapps\\common\\SkyrimVR",
       "app_id": "611670",
       "aliases": [
-        "the elder scrolls v: skyrim vr",
-        "the elder scrolls v"
+        "the elder scrolls v",
+        "the elder scrolls v: skyrim vr"
+      ],
+      "confidence": 0.95
+    },
+    {
+      "name": "Where Winds Meet",
+      "source": "epic",
+      "launch": {
+        "type": "epic_uri",
+        "target": "com.epicgames.launcher://apps/a7d28f0e0935490b9d6f92dda1a7a75b?action=launch&silent=true"
+      },
+      "install_path": "D:\\epic\\WhereWindsMeetUJJch",
+      "app_id": "a7d28f0e0935490b9d6f92dda1a7a75b",
+      "aliases": [
+        "where winds meet"
       ],
       "confidence": 0.95
     },
@@ -36501,8 +36515,8 @@
       "install_path": null,
       "app_id": null,
       "aliases": [
-        "python 3.11 module docs (64-bit)",
-        "python 3.11 module docs "
+        "python 3.11 module docs ",
+        "python 3.11 module docs (64-bit)"
       ],
       "confidence": 0.8
     },
@@ -36516,8 +36530,8 @@
       "install_path": null,
       "app_id": null,
       "aliases": [
-        "rockstar",
-        "rockstar games launcher"
+        "rockstar games launcher",
+        "rockstar"
       ],
       "confidence": 0.8
     },
@@ -36945,10 +36959,10 @@
     }
   ],
   "games_scan_meta": {
-    "last_refresh": "2025-12-15 01:41:43",
+    "last_refresh": "2025-12-15 02:22:58",
     "counts": {
       "steam": 18,
-      "epic": 3,
+      "epic": 4,
       "shortcuts": 13,
       "folder_scan": 3,
       "xbox": 19
@@ -36960,7 +36974,7 @@
       "folder_scan": true,
       "xbox": true
     },
-    "total_games": 46
+    "total_games": 47
   },
   "uwp_apps": [
     {
@@ -37400,12 +37414,12 @@
     }
   ],
   "uwp_scan_meta": {
-    "last_refresh": "2025-12-15 01:41:45",
+    "last_refresh": "2025-12-15 02:22:59",
     "count": 51,
     "status": "ok"
   },
   "scan_meta": {
-    "last_refresh": "2025-12-15 01:40:55",
+    "last_refresh": "2025-12-15 02:22:00",
     "dirs": {
       "C:\\Program Files": 1765613739.555908,
       "C:\\Program Files (x86)": 1764191160.0504584,

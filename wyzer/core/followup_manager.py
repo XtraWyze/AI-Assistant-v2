@@ -116,9 +116,10 @@ class FollowupManager:
         Normalizes text and checks if:
         1. Text is exactly an exit phrase, OR
         2. Text STARTS with an exit phrase (e.g., "no thanks"), OR
-        3. Text STARTS with one of the EXIT_PHRASES as first meaningful words
+        3. Text ENDS with an exit phrase (e.g., "forget it, cancel"), OR
+        4. A single-word exit phrase appears as first word (e.g., "stop right there")
         
-        Avoids false positives like matching "nothing else" in a longer question.
+        This allows catching exit phrases at the beginning or end of longer sentences.
         
         Args:
             text: User's transcript
@@ -152,6 +153,12 @@ class FollowupManager:
             # Text starts with the phrase (e.g., "no thanks" starts with "no")
             if len(words) >= len(phrase_words):
                 if words[:len(phrase_words)] == phrase_words:
+                    self.logger.info(f"[FOLLOWUP] Exit phrase detected: '{text}' -> '{normalized}'")
+                    return True
+            
+            # Text ends with the phrase (e.g., "forget it, cancel" ends with "cancel")
+            if len(words) >= len(phrase_words):
+                if words[-len(phrase_words):] == phrase_words:
                     self.logger.info(f"[FOLLOWUP] Exit phrase detected: '{text}' -> '{normalized}'")
                     return True
             

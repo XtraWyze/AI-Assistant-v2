@@ -1,5 +1,12 @@
 # Wyzer AI Assistant - System Flow Diagram
 
+**Related Documents:**
+- [REPO_STRUCTURE.md](REPO_STRUCTURE.md) - Complete repository tree and module descriptions
+- [TOOL_CHAIN.md](TOOL_CHAIN.md) - Available tools and tool execution pipeline
+- [THREE_PROCESS_ARCHITECTURE.md](THREE_PROCESS_ARCHITECTURE.md) - Multiprocess design details
+
+---
+
 ## High-Level Architecture
 
 ```

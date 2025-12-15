@@ -11,6 +11,7 @@ The original class is kept for `--single-process` debugging.
 """
 import time
 import os
+import sys
 import random
 import numpy as np
 import threading
@@ -1036,10 +1037,37 @@ class WyzerAssistantMultiprocess:
             self.logger.warning("Assistant already running")
             return
 
+        import time
+        
+        # Log Main/Parent process role for architecture verification
+        _role_log = {
+            "role": "Main/Parent (orchestrator)",
+            "responsibilities": "Process spawning, state machine, audio I/O coordination",
+            "pid": os.getpid(),
+            "ppid": os.getppid() if hasattr(os, 'getppid') else "N/A",
+            "python_executable": sys.executable,
+            "start_time": time.time(),
+        }
+        self.logger.info(f"[ROLE] Main orchestrator startup: pid={_role_log['pid']} exec={sys.executable}")
+        self.logger.info(f"[ROLE] Main responsibilities: {_role_log['responsibilities']}")
+
         self.logger.info("Starting Wyzer Assistant (multiprocess)...")
         self.running = True
 
         self._brain_proc, self._core_to_brain_q, self._brain_to_core_q = start_brain_process(self._brain_config)
+        
+        # Log Core process info
+        if self._brain_proc:
+            # Note: Core is the main thread of this process; log after Brain starts
+            _core_log = {
+                "role": "Core (realtime reactive)",
+                "responsibilities": "Microphone stream, VAD, hotword detection, state machine, barge-in handling",
+                "pid": os.getpid(),
+                "python_executable": sys.executable,
+                "start_time": time.time(),
+            }
+            self.logger.info(f"[ROLE] Core (main thread) pid={_core_log['pid']} responsibilities=realtime audio/hotword/state")
+            self.logger.info(f"[ROLE] Brain (worker process) spawned: pid={self._brain_proc.pid}")
 
         self.mic_stream.start()
 
@@ -1099,7 +1127,16 @@ class WyzerAssistantMultiprocess:
         self.logger.info("Process interrupted successfully")
 
     def _main_loop(self) -> None:
+        # Heartbeat tracking for runtime verification
+        last_heartbeat = time.time()
+        
         while self.running:
+            # Emit heartbeat every ~10s (configurable)
+            current_time = time.time()
+            if current_time - last_heartbeat >= Config.HEARTBEAT_INTERVAL_SEC:
+                self._emit_core_heartbeat()
+                last_heartbeat = current_time
+            
             # Drain brain->core messages first to keep UI/logging snappy
             self._poll_brain_messages()
 
@@ -1124,6 +1161,21 @@ class WyzerAssistantMultiprocess:
             else:
                 # In multiprocess mode, treat non-listening states like IDLE for hotword/barge-in.
                 self._process_idle(audio_frame)
+
+    def _emit_core_heartbeat(self) -> None:
+        """Emit Core process health heartbeat for runtime verification"""
+        try:
+            queue_size_in = self._core_to_brain_q.qsize() if self._core_to_brain_q else 0
+            queue_size_out = self._brain_to_core_q.qsize() if self._brain_to_core_q else 0
+        except Exception:
+            queue_size_in = queue_size_out = -1
+        
+        self.logger.info(
+            f"[HEARTBEAT] role=Core pid={os.getpid()} "
+            f"state={self.state.current_state.value} "
+            f"q_in={queue_size_in} q_out={queue_size_out} "
+            f"time_in_state={self.state.get_time_in_current_state():.1f}s"
+        )
 
     def _process_idle(self, audio_frame: np.ndarray) -> None:
         if not (self.enable_hotword and self.hotword):

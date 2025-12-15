@@ -90,6 +90,15 @@ class Config:
     FOLLOWUP_TIMEOUT_SEC: float = float(os.environ.get("WYZER_FOLLOWUP_TIMEOUT_SEC", "3.0"))
     FOLLOWUP_MAX_CHAIN: int = int(os.environ.get("WYZER_FOLLOWUP_MAX_CHAIN", "3"))
     
+    # Tool Worker Pool settings (Runtime verification & warm workers)
+    TOOL_POOL_ENABLED: bool = os.environ.get("WYZER_TOOL_POOL_ENABLED", "true").lower() in ("true", "1", "yes")
+    TOOL_POOL_WORKERS: int = max(1, min(5, int(os.environ.get("WYZER_TOOL_POOL_WORKERS", "3"))))  # 1-5 workers
+    TOOL_POOL_TIMEOUT_SEC: int = int(os.environ.get("WYZER_TOOL_POOL_TIMEOUT_SEC", "15"))
+    
+    # Heartbeat & verification settings
+    HEARTBEAT_INTERVAL_SEC: float = float(os.environ.get("WYZER_HEARTBEAT_INTERVAL_SEC", "10.0"))
+    VERIFY_MODE: bool = os.environ.get("WYZER_VERIFY_MODE", "false").lower() in ("true", "1", "yes")
+    
     @classmethod
     def get_frame_duration_ms(cls) -> float:
         """Get frame duration in milliseconds"""

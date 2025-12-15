@@ -11,6 +11,7 @@ Receives requests from core via core_to_brain_q and sends results/logs via brain
 from __future__ import annotations
 
 import os
+import sys
 import queue
 import threading
 import time
@@ -161,6 +162,19 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
     _apply_config(config_dict)
     logger = get_logger()
 
+    # Log process role for architecture verification
+    import time
+    _role_log = {
+        "role": "Brain (compute-heavy worker)",
+        "responsibilities": "STT, LLM inference, tool execution, TTS synthesis",
+        "pid": os.getpid(),
+        "ppid": os.getppid() if hasattr(os, 'getppid') else "N/A",
+        "python_executable": sys.executable,
+        "start_time": time.time(),
+    }
+    logger.info(f"[ROLE] Brain worker startup: pid={_role_log['pid']} ppid={_role_log['ppid']} exec={sys.executable}")
+    logger.info(f"[ROLE] Brain responsibilities: {_role_log['responsibilities']}")
+
     # Init heavy components once
     stt = STTRouter(
         whisper_model=str(config_dict.get("whisper_model", Config.WHISPER_MODEL)),
@@ -191,11 +205,33 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
     simulate_tts = bool(config_dict.get("simulate_tts", False))
     tts_controller = _TTSController(tts_router, brain_to_core_q, simulate=simulate_tts)
 
+    # Initialize tool worker pool if enabled
+    from wyzer.core import orchestrator
+    orchestrator.init_tool_pool()
+
     interrupt_generation = 0
+    last_job_id = "none"
+    last_heartbeat = time.time()
 
     safe_put(brain_to_core_q, {"type": "LOG", "level": "INFO", "msg": "brain_worker_started"})
 
     while True:
+        # Emit heartbeat every ~10s (configurable)
+        current_time = time.time()
+        if current_time - last_heartbeat >= Config.HEARTBEAT_INTERVAL_SEC:
+            try:
+                q_in_size = core_to_brain_q.qsize() if hasattr(core_to_brain_q, 'qsize') else -1
+                q_out_size = brain_to_core_q.qsize() if hasattr(brain_to_core_q, 'qsize') else -1
+            except Exception:
+                q_in_size = q_out_size = -1
+            
+            logger.info(
+                f"[HEARTBEAT] role=Brain pid={os.getpid()} "
+                f"q_in={q_in_size} q_out={q_out_size} "
+                f"last_job={last_job_id} interrupt_gen={interrupt_generation}"
+            )
+            last_heartbeat = current_time
+        
         msg = core_to_brain_q.get()
         mtype = (msg or {}).get("type")
 
@@ -205,6 +241,7 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                 tts_controller.shutdown()
             except Exception:
                 pass
+            orchestrator.shutdown_tool_pool()
             return
 
         if mtype == "INTERRUPT":
@@ -221,6 +258,7 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             continue
 
         req_id = msg.get("id") or ""
+        last_job_id = req_id  # Track for heartbeat
         request_gen = interrupt_generation
         start_ms = now_ms()
         meta = msg.get("meta") or {}

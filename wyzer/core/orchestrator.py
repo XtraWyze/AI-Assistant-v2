@@ -10,6 +10,7 @@ import urllib.error
 import re
 import socket
 import shlex
+import uuid
 from urllib.parse import urlparse
 from typing import Dict, Any, Optional, List, Tuple
 from wyzer.core.config import Config
@@ -48,6 +49,10 @@ _FASTPATH_COMMON_WEBSITES = {
 
 _FASTPATH_EXPLICIT_TOOL_RE = re.compile(r"^(?:tool|run|execute)\s+(?P<tool>[a-zA-Z0-9_]+)(?:\s+(?P<rest>.*))?$", re.IGNORECASE)
 
+# Tool worker pool singleton (initialized on demand in Brain process)
+_tool_pool = None
+_logger = None
+
 
 def _user_explicitly_requested_library_refresh(user_text: str) -> bool:
     tl = (user_text or "").lower()
@@ -78,9 +83,10 @@ def _filter_spurious_intents(user_text: str, intents: List[Intent]) -> List[Inte
         logger.info(f"[INTENT FILTER] Dropped spurious intent(s): {', '.join(dropped)}")
     return filtered
 
-# Module-level singleton registry
+# Module-level singleton registry and tool pool
 _registry = None
 _logger = None
+_tool_pool = None
 
 
 def get_logger_instance():
@@ -97,6 +103,43 @@ def get_registry():
     if _registry is None:
         _registry = build_default_registry()
     return _registry
+
+
+def init_tool_pool():
+    """Initialize the tool worker pool (call from Brain process on startup)"""
+    global _tool_pool
+    if _tool_pool is not None:
+        return _tool_pool
+    
+    logger = get_logger_instance()
+    if not Config.TOOL_POOL_ENABLED:
+        logger.info("[POOL] Tool pool disabled via config")
+        return None
+    
+    try:
+        from wyzer.core.tool_worker_pool import ToolWorkerPool
+        _tool_pool = ToolWorkerPool(num_workers=Config.TOOL_POOL_WORKERS)
+        if _tool_pool.start():
+            logger.info(f"[POOL] Tool pool initialized with {Config.TOOL_POOL_WORKERS} workers")
+            return _tool_pool
+        else:
+            logger.warning("[POOL] Failed to start tool pool, will use in-process execution")
+            _tool_pool = None
+            return None
+    except Exception as e:
+        logger.warning(f"[POOL] Failed to initialize tool pool: {e}, will use in-process execution")
+        _tool_pool = None
+        return None
+
+
+def shutdown_tool_pool():
+    """Shutdown the tool worker pool"""
+    global _tool_pool
+    if _tool_pool is not None:
+        logger = get_logger_instance()
+        logger.info("[POOL] Shutting down tool pool")
+        _tool_pool.shutdown()
+        _tool_pool = None
 
 
 def handle_user_text(text: str) -> Dict[str, Any]:
@@ -1598,7 +1641,7 @@ def _rewrite_open_website_intents(user_text: str, intents) -> None:
 
 
 def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute a tool with validation and logging"""
+    """Execute a tool with validation and logging (pool-aware)"""
     logger = get_logger_instance()
     
     # Check tool exists
@@ -1620,7 +1663,32 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
     # Log BEFORE execution
     logger.info(f"[TOOLS] Executing {tool_name} args={tool_args}")
     
-    # Execute tool
+    # Try to use worker pool if enabled
+    pool = _tool_pool
+    if pool is not None:
+        try:
+            job_id = str(uuid.uuid4())
+            request_id = str(uuid.uuid4())
+            
+            # Submit job to pool
+            if pool.submit_job(job_id, request_id, tool_name, tool_args):
+                # Wait for result with timeout
+                result_obj = pool.wait_for_result(job_id, timeout=Config.TOOL_POOL_TIMEOUT_SEC)
+                if result_obj is not None:
+                    result = result_obj.result
+                    logger.info(f"[TOOLS] Pool result {result}")
+                    return result
+                else:
+                    # Timeout, fall back to in-process
+                    logger.warning(f"[POOL] Timeout waiting for {tool_name}, falling back to in-process")
+            else:
+                # Pool submission failed, fall back to in-process
+                logger.warning(f"[POOL] Failed to submit {tool_name} to pool, falling back to in-process")
+        
+        except Exception as e:
+            logger.warning(f"[POOL] Error using pool for {tool_name}: {e}, falling back to in-process")
+    
+    # Fall back to in-process execution
     try:
         result = tool.run(**tool_args)
         

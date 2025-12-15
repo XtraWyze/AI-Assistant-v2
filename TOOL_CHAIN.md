@@ -2,6 +2,13 @@
 
 This document describes all available tools in the Wyzer AI Assistant toolchain. Each tool is a stateless function that returns JSON-serializable results.
 
+**Related Documents:**
+- [REPO_STRUCTURE.md](REPO_STRUCTURE.md) - Complete repository tree and module descriptions
+- [SYSTEM_FLOW.md](SYSTEM_FLOW.md) - System flow diagrams and state machine
+- [ARCHITECTURE_LOCK.md](ARCHITECTURE_LOCK.md) - Design constraints and principles
+
+---
+
 ## Tool Architecture
 
 All tools inherit from `ToolBase` and implement a `run(**kwargs)` method that:

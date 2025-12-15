@@ -10,6 +10,8 @@ Windows compatibility notes:
 from __future__ import annotations
 
 import multiprocessing as mp
+import os
+import sys
 from typing import Any, Dict, Tuple
 
 from wyzer.core.ipc import safe_put
@@ -27,7 +29,7 @@ def start_brain_process(config: Dict[str, Any]) -> Tuple[mp.Process, mp.Queue, m
         target=run_brain_worker,
         args=(core_to_brain_q, brain_to_core_q, config),
         name="WyzerBrainWorker",
-        daemon=True,
+        daemon=False,  # Non-daemonic so it can spawn worker processes for tool pool
     )
     proc.start()
     return proc, core_to_brain_q, brain_to_core_q
