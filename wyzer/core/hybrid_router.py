@@ -165,6 +165,36 @@ _WEATHER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# System info patterns: queries about system specs, CPU, RAM, hardware
+_SYSTEM_INFO_RE = re.compile(
+    r"^(?:"
+    r"(?:get\s+)?(?:my\s+)?system\s+(?:info|information|specs|specifications)|"
+    r"(?:tell\s+)?me\s+about\s+(?:my\s+)?system|"
+    r"what\s+(?:are|is)(?:\s+my)?\s+system\s+(?:specs|specifications)|"
+    r"how\s+much\s+(?:ram|memory)\s+do\s+i\s+have|"
+    r"what.?s\s+my\s+(?:cpu|processor|system)|"
+    r"system\s+information|"
+    r"computer\s+specs|"
+    r"hardware\s+info|"
+    r"about\s+this\s+computer"
+    r").*$",
+    re.IGNORECASE,
+)
+
+# Location/IP patterns: queries about user's location, IP address, timezone
+_LOCATION_RE = re.compile(
+    r"(?:"
+    r"(?:what|where).{0,10}(?:my\s+)?(?:ip|location|address|timezone|time\s+zone|country|city|coordinates)|"
+    r"where\s+(?:am\s+i|is\s+(?:my\s+)?(?:device|computer))|"
+    r"what\s+(?:is\s+)?my\s+(?:location|ip|address|timezone|time\s+zone|country|city)|"
+    r"get\s+(?:my\s+)?(?:location|ip|address|timezone|time\s+zone|country|city)|"
+    r"tell\s+(?:me\s+)?(?:my|where)\s+(?:location|ip|address|timezone|time\s+zone|country|city)|"
+    r"i\s+am\s+in|"
+    r"what\s+(?:country|city|timezone|time\s+zone)\s+(?:am\s+i|is\s+(?:my|i))"
+    r")",
+    re.IGNORECASE,
+)
+
 # Anchored open/launch/start.
 _OPEN_RE = re.compile(r"^(open|launch|start)\s+(.+)$", re.IGNORECASE)
 
@@ -264,6 +294,24 @@ def _decide_single_clause(text: str) -> HybridDecision:
             ],
             reply="",
             confidence=0.92,
+        )
+
+    # System info queries: queries about system specs, CPU, RAM, hardware
+    if _SYSTEM_INFO_RE.match(clause):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "get_system_info", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.9,
+        )
+
+    # Location/IP queries: queries about user's location, IP address, timezone
+    if _LOCATION_RE.match(clause):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "get_location", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.9,
         )
 
     # Local library refresh/scan commands

@@ -47,8 +47,16 @@ TEST_CASES: List[Tuple[str, str, float]] = [
     ("what's the temperature", "tool_plan", 0.92),
     
     # System info
-    ("tell me about my computer", "llm", 0.0),  # Goes to LLM for detailed info
-    ("what are my system specs", "llm", 0.0),
+    ("get my system info", "tool_plan", 0.9),
+    ("what are my system specs", "tool_plan", 0.9),
+    ("tell me about my system", "tool_plan", 0.9),
+    ("system information", "tool_plan", 0.9),
+    
+    # Location/IP queries
+    ("what is my IP", "tool_plan", 0.9),
+    ("where am I", "tool_plan", 0.9),
+    ("what is my location", "tool_plan", 0.9),
+    ("what city am i in", "tool_plan", 0.9),
     
     # Library refresh
     ("refresh library", "tool_plan", 0.93),
