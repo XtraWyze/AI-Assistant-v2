@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "timestamp": 1765767038.6867008,
+  "timestamp": 1765780855.4383461,
   "folders": {
     "desktop": "C:\\Users\\kolyw\\Desktop",
     "downloads": "C:\\Users\\kolyw\\Downloads",
@@ -36274,14 +36274,14 @@
       "letter": "C",
       "path": "C:\\",
       "total_gb": 930.63,
-      "free_gb": 52.95,
+      "free_gb": 47.95,
       "label": "Local Disk"
     },
     {
       "letter": "D",
       "path": "D:\\",
       "total_gb": 953.87,
-      "free_gb": 546.65,
+      "free_gb": 492.42,
       "label": "New Volume"
     },
     {
@@ -36443,8 +36443,8 @@
       "install_path": "D:\\SteamLibrary\\steamapps\\common\\SkyrimVR",
       "app_id": "611670",
       "aliases": [
-        "the elder scrolls v",
-        "the elder scrolls v: skyrim vr"
+        "the elder scrolls v: skyrim vr",
+        "the elder scrolls v"
       ],
       "confidence": 0.95
     },
@@ -36501,8 +36501,8 @@
       "install_path": null,
       "app_id": null,
       "aliases": [
-        "python 3.11 module docs ",
-        "python 3.11 module docs (64-bit)"
+        "python 3.11 module docs (64-bit)",
+        "python 3.11 module docs "
       ],
       "confidence": 0.8
     },
@@ -36945,7 +36945,7 @@
     }
   ],
   "games_scan_meta": {
-    "last_refresh": "2025-12-14 21:51:19",
+    "last_refresh": "2025-12-15 01:41:43",
     "counts": {
       "steam": 18,
       "epic": 3,
@@ -37400,12 +37400,12 @@
     }
   ],
   "uwp_scan_meta": {
-    "last_refresh": "2025-12-14 21:51:20",
+    "last_refresh": "2025-12-15 01:41:45",
     "count": 51,
     "status": "ok"
   },
   "scan_meta": {
-    "last_refresh": "2025-12-14 21:50:38",
+    "last_refresh": "2025-12-15 01:40:55",
     "dirs": {
       "C:\\Program Files": 1765613739.555908,
       "C:\\Program Files (x86)": 1764191160.0504584,

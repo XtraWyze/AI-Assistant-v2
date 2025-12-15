@@ -30,6 +30,7 @@ class RuntimeState:
     silence_frames: int = 0
     speech_frames_count: int = 0
     total_frames_recorded: int = 0
+    interrupt_requested: bool = False
     
     def transition_to(self, new_state: AssistantState) -> None:
         """Transition to a new state"""
@@ -63,3 +64,15 @@ class RuntimeState:
         if self.recording_started > 0:
             return time.time() - self.recording_started
         return 0.0
+    
+    def request_interrupt(self) -> None:
+        """Request to interrupt current process"""
+        self.interrupt_requested = True
+    
+    def clear_interrupt(self) -> None:
+        """Clear interrupt flag"""
+        self.interrupt_requested = False
+    
+    def is_interrupt_requested(self) -> bool:
+        """Check if interrupt was requested"""
+        return self.interrupt_requested

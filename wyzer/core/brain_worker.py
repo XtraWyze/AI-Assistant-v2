@@ -284,9 +284,9 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             else:
                 user_text = str(msg.get("text") or "")
 
-            # Check if this is an exit phrase in FOLLOWUP mode - skip orchestrator processing
+            # Check if this is an exit phrase (in any mode) - skip orchestrator processing
             is_followup = meta.get("is_followup", False)
-            if is_followup and user_text:
+            if user_text:
                 followup_mgr = FollowupManager()
                 if followup_mgr.is_exit_phrase(user_text):
                     # Exit phrase detected - don't process through orchestrator, return empty
@@ -317,6 +317,7 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                                 "user_text": user_text,
                                 "is_followup": is_followup,
                                 "followup_chain": meta.get("followup_chain"),
+                                "show_followup_prompt": False,  # CRITICAL: Don't show follow-up prompt on exit
                             },
                         },
                     )

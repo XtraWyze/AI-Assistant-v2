@@ -225,6 +225,54 @@ class WyzerAssistant:
         
         self.logger.info("Wyzer Assistant stopped")
     
+    def interrupt_current_process(self) -> None:
+        """
+        Interrupt the current process cleanly.
+        Handles interruptions during all states without breaking the system.
+        """
+        self.logger.info(f"Interrupt requested from state: {self.state.current_state.value}")
+        
+        # Mark interrupt in state
+        self.state.request_interrupt()
+        
+        # Stop TTS if speaking
+        if self.tts_stop_event:
+            self.tts_stop_event.set()
+        
+        # Handle based on current state
+        if self.state.is_in_state(AssistantState.SPEAKING):
+            # Already handled by hotword interrupt mechanism
+            self.logger.info("Interrupting speech")
+            # Wait for speaking thread to stop
+            if self.speaking_thread:
+                self.speaking_thread.join(timeout=0.3)
+            self.speaking_thread = None
+        
+        elif self.state.is_in_state(AssistantState.LISTENING):
+            # Stop listening and return to idle
+            self.logger.info("Interrupting listening session")
+            self._drain_audio_queue(0.05)
+        
+        elif self.state.is_in_state(AssistantState.THINKING):
+            # Send interrupt to brain worker
+            self.logger.info("Interrupting thinking process")
+            if hasattr(self, 'core_to_brain_q') and self.core_to_brain_q:
+                try:
+                    safe_put(self.core_to_brain_q, {"type": "INTERRUPT"}, timeout=0.1)
+                except Exception as e:
+                    self.logger.warning(f"Could not send interrupt to brain: {e}")
+        
+        elif self.state.is_in_state(AssistantState.TRANSCRIBING):
+            # Wait for transcription to finish (can't really interrupt STT)
+            self.logger.info("Interrupting transcription")
+            if self.stt_thread and self.stt_thread.is_alive():
+                self.stt_thread.join(timeout=1.0)
+        
+        # Reset to idle state
+        self._reset_to_idle()
+        self.logger.info("Process interrupted successfully")
+    
+    
     def _main_loop(self) -> None:
         """Main processing loop"""
         while self.running:
@@ -519,10 +567,11 @@ class WyzerAssistant:
                 self.logger.info(f"Transcript: {transcript}")
                 print(f"\nYou: {transcript}")
                 
-                # Check if this is a FOLLOWUP exit phrase
-                if was_followup and self.followup_manager.is_exit_phrase(transcript):
-                    self.logger.info("[FOLLOWUP] Exit phrase detected - ending followup window")
-                    self.followup_manager.end_followup_window()
+                # Check if this is an exit phrase (both FOLLOWUP and initial interaction)
+                if self.followup_manager.is_exit_phrase(transcript):
+                    self.logger.info("[EXIT] Exit phrase detected - skipping LLM processing")
+                    if was_followup:
+                        self.followup_manager.end_followup_window()
                     self._reset_to_idle()
                     return
                 
@@ -1025,6 +1074,30 @@ class WyzerAssistantMultiprocess:
 
         self.logger.info("Wyzer Assistant stopped")
 
+    def interrupt_current_process(self) -> None:
+        """
+        Interrupt the current process cleanly.
+        Sends interrupt signal to brain worker and transitions to IDLE state.
+        """
+        self.logger.info(f"Interrupt requested from state: {self.state.current_state.value}")
+        
+        # Mark interrupt in state
+        self.state.request_interrupt()
+        
+        # Send interrupt to brain worker if it's processing
+        if self._core_to_brain_q:
+            try:
+                safe_put(self._core_to_brain_q, {"type": "INTERRUPT", "reason": "user_interrupt"}, timeout=0.1)
+            except Exception as e:
+                self.logger.warning(f"Could not send interrupt to brain: {e}")
+        
+        # Drain audio queue to clear stale frames
+        self._drain_audio_queue(0.05)
+        
+        # Reset to idle state
+        self._reset_to_idle()
+        self.logger.info("Process interrupted successfully")
+
     def _main_loop(self) -> None:
         while self.running:
             # Drain brain->core messages first to keep UI/logging snappy
@@ -1385,16 +1458,17 @@ class WyzerAssistantMultiprocess:
                 # Capture whether to show follow-up prompt (set by brain worker)
                 self._show_followup_prompt = meta.get("show_followup_prompt", True)
                 
-                # Check if this is an exit phrase in FOLLOWUP mode
-                if is_followup and user_text and self.followup_manager.is_exit_phrase(user_text):
-                    self.logger.info("[FOLLOWUP] Exit phrase detected - ending followup window")
-                    self.followup_manager.end_followup_window()
+                # Check if this is an exit phrase (safety check for any context)
+                if user_text and self.followup_manager.is_exit_phrase(user_text):
+                    self.logger.info("[EXIT] Exit phrase detected in RESULT - silently returning to idle")
+                    if is_followup:
+                        self.followup_manager.end_followup_window()
                     
                     # Interrupt any TTS to avoid speaking the response
                     if self._core_to_brain_q:
-                        safe_put(self._core_to_brain_q, {"type": "INTERRUPT", "reason": "followup_exit"})
+                        safe_put(self._core_to_brain_q, {"type": "INTERRUPT", "reason": "exit_phrase"})
                     
-                    # Silently exit FOLLOWUP without printing or speaking the response
+                    # Silently exit without printing or speaking
                     self._reset_to_idle()
                     continue
                 
