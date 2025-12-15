@@ -16,15 +16,15 @@ class Config:
     CHUNK_SAMPLES: int = SAMPLE_RATE * CHUNK_MS // 1000  # 320 samples for 20ms at 16kHz
     
     # Recording limits
-    MAX_RECORD_SECONDS: float = float(os.environ.get("WYZER_MAX_RECORD_SECONDS", "5.0"))
-    VAD_SILENCE_TIMEOUT: float = float(os.environ.get("WYZER_VAD_SILENCE_TIMEOUT", "1.2"))
+    MAX_RECORD_SECONDS: float = float(os.environ.get("WYZER_MAX_RECORD_SECONDS", "10.0"))
+    VAD_SILENCE_TIMEOUT: float = float(os.environ.get("WYZER_VAD_SILENCE_TIMEOUT", "0.8"))
     
     # VAD settings
     VAD_THRESHOLD: float = float(os.environ.get("WYZER_VAD_THRESHOLD", "0.5"))
     VAD_MIN_SPEECH_DURATION_MS: int = int(os.environ.get("WYZER_VAD_MIN_SPEECH_MS", "250"))
     
     # Hotword settings
-    HOTWORD_KEYWORDS: List[str] = os.environ.get("WYZER_HOTWORD_KEYWORDS", "hey jarvis,jarvis").split(",")
+    HOTWORD_KEYWORDS: List[str] = os.environ.get("WYZER_HOTWORD_KEYWORDS", "hey wyzer,wyzer").split(",")
     HOTWORD_THRESHOLD: float = float(os.environ.get("WYZER_HOTWORD_THRESHOLD", "0.5"))
     # Require this many consecutive frames above threshold before triggering.
     # Helps prevent false triggers from noise / TTS bleed-through.
@@ -93,7 +93,7 @@ class Config:
     
     # FOLLOWUP listening window settings
     FOLLOWUP_ENABLED: bool = os.environ.get("WYZER_FOLLOWUP_ENABLED", "true").lower() in ("true", "1", "yes")
-    FOLLOWUP_TIMEOUT_SEC: float = float(os.environ.get("WYZER_FOLLOWUP_TIMEOUT_SEC", "1.5"))
+    FOLLOWUP_TIMEOUT_SEC: float = float(os.environ.get("WYZER_FOLLOWUP_TIMEOUT_SEC", "2.0"))
     FOLLOWUP_MAX_CHAIN: int = int(os.environ.get("WYZER_FOLLOWUP_MAX_CHAIN", "3"))
     
     # Tool Worker Pool settings (Runtime verification & warm workers)

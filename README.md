@@ -4,7 +4,7 @@ A voice-controlled AI assistant for Windows 10/11 with hotword detection, speech
 
 ## Features
 
-- ✅ **Hotword Detection**: Wake the assistant with the default openWakeWord model ("hey jarvis")
+- ✅ **Hotword Detection**: Wake the assistant with the default openWakeWord model ("hey wyzer")
 - ✅ **Voice Activity Detection (VAD)**: Silero VAD with energy-based fallback
 - ✅ **Speech-to-Text**: Fast, accurate transcription using faster-whisper
 - ✅ **Local LLM Brain**: Conversational AI using Ollama (Phase 4)
@@ -149,7 +149,7 @@ python run.py --no-speak-interrupt
 python run.py
 ```
 1. Wait for "Ready. Listening for hotword..."
-2. Say the wake word (default model: "hey jarvis")
+2. Say the wake word (default model: "hey wyzer")
 3. Speak your request after acknowledgment
 4. Assistant transcribes, thinks, and speaks the response
 5. **Barge-in**: Say the hotword while speaking to interrupt immediately
@@ -290,7 +290,7 @@ set WYZER_VAD_SILENCE_TIMEOUT=1.2
 set WYZER_VAD_THRESHOLD=0.5
 
 # Hotword settings
-set WYZER_HOTWORD_KEYWORDS=hey jarvis,jarvis
+set WYZER_HOTWORD_KEYWORDS=hey wyzer,wyzer
 set WYZER_HOTWORD_THRESHOLD=0.5
 
 # Whisper settings
@@ -344,7 +344,7 @@ Or modify defaults in [wyzer/core/config.py](wyzer/core/config.py).
 
 ## FOLLOWUP Listening Window
 
-After Wyzer finishes speaking, it automatically enters a **FOLLOWUP** state where it listens for follow-up requests **without requiring the hotword** for ~3 seconds (configurable). This enables natural conversation chaining without saying "hey jarvis" every time.
+After Wyzer finishes speaking, it automatically enters a **FOLLOWUP** state where it listens for follow-up requests **without requiring the hotword** for ~3 seconds (configurable). This enables natural conversation chaining without saying "hey wyzer" every time.
 
 ### How It Works
 
@@ -358,7 +358,7 @@ After Wyzer finishes speaking, it automatically enters a **FOLLOWUP** state wher
 ### Example Interaction
 
 ```
-User: "Hey Jarvis, what's the weather?"
+User: "Hey Wyzer, what's the weather?"
 Wyzer: "It's 72°F and sunny today."
 
 [FOLLOWUP starts here - hotword disabled for 3 seconds]
@@ -377,7 +377,7 @@ User: "That's all." (exit phrase detected)
 
 [Return to IDLE, waiting for hotword]
 
-User: "Hey Jarvis, ..."
+User: "Hey Wyzer, ..."
 ```
 
 ### Configuration
