@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "timestamp": 1765741767.9941678,
+  "timestamp": 1765767038.6867008,
   "folders": {
     "desktop": "C:\\Users\\kolyw\\Desktop",
     "downloads": "C:\\Users\\kolyw\\Downloads",
@@ -69,10 +69,6 @@
     },
     "ollama": {
       "path": "C:\\Users\\kolyw\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Ollama\\Ollama.lnk",
-      "type": "shortcut"
-    },
-    "onedrive": {
-      "path": "C:\\Users\\kolyw\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\OneDrive.lnk",
       "type": "shortcut"
     },
     "idle (python 3.11 64-bit)": {
@@ -36278,7 +36274,7 @@
       "letter": "C",
       "path": "C:\\",
       "total_gb": 930.63,
-      "free_gb": 54.51,
+      "free_gb": 52.95,
       "label": "Local Disk"
     },
     {
@@ -36287,6 +36283,13 @@
       "total_gb": 953.87,
       "free_gb": 546.65,
       "label": "New Volume"
+    },
+    {
+      "letter": "E",
+      "path": "E:\\",
+      "total_gb": 238.47,
+      "free_gb": 78.43,
+      "label": "ESD-ISO"
     }
   ],
   "games": [
@@ -36469,8 +36472,8 @@
       "install_path": "C:/Program Files/Epic Games/rocketleague",
       "app_id": "Sugar",
       "aliases": [
-        "rocket league\u00ae",
-        "rl"
+        "rl",
+        "rocket league\u00ae"
       ],
       "confidence": 0.95
     },
@@ -36513,8 +36516,8 @@
       "install_path": null,
       "app_id": null,
       "aliases": [
-        "rockstar games launcher",
-        "rockstar"
+        "rockstar",
+        "rockstar games launcher"
       ],
       "confidence": 0.8
     },
@@ -36942,7 +36945,7 @@
     }
   ],
   "games_scan_meta": {
-    "last_refresh": "2025-12-14 14:50:09",
+    "last_refresh": "2025-12-14 21:51:19",
     "counts": {
       "steam": 18,
       "epic": 3,
@@ -37209,15 +37212,6 @@
       ]
     },
     {
-      "name": "OneNote for Windows 10",
-      "app_id": "Microsoft.Office.OneNote_8wekyb3d8bbwe!microsoft.onenoteim",
-      "source": "uwp",
-      "aliases": [
-        "onenote for windows 10",
-        "onenote"
-      ]
-    },
-    {
       "name": "Outlook",
       "app_id": "Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows",
       "source": "uwp",
@@ -37406,12 +37400,12 @@
     }
   ],
   "uwp_scan_meta": {
-    "last_refresh": "2025-12-14 14:50:11",
-    "count": 52,
+    "last_refresh": "2025-12-14 21:51:20",
+    "count": 51,
     "status": "ok"
   },
   "scan_meta": {
-    "last_refresh": "2025-12-14 14:43:35",
+    "last_refresh": "2025-12-14 21:50:38",
     "dirs": {
       "C:\\Program Files": 1765613739.555908,
       "C:\\Program Files (x86)": 1764191160.0504584,

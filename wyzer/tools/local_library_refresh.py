@@ -17,7 +17,13 @@ class LocalLibraryRefreshTool(ToolBase):
         self._description = "Refresh the index of local folders, apps, and shortcuts (use when user wants to update or rebuild the library)"
         self._args_schema = {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["normal", "full", "tier3"],
+                    "description": "Scan mode: 'normal' (Start Menu only), 'full' (includes Tier 2 EXE scanning), 'tier3' (includes full file system scan)"
+                }
+            },
             "required": [],
             "additionalProperties": False
         }
@@ -26,13 +32,17 @@ class LocalLibraryRefreshTool(ToolBase):
         """
         Refresh the local library index.
         
+        Args:
+            mode: Optional scan mode ("normal", "full", or "tier3")
+        
         Returns:
             Dict with status and counts, or error
         """
         start_time = time.perf_counter()
         
         try:
-            result = refresh_index()
+            mode = kwargs.get("mode", "normal")
+            result = refresh_index(mode=mode)
             
             # Add latency if not present
             if "latency_ms" not in result:

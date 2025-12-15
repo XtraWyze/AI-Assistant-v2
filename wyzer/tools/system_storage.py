@@ -276,6 +276,15 @@ class SystemStorageScanTool(ToolBase):
                 "refresh": {
                     "type": "boolean",
                     "description": "Force refresh (default False to use cache)"
+                },
+                "tier": {
+                    "type": "string",
+                    "enum": ["quick", "standard", "deep"],
+                    "description": "Scan tier: 'quick' (cached info), 'standard' (basic refresh), 'deep' (full file system scan)"
+                },
+                "drive": {
+                    "type": "string",
+                    "description": "Specific drive to scan (e.g., 'C', 'D', 'E') - if omitted, scans all drives"
                 }
             },
             "required": [],
@@ -285,6 +294,11 @@ class SystemStorageScanTool(ToolBase):
     def run(self, **kwargs) -> Dict[str, Any]:
         """
         Run system storage scan.
+        
+        Args:
+            refresh: Force refresh the cache
+            tier: Scan tier ('quick', 'standard', 'deep')
+            drive: Specific drive letter to scan (e.g., 'C', 'D')
         
         Returns:
             {
@@ -298,7 +312,14 @@ class SystemStorageScanTool(ToolBase):
         start_time = time.perf_counter()
         
         try:
+            # Handle tier parameter - tier="deep" forces refresh
+            tier = kwargs.get("tier", "standard")
             refresh = kwargs.get("refresh", False)
+            
+            # Deep tier forces refresh
+            if tier == "deep":
+                refresh = True
+            
             if not isinstance(refresh, bool):
                 refresh = False
             

@@ -24,6 +24,9 @@ MULTI_INTENT_SEPARATORS = [
     (r"\s*,\s*", "parallel"),             # "open X, Y"
 ]
 
+# Verbs that can start a new intent when appearing without separator
+ACTION_VERBS = r"(?:open|launch|start|close|quit|exit|minimize|shrink|maximize|fullscreen|expand|move|send|play|pause|resume|mute|unmute|scan)"
+
 
 def _split_by_separator(text: str, separator_pattern: str) -> List[str]:
     """Split text by separator pattern, returning non-empty clauses."""
@@ -69,7 +72,7 @@ def _infer_missing_verb(clause: str, previous_clauses: List[str]) -> str:
     
     # If clause already starts with a verb, don't modify it
     verb_patterns = [
-        r"^(open|launch|start|close|quit|exit|play|pause|resume|mute|unmute|turn)",
+        r"^(open|launch|start|close|quit|exit|play|pause|resume|mute|unmute|turn|scan)",
         r"^(volume|set|get)",
     ]
     for pattern in verb_patterns:
@@ -110,12 +113,58 @@ def _looks_like_multi_intent(text: str) -> bool:
     # Normalize whitespace
     tl = re.sub(r"\s+", " ", tl)
     
-    # Check for markers
+    # Check for explicit separators first
     for sep_pattern, _ in MULTI_INTENT_SEPARATORS:
         if re.search(sep_pattern, tl, re.IGNORECASE):
             return True
     
+    # Check for implicit verb boundaries: "verb1 target1 verb2 target2"
+    # E.g., "close chrome open spotify" should be detected as 2 intents
+    # Pattern: look for action verb, then some words (target), then another action verb
+    verb_boundary_pattern = rf"\s{ACTION_VERBS}\s"
+    if re.search(verb_boundary_pattern, tl, re.IGNORECASE):
+        # Make sure it's not just one verb followed by words
+        # Count verb occurrences - need at least 2 for multi-intent
+        verb_matches = list(re.finditer(ACTION_VERBS, tl, re.IGNORECASE))
+        if len(verb_matches) >= 2:
+            return True
+    
     return False
+
+
+def _split_by_verb_boundaries(text: str) -> List[str]:
+    """
+    Split text by verb boundaries when no explicit separator is found.
+    
+    Handles patterns like:
+      "close chrome open spotify" -> ["close chrome", "open spotify"]
+      "minimize chrome maximize spotify" -> ["minimize chrome", "maximize spotify"]
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    
+    # Find all verb positions
+    verbs = list(re.finditer(ACTION_VERBS, text, re.IGNORECASE))
+    if len(verbs) < 2:
+        return []
+    
+    clauses = []
+    for i, verb_match in enumerate(verbs):
+        verb_start = verb_match.start()
+        
+        # Find the end of this clause (start of next verb or end of text)
+        if i < len(verbs) - 1:
+            next_verb_start = verbs[i + 1].start()
+            # Find the last word before the next verb
+            clause_text = text[verb_start:next_verb_start].rstrip()
+        else:
+            clause_text = text[verb_start:].strip()
+        
+        if clause_text:
+            clauses.append(clause_text)
+    
+    return clauses
 
 
 def try_parse_multi_intent(text: str) -> Optional[Tuple[List[Dict[str, Any]], float]]:
@@ -176,6 +225,42 @@ def try_parse_multi_intent(text: str) -> Optional[Tuple[List[Dict[str, Any]], fl
         processed_clauses = []
         
         for clause in clauses:
+            clause = clause.strip()
+            if not clause:
+                continue
+            
+            # Try to infer missing verb from previous clauses
+            enhanced_clause = _infer_missing_verb(clause, processed_clauses)
+            processed_clauses.append(enhanced_clause)
+            
+            # Use hybrid_router's single-clause decision
+            decision = _decide_single_clause(enhanced_clause)
+            
+            # If any clause can't be handled deterministically, bail out
+            if decision.mode == "llm" or decision.confidence < 0.7:
+                all_succeeded = False
+                break
+            
+            # Collect the intents
+            if decision.intents:
+                parsed_intents.extend(decision.intents)
+            
+            # Track minimum confidence across all clauses
+            min_confidence = min(min_confidence, decision.confidence)
+        
+        # If all clauses parsed successfully, return the result
+        if all_succeeded and parsed_intents:
+            return (parsed_intents, min_confidence * 0.95)  # Slight confidence penalty for multi-intent
+    
+    # Try verb boundary splitting as last resort (for "close chrome open spotify" style)
+    verb_boundary_clauses = _split_by_verb_boundaries(raw_text)
+    if len(verb_boundary_clauses) >= 2 and len(verb_boundary_clauses) <= 7:
+        parsed_intents = []
+        min_confidence = 1.0
+        all_succeeded = True
+        processed_clauses = []
+        
+        for clause in verb_boundary_clauses:
             clause = clause.strip()
             if not clause:
                 continue

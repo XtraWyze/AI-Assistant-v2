@@ -31,7 +31,7 @@ _FASTPATH_SPLIT_RE = re.compile(r"\b(?:and then|then|and)\b", re.IGNORECASE)
 _FASTPATH_COMMA_SPLIT_RE = re.compile(r"\s*,\s*")
 _FASTPATH_SEMI_SPLIT_RE = re.compile(r"\s*;\s*")
 _FASTPATH_COMMAND_TOKEN_RE = re.compile(
-    r"\b(?:tool|run|execute|open|launch|start|close|exit|quit|focus|activate|switch\s+to|minimize|maximize|fullscreen|move|pause|play|resume|mute|unmute|volume|sound|audio|volume\s+up|volume\s+down|turn\s+up|turn\s+down|louder|quieter|set\s+audio|switch\s+audio|change\s+audio|refresh\s+library|rebuild\s+library|weather|forecast|location|system\s+info|system\s+information|monitor\s+info|what\s+time\s+is\s+it|my\s+location|where\s+am\s+i|next\s+(?:track|song)|previous\s+(?:track|song)|prev\s+track)\b",
+    r"\b(?:tool|run|execute|open|launch|start|close|exit|quit|focus|activate|switch\s+to|minimize|maximize|fullscreen|move|pause|play|resume|mute|unmute|volume|sound|audio|volume\s+up|volume\s+down|turn\s+up|turn\s+down|louder|quieter|set\s+audio|switch\s+audio|change\s+audio|refresh\s+library|rebuild\s+library|scan|devices?|weather|forecast|location|system\s+info|system\s+information|monitor\s+info|what\s+time\s+is\s+it|my\s+location|where\s+am\s+i|next\s+(?:track|song)|previous\s+(?:track|song)|prev\s+track)\b",
     re.IGNORECASE,
 )
 
@@ -935,6 +935,11 @@ def _fastpath_parse_clause(clause: str) -> Optional[List[Intent]]:
         return [Intent(tool="get_weather_forecast", args=args)]
 
     # --- Library refresh ---
+    # "scan files", "scan apps" -> tier 3 (full file system + apps scan)
+    # "refresh library", "rebuild library" -> normal mode
+    if "scan files" in c_lower or "scan apps" in c_lower:
+        return [Intent(tool="local_library_refresh", args={"mode": "tier3"})]
+    
     if "refresh library" in c_lower or "rebuild library" in c_lower or c_lower == "local library refresh":
         return [Intent(tool="local_library_refresh", args={})]
 

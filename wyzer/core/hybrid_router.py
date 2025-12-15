@@ -127,7 +127,19 @@ def looks_multi_intent(text: str) -> bool:
     tl = re.sub(r"\s+", " ", tl)
     tl = f" {tl} "
 
-    return any(marker in tl for marker in MULTI_INTENT_MARKERS)
+    # Check explicit markers
+    if any(marker in tl for marker in MULTI_INTENT_MARKERS):
+        return True
+    
+    # Check for implicit verb boundaries: "verb1 target1 verb2 target2"
+    # E.g., "close chrome open spotify" should be detected as 2 intents
+    # Verbs that commonly start new intents (from multi_intent_parser.py)
+    action_verbs = r"(?:open|launch|start|close|quit|exit|minimize|shrink|maximize|fullscreen|expand|move|send|play|pause|resume|mute|unmute|scan)"
+    verb_matches = list(re.finditer(action_verbs, tl, re.IGNORECASE))
+    if len(verb_matches) >= 2:
+        return True
+    
+    return False
 
 
 # Anchored time patterns: only match whole-utterance variants.
@@ -136,11 +148,37 @@ _TIME_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Weather patterns: match queries about weather, temperature, forecast
+_WEATHER_RE = re.compile(
+    r"\b(?:"
+    r"weather|"
+    r"temperature|"
+    r"temp|"
+    r"forecast|"
+    r"how\s+(?:cold|hot|warm)|"
+    r"what.{0,10}(?:weather|temperature|temp|forecast)|"
+    r"(?:weather|temperature|forecast)\s+(?:in|for|at)|"
+    r"is\s+it\s+(?:cold|hot|warm|raining|snowing)|"
+    r"will\s+it\s+(?:rain|snow)|"
+    r"what.{0,10}like\s+outside"
+    r")\b",
+    re.IGNORECASE,
+)
+
 # Anchored open/launch/start.
 _OPEN_RE = re.compile(r"^(open|launch|start)\s+(.+)$", re.IGNORECASE)
 
 # Anchored close/quit/exit.
 _CLOSE_RE = re.compile(r"^(close|quit|exit)\s+(.+)$", re.IGNORECASE)
+
+# Anchored minimize/shrink.
+_MINIMIZE_RE = re.compile(r"^(minimize|shrink)\s+(.+)$", re.IGNORECASE)
+
+# Anchored maximize/fullscreen/expand.
+_MAXIMIZE_RE = re.compile(r"^(maximize|fullscreen|expand|full\s+screen)\s+(.+)$", re.IGNORECASE)
+
+# Anchored move window to monitor.
+_MOVE_MONITOR_RE = re.compile(r"^(?:move|send)\s+(.+?)\s+to\s+(?:monitor|screen)\s+(\d+|next|previous|left|right)$", re.IGNORECASE)
 
 # Conservative URL/domain detection: if it looks like a URL/domain, we force LLM.
 _URL_SCHEME_RE = re.compile(r"\bhttps?://", re.IGNORECASE)
@@ -184,10 +222,108 @@ def _decide_single_clause(text: str) -> HybridDecision:
             confidence=0.95,
         )
 
+    # Weather queries - extract location if provided
+    if _WEATHER_RE.search(clause):
+        # Try to extract location from the query
+        location = None
+        
+        # Pattern: "weather in <location>" / "temperature in <location>" / "forecast for <location>"
+        m = re.search(r"\b(?:in|for|at|near)\s+(.+?)(?:\?|$)", clause, re.IGNORECASE)
+        if m:
+            location = (m.group(1) or "").strip().rstrip("?").strip()
+            # Filter out common non-location words
+            location_l = location.lower()
+            if location_l in {"it", "this", "here", "there", "the area", "outside"}:
+                location = None
+        
+        # Build arguments
+        weather_args = {}
+        if location:
+            weather_args["location"] = location
+        
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "get_weather_forecast",
+                    "args": weather_args,
+                    "continue_on_error": False,
+                }
+            ],
+            reply="",
+            confidence=0.92,
+        )
+
+    # Local library refresh/scan commands
+    tl_norm = _strip_trailing_punct(clause).lower()
+    
+    # "scan files", "scan my files", "scan apps", "scan my apps" -> tier 3 (full file system scan)
+    if re.match(r"^scan\s+(?:my\s+)?(?:files|apps?)$", tl_norm):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "local_library_refresh",
+                    "args": {"mode": "tier3"},
+                    "continue_on_error": False,
+                }
+            ],
+            reply="",
+            confidence=0.92,
+        )
+    
+    # "refresh library", "rebuild library" -> normal mode
+    if re.match(r"^(?:refresh|rebuild|rescan)\s+library$", tl_norm):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "local_library_refresh",
+                    "args": {},
+                    "continue_on_error": False,
+                }
+            ],
+            reply="",
+            confidence=0.93,
+        )
+
     # System storage commands (check before generic open pattern).
     tl = _strip_trailing_punct(clause).lower()
     # Remove internal punctuation (commas, hyphens, periods) for more flexible matching
     tl_normalized = re.sub(r'[,\-.\']', ' ', tl).replace('  ', ' ').strip()
+    
+    # "scan devices" -> deep tier (full file system scan)
+    if re.match(r"^scan\s+devices?$", tl_normalized):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "system_storage_scan",
+                    "args": {"tier": "deep"},
+                    "continue_on_error": False,
+                }
+            ],
+            reply="",
+            confidence=0.92,
+        )
+    
+    # "scan drive c", "scan d", "scan disc e" etc -> deep tier for specific drive
+    m = re.search(r"\bscan\s*(?:hard\s+)?(?:drive|disc|disk)?\s*([a-z])\b|^scandisk([a-z])$", tl_normalized)
+    if m:
+        drive_letter = (m.group(1) or m.group(2) or "").upper()
+        if drive_letter:
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[
+                    {
+                        "tool": "system_storage_scan",
+                        "args": {"tier": "deep", "drive": drive_letter},
+                        "continue_on_error": False,
+                    }
+                ],
+                reply="",
+                confidence=0.92,
+            )
     
     # "system scan" / "scan my drives" / "refresh drive index" / "scan disc" / "scan discs" / "scan discy"
     if re.match(r"^(?:system\s+scan|scan\s+(?:my\s+)?drives?|scan\s+dis(?:c|k)[ys]?|refresh\s+drive\s+index)$", tl_normalized):
@@ -202,24 +338,6 @@ def _decide_single_clause(text: str) -> HybridDecision:
             ],
             reply="",
             confidence=0.95,
-        )
-
-    # "scan hard drive e" / "scan drive e" / "scan disc e" / "scan disk e" / "scan e" / "scandiske" / "scandiskd"
-    # Use word boundary and search (not match) to allow "okay scan drive c" anywhere
-    m = re.search(r"\bscan\s*(?:hard\s+)?(?:drive|disc|disk)?\s*([a-z])\b|^scandisk([a-z])$", tl_normalized)
-    if m:
-        drive_letter = m.group(1) or m.group(2)
-        return HybridDecision(
-            mode="tool_plan",
-            intents=[
-                {
-                    "tool": "system_storage_list",
-                    "args": {"refresh": False, "drive": drive_letter},
-                    "continue_on_error": False,
-                }
-            ],
-            reply="",
-            confidence=0.93,
         )
 
     # "list drives" / "show drives" / "how much space do i have" / "storage summary"
@@ -326,6 +444,86 @@ def _decide_single_clause(text: str) -> HybridDecision:
             reply=f"Closing {target}.",
             confidence=0.85,
 
+        )
+
+    # Minimize/shrink X -> minimize_window.
+    m = _MINIMIZE_RE.match(clause)
+    if m:
+        target = (m.group(2) or "").strip().strip('"').strip("'")
+        # If the target is missing or too ambiguous, defer to LLM.
+        if not target or target.lower() in {"it", "this", "that", "something", "anything"}:
+            return HybridDecision(mode="llm", intents=None, reply="", confidence=0.4)
+
+        # Extra defense: if target includes other action verbs, defer to LLM.
+        target_l = re.sub(r"\s+", " ", target.lower()).strip()
+        if any(v in target_l.split() for v in ["play", "pause", "resume", "then", "and", "also", "plus"]):
+            return HybridDecision(mode="llm", intents=None, reply="", confidence=0.3)
+
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "minimize_window",
+                    "args": {"title": target},
+                    "continue_on_error": False,
+                }
+            ],
+            reply=f"Minimizing {target}.",
+            confidence=0.85,
+        )
+
+    # Maximize/fullscreen/expand X -> maximize_window.
+    m = _MAXIMIZE_RE.match(clause)
+    if m:
+        target = (m.group(2) or "").strip().strip('"').strip("'")
+        # If the target is missing or too ambiguous, defer to LLM.
+        if not target or target.lower() in {"it", "this", "that", "something", "anything"}:
+            return HybridDecision(mode="llm", intents=None, reply="", confidence=0.4)
+
+        # Extra defense: if target includes other action verbs, defer to LLM.
+        target_l = re.sub(r"\s+", " ", target.lower()).strip()
+        if any(v in target_l.split() for v in ["play", "pause", "resume", "then", "and", "also", "plus"]):
+            return HybridDecision(mode="llm", intents=None, reply="", confidence=0.3)
+
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "maximize_window",
+                    "args": {"title": target},
+                    "continue_on_error": False,
+                }
+            ],
+            reply=f"Maximizing {target}.",
+            confidence=0.85,
+        )
+
+    # Move window to monitor: "move X to monitor 2" / "send chrome to monitor next"
+    m = _MOVE_MONITOR_RE.match(clause)
+    if m:
+        target = (m.group(1) or "").strip().strip('"').strip("'")
+        monitor = (m.group(2) or "").strip().lower()
+        
+        # If the target is missing or too ambiguous, defer to LLM.
+        if not target or target.lower() in {"it", "this", "that", "something", "anything"}:
+            return HybridDecision(mode="llm", intents=None, reply="", confidence=0.4)
+
+        # Extra defense: if target includes other action verbs, defer to LLM.
+        target_l = re.sub(r"\s+", " ", target.lower()).strip()
+        if any(v in target_l.split() for v in ["play", "pause", "resume", "then", "and", "also", "plus"]):
+            return HybridDecision(mode="llm", intents=None, reply="", confidence=0.3)
+
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[
+                {
+                    "tool": "move_window_to_monitor",
+                    "args": {"title": target, "monitor": monitor},
+                    "continue_on_error": False,
+                }
+            ],
+            reply=f"Moving {target} to monitor {monitor}.",
+            confidence=0.85,
         )
 
     # Minimal media/volume controls (only if tools exist; existence checked upstream).
