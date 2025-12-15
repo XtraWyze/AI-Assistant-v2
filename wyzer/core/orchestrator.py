@@ -11,6 +11,7 @@ import re
 import socket
 import shlex
 import uuid
+import random
 from urllib.parse import urlparse
 from typing import Dict, Any, Optional, List, Tuple
 from wyzer.core.config import Config
@@ -26,6 +27,22 @@ from wyzer.core.intent_plan import (
     ExecutionResult,
     ExecutionSummary
 )
+
+
+# Short varied responses for no-ollama mode when command isn't recognized
+_NO_OLLAMA_FALLBACK_REPLIES = [
+    "Not supported, try again.",
+    "I didn't catch that, try again.",
+    "That's not available right now.",
+    "Can't do that one, try something else.",
+    "Not recognized, please try again.",
+    "Sorry, try a different command.",
+]
+
+
+def _get_no_ollama_reply() -> str:
+    """Get a random short reply for unsupported commands in no-ollama mode."""
+    return random.choice(_NO_OLLAMA_FALLBACK_REPLIES)
 
 
 _FASTPATH_SPLIT_RE = re.compile(r"\b(?:and then|then|and)\b", re.IGNORECASE)
@@ -293,6 +310,20 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 "meta": {
                     "hybrid_route": "llm",
                     "hybrid_confidence": float(hybrid_decision.confidence or 0.0),
+                },
+            }
+        
+        # Early return if NO_OLLAMA mode is enabled and we need LLM
+        if getattr(Config, "NO_OLLAMA", False):
+            end_time = time.perf_counter()
+            latency_ms = int((end_time - start_time) * 1000)
+            logger.info("[NO_OLLAMA] Request requires LLM but Ollama is disabled")
+            return {
+                "reply": _get_no_ollama_reply(),
+                "latency_ms": latency_ms,
+                "meta": {
+                    "hybrid_route": "no_ollama_fallback",
+                    "hybrid_confidence": 0.0,
                 },
             }
         
@@ -1852,13 +1883,10 @@ def _call_llm_for_explicit_tool(user_text: str, tool_name: str, registry) -> Dic
     This is used when the user says: "tool <name> ..." but the deterministic parser
     cannot safely parse the args.
     """
-    # Respect config: if LLM is off, we can't do the hybrid step.
-    if str(getattr(Config, "LLM_MODE", "ollama") or "ollama").strip().lower() == "off":
+    # Respect config: if LLM is off or NO_OLLAMA is set, we can't do the hybrid step.
+    if getattr(Config, "NO_OLLAMA", False) or str(getattr(Config, "LLM_MODE", "ollama") or "ollama").strip().lower() == "off":
         return {
-            "reply": (
-                "That looks like an explicit tool call, but I need the LLM enabled to infer the arguments. "
-                "Either provide explicit args (JSON or key=value), or enable the LLM."
-            )
+            "reply": _get_no_ollama_reply()
         }
 
     tool = registry.get(tool_name)
@@ -2007,6 +2035,14 @@ def _ollama_request(prompt: str) -> Dict[str, Any]:
         Parsed JSON response or fallback dict
     """
     logger = get_logger_instance()
+    
+    # Check if Ollama is disabled via NO_OLLAMA flag
+    if getattr(Config, "NO_OLLAMA", False):
+        logger.debug("[NO_OLLAMA] Ollama disabled, returning not supported")
+        return {
+            "reply": _get_no_ollama_reply()
+        }
+    
     try:
         # Use existing config
         base_url = Config.OLLAMA_BASE_URL.rstrip("/")

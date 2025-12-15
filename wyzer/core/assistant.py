@@ -93,6 +93,9 @@ class WyzerAssistant:
         # Track if current speaking response is from FOLLOWUP
         self._is_followup_response: bool = False
         
+        # Track if last response ended with a question (for conditional follow-up)
+        self._last_response_is_question: bool = False
+
         # Post-barge-in speech gating
         self._bargein_pending_speech: bool = False
         self._bargein_wait_speech_deadline_ts: float = 0.0
@@ -744,6 +747,9 @@ class WyzerAssistant:
         self._speaking_start_ts = time.time()
         self._is_followup_response = is_followup
         
+        # Check if response ends with a question mark (for conditional follow-up)
+        self._last_response_is_question = text.strip().endswith('?')
+
         # Start speaking in background thread
         self.speaking_thread = threading.Thread(
             target=self._background_speak,
@@ -851,10 +857,17 @@ class WyzerAssistant:
                 self.speaking_thread = None
                 self._re_enter_followup()
             else:
-                # Regular speaking complete - transition to FOLLOWUP
+                # Regular speaking complete
                 self._drain_audio_queue(Config.POST_SPEAK_DRAIN_SEC)
                 self.speaking_thread = None
-                self._enter_followup_after_prompt()
+                
+                # Only enter follow-up if response ended with a question
+                if self._last_response_is_question:
+                    self._enter_followup_after_prompt()
+                else:
+                    # Go back to IDLE
+                    self.state.transition_to(AssistantState.IDLE)
+                    self.logger.info(f"Ready. Listening for hotword: {Config.HOTWORD_KEYWORDS}")
     
     def _start_followup_window(self) -> None:
         """
@@ -1566,8 +1579,7 @@ class WyzerAssistantMultiprocess:
     def _start_followup_window(self) -> None:
         """
         Start a FOLLOWUP listening window after TTS completes (multiprocess).
-        Enqueues a follow-up prompt (if appropriate) and sets flag to start
-        listening once the prompt TTS finishes.
+        Only enters FOLLOWUP if the response was a question (ends with ?).
         """
         if not Config.FOLLOWUP_ENABLED:
             # FOLLOWUP disabled, go back to IDLE
@@ -1575,38 +1587,9 @@ class WyzerAssistantMultiprocess:
             self.logger.info(f"Ready. Listening for hotword: {Config.HOTWORD_KEYWORDS}")
             return
         
-        # Send follow-up prompt only if the response wasn't a question
-        if self._show_followup_prompt and self._core_to_brain_q:
-            # Randomly select from various follow-up prompts to avoid repetition
-            followup_prompts = [
-                "Is there anything else?",
-                "Anything else I can help with?",
-                "Can I help you with anything else?",
-                "Do you need anything else?",
-                "What else can I do for you?",
-                "Is there anything more?",
-                "Would you like help with something else?",
-                "Anything else?",
-            ]
-            prompt = random.choice(followup_prompts)
-            # Print as response in console
-            print(f"\nWyzer: {prompt}\n")
-            
-            req_id = new_id()
-            safe_put(
-                self._core_to_brain_q,
-                {
-                    "type": "TEXT",
-                    "id": req_id,
-                    "text": prompt,
-                    "meta": {"is_followup_prompt": True},
-                },
-            )
-            self.logger.info("Enqueued follow-up prompt for TTS")
-            # Flag that we're waiting for this TTS to finish before starting listening
-            self._waiting_for_followup_tts = True
-        else:
-            # No prompt to speak, go directly to listening
+        # Only enter follow-up if the response was a question
+        if self._show_followup_prompt:
+            # Response was a question - go directly to FOLLOWUP listening (no extra prompt)
             self.state.transition_to(AssistantState.FOLLOWUP)
             self.audio_buffer = []
             self.state.speech_detected = False
@@ -1614,6 +1597,9 @@ class WyzerAssistantMultiprocess:
             self.state.speech_frames_count = 0
             self.state.total_frames_recorded = 0
             self.followup_manager.start_followup_window()
+        else:
+            # Response was not a question - go back to IDLE
+            self._reset_to_idle()
 
     def _reset_to_idle(self) -> None:
         self._clear_bargein_flags()

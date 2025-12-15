@@ -37,6 +37,13 @@ class LLMEngine:
         self.timeout = timeout
         self.enabled = enabled
         
+        # Check for NO_OLLAMA mode from config
+        if getattr(Config, "NO_OLLAMA", False):
+            self.enabled = False
+            self.logger.info("LLM brain disabled (no-ollama mode)")
+            self.client = None
+            return
+        
         # Initialize HTTP client for Ollama
         self.client = OllamaClient(base_url=self.base_url, timeout=timeout)
         

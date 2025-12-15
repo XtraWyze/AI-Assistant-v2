@@ -8,9 +8,13 @@ Usage:
     python run.py --no-hotword       # Run without hotword (immediate listening)
     python run.py --model medium     # Use different Whisper model
     python run.py --list-devices     # List audio devices
+    python run.py --no-ollama        # Run without Ollama (tools-only mode)
     
     # Test tools (Phase 6)
     set WYZER_TOOLS_TEST=1 & python run.py
+    
+    # Environment variables:
+    #   WYZER_NO_OLLAMA=true          # Disable Ollama entirely
 """
 import sys
 import os
@@ -79,6 +83,7 @@ Examples:
   python run.py --model medium      # Use Whisper medium model
   python run.py --device 1          # Use specific audio device
   python run.py --list-devices      # List available audio devices
+  python run.py --no-ollama         # Run without Ollama (deterministic tools only)
         """
     )
     
@@ -140,6 +145,12 @@ Examples:
     )
     
     # LLM Brain arguments (Phase 4)
+    parser.add_argument(
+        "--no-ollama",
+        action="store_true",
+        help="Run without Ollama entirely (tools-only mode, LLM features disabled)"
+    )
+    
     parser.add_argument(
         "--llm",
         type=str,
@@ -229,6 +240,13 @@ def main():
     init_logger(args.log_level)
     logger = get_logger()
 
+    # Handle --no-ollama flag
+    if args.no_ollama:
+        os.environ["WYZER_NO_OLLAMA"] = "true"
+        Config.NO_OLLAMA = True
+        args.llm = "off"  # Also set LLM mode to off for consistency
+        logger.info("Running in no-ollama mode (LLM features disabled)")
+    
     # Apply profile tweaks (keep behavior identical by default)
     whisper_compute_type = "int8"
     if args.profile == "low_end":
@@ -274,11 +292,15 @@ def main():
     print(f"  Hotword Enabled: {not args.no_hotword}")
     if not args.no_hotword:
         print(f"  Hotword Keywords: {', '.join(Config.HOTWORD_KEYWORDS)}")
-    print(f"  LLM Mode: {args.llm}")
-    if args.llm == "ollama":
-        print(f"  LLM Model: {args.ollama_model}")
-        print(f"  LLM URL: {args.ollama_url}")
-        print(f"  LLM Streaming: {Config.OLLAMA_STREAM}")
+    if args.no_ollama:
+        print(f"  LLM Mode: DISABLED (no-ollama mode)")
+        print(f"  Note: Only deterministic tool commands available")
+    else:
+        print(f"  LLM Mode: {args.llm}")
+        if args.llm == "ollama":
+            print(f"  LLM Model: {args.ollama_model}")
+            print(f"  LLM URL: {args.ollama_url}")
+            print(f"  LLM Streaming: {Config.OLLAMA_STREAM}")
     print(f"  TTS Enabled: {args.tts == 'on'}")
     if args.tts == "on":
         print(f"  TTS Engine: {args.tts_engine}")

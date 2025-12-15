@@ -362,10 +362,12 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                     continue
 
             # LLM + tools via orchestrator
+            # Always call orchestrator - it handles NO_OLLAMA mode internally
+            # and the hybrid router can handle deterministic commands without LLM
             llm_start = now_ms()
             from wyzer.core.orchestrator import handle_user_text
 
-            result_dict = handle_user_text(user_text) if llm_mode == "ollama" else {"reply": user_text}
+            result_dict = handle_user_text(user_text)
             llm_ms = now_ms() - llm_start
 
             reply = (result_dict or {}).get("reply", "")
@@ -388,12 +390,12 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             tts_interrupted = False
             
             # Determine if we should show follow-up prompt
-            # - Show prompt for tool calls (has tool_calls) and non-question statements
-            # - Don't show prompt if response is a question (ends with ?)
-            show_followup_prompt = True
+            # Only show prompt if response ends with a question mark
+            # (i.e., the assistant is asking the user something)
+            show_followup_prompt = False
             if reply and reply.rstrip().endswith("?"):
-                # Response is a question - don't show prompt, just listen
-                show_followup_prompt = False
+                # Response is a question - show follow-up prompt to listen for answer
+                show_followup_prompt = True
 
             # If user interrupted while we were processing, do not speak stale reply.
             if request_gen != interrupt_generation:
