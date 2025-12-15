@@ -1,5 +1,4 @@
-# Wyzer Phase 6 - Pinned Compatible Versions
-# These versions are tested and work together without conflicts
+# Wyzer Phase 6 - Pinned Compatible Versions (without faster-whisper due to av FFmpeg dependency)
 
 # Audio & Voice
 sounddevice==0.4.6
@@ -15,11 +14,6 @@ silero-vad==6.2.0
 openwakeword==0.6.0
 onnxruntime==1.16.3
 huggingface-hub==0.17.3
-
-# STT (Speech-to-Text)
-# Note: faster-whisper requires av (PyAV) which needs FFmpeg.
-# Install manually: pip install faster-whisper==0.10.0 --no-deps
-ctranslate2==4.3.1
 
 # TTS (Text-to-Speech)
 TTS==0.22.0
@@ -71,3 +65,4 @@ pytest==9.0.0
 
 # Development
 setuptools==75.0.0
+

@@ -1488,6 +1488,11 @@ class WyzerAssistantMultiprocess:
                     # When TTS finishes, check if this was a followup prompt that needs listening
                     if self._waiting_for_followup_tts:
                         self._waiting_for_followup_tts = False
+                        # Wait for audio buffer to fully drain before starting to listen
+                        # This prevents catching the tail end of TTS through the mic
+                        time.sleep(0.6)
+                        # Drain any audio that was captured during TTS playback
+                        self._drain_audio_queue(0.2)
                         # Now that the followup TTS is done, start listening for user response
                         self.state.transition_to(AssistantState.FOLLOWUP)
                         self.audio_buffer = []

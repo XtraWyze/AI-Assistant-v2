@@ -2,3 +2,9 @@
 /.venv
 /wyzer/core/__pycache__
 /.venv_new
+/venv_new
+/tests/__pycache__
+/scripts/__pycache__
+/wyzer/core/__pycache__
+/wyzer/core/__pycache__
+/__pycache__
