@@ -1011,6 +1011,7 @@ class WyzerAssistantMultiprocess:
         # Brain speaking flag (driven by worker LOG events)
         self._brain_speaking: bool = False
         self._show_followup_prompt: bool = True  # Whether to show "Is there anything else?" prompt
+        self._waiting_for_followup_tts: bool = False  # Track when we're waiting for followup TTS to finish
 
         self._exit_after_tts: bool = False
 
@@ -1484,8 +1485,19 @@ class WyzerAssistantMultiprocess:
                     self._brain_speaking = True
                 elif text in {"tts_finished", "tts_interrupted"}:
                     self._brain_speaking = False
-                    # When TTS finishes, enter FOLLOWUP (if enabled and not no-hotword mode)
-                    if Config.FOLLOWUP_ENABLED and self.enable_hotword and self.state.is_in_state(AssistantState.IDLE):
+                    # When TTS finishes, check if this was a followup prompt that needs listening
+                    if self._waiting_for_followup_tts:
+                        self._waiting_for_followup_tts = False
+                        # Now that the followup TTS is done, start listening for user response
+                        self.state.transition_to(AssistantState.FOLLOWUP)
+                        self.audio_buffer = []
+                        self.state.speech_detected = False
+                        self.state.silence_frames = 0
+                        self.state.speech_frames_count = 0
+                        self.state.total_frames_recorded = 0
+                        self.followup_manager.start_followup_window()
+                    # When TTS finishes for non-followup response, enter FOLLOWUP (if enabled and not no-hotword mode)
+                    elif Config.FOLLOWUP_ENABLED and self.enable_hotword and self.state.is_in_state(AssistantState.IDLE):
                         self._start_followup_window()
 
                 if level == "DEBUG":
@@ -1552,7 +1564,8 @@ class WyzerAssistantMultiprocess:
     def _start_followup_window(self) -> None:
         """
         Start a FOLLOWUP listening window after TTS completes (multiprocess).
-        Enqueues a follow-up prompt (if appropriate) and transitions to FOLLOWUP state.
+        Enqueues a follow-up prompt (if appropriate) and sets flag to start
+        listening once the prompt TTS finishes.
         """
         if not Config.FOLLOWUP_ENABLED:
             # FOLLOWUP disabled, go back to IDLE
@@ -1588,16 +1601,17 @@ class WyzerAssistantMultiprocess:
                 },
             )
             self.logger.info("Enqueued follow-up prompt for TTS")
-        
-        # Transition to FOLLOWUP state (will be ready when TTS finishes)
-        self.state.transition_to(AssistantState.FOLLOWUP)
-        self.audio_buffer = []
-        self.state.speech_detected = False
-        self.state.silence_frames = 0
-        self.state.speech_frames_count = 0
-        self.state.total_frames_recorded = 0
-        
-        self.followup_manager.start_followup_window()
+            # Flag that we're waiting for this TTS to finish before starting listening
+            self._waiting_for_followup_tts = True
+        else:
+            # No prompt to speak, go directly to listening
+            self.state.transition_to(AssistantState.FOLLOWUP)
+            self.audio_buffer = []
+            self.state.speech_detected = False
+            self.state.silence_frames = 0
+            self.state.speech_frames_count = 0
+            self.state.total_frames_recorded = 0
+            self.followup_manager.start_followup_window()
 
     def _reset_to_idle(self) -> None:
         self._clear_bargein_flags()
