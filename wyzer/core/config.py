@@ -24,14 +24,49 @@ class Config:
     VAD_MIN_SPEECH_DURATION_MS: int = int(os.environ.get("WYZER_VAD_MIN_SPEECH_MS", "250"))
     
     # Hotword settings
+    # Legacy single-wakeword settings (still supported for backward compatibility)
     HOTWORD_KEYWORDS: List[str] = os.environ.get("WYZER_HOTWORD_KEYWORDS", "hey wyzer,wyzer").split(",")
     HOTWORD_THRESHOLD: float = float(os.environ.get("WYZER_HOTWORD_THRESHOLD", "0.5"))
     # Require this many consecutive frames above threshold before triggering.
     # Helps prevent false triggers from noise / TTS bleed-through.
     HOTWORD_TRIGGER_STREAK: int = int(os.environ.get("WYZER_HOTWORD_TRIGGER_STREAK", "3"))
-    HOTWORD_MODEL_PATH: str = os.environ.get("WYZER_HOTWORD_MODEL_PATH", "")
+    HOTWORD_MODEL_PATH: str = os.environ.get("WYZER_HOTWORD_MODEL_PATH", "hey_Wyzer.onnx")
     HOTWORD_COOLDOWN_SEC: float = float(os.environ.get("WYZER_HOTWORD_COOLDOWN_SEC", "1.5"))
     POST_IDLE_DRAIN_SEC: float = float(os.environ.get("WYZER_POST_IDLE_DRAIN_SEC", "0.5"))
+    
+    # Multi-wakeword configuration (list of wakeword model configs)
+    # Each entry: {"name": str, "model_path": str, "threshold": float, "cooldown_ms": int}
+    # If empty, falls back to legacy single-model config above
+    HOTWORD_MODELS: List[dict] = [
+        {
+            "name": "hey wyzer",
+            "model_path": "hey_Wyzer.onnx",
+            "threshold": 0.5,
+            "cooldown_ms": 1500
+        },
+        {
+            "name": "wyzer",
+            "model_path": "wiser.onnx",
+            "threshold": 0.5,
+            "cooldown_ms": 1500
+        }
+    ]
+    
+    @classmethod
+    def get_hotword_models(cls) -> List[dict]:
+        """
+        Get configured hotword models.
+        Returns multi-model config if set, otherwise builds from legacy single-model config.
+        """
+        if cls.HOTWORD_MODELS:
+            return cls.HOTWORD_MODELS
+        # Fallback to legacy single-model config
+        return [{
+            "name": cls.HOTWORD_KEYWORDS[0] if cls.HOTWORD_KEYWORDS else "wakeword",
+            "model_path": cls.HOTWORD_MODEL_PATH,
+            "threshold": cls.HOTWORD_THRESHOLD,
+            "cooldown_ms": int(cls.HOTWORD_COOLDOWN_SEC * 1000)
+        }]
     
     # STT settings
     WHISPER_MODEL: str = os.environ.get("WYZER_WHISPER_MODEL", "small")
