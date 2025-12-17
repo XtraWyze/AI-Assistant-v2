@@ -101,6 +101,9 @@ class WyzerAssistant:
         self._bargein_wait_speech_deadline_ts: float = 0.0
         self._speaking_start_ts: float = 0.0
         
+        # No-speech-start timeout tracking: deadline for speech to begin after LISTENING starts
+        self._no_speech_start_deadline_ts: float = 0.0
+        
         # Background transcription
         self.stt_thread: Optional[threading.Thread] = None
         self.stt_result: Optional[str] = None
@@ -355,6 +358,10 @@ class WyzerAssistant:
                 # Transition to LISTENING
                 self.state.transition_to(AssistantState.LISTENING)
                 self.audio_buffer = []
+                
+                # Set no-speech-start deadline for quick abort if user stays silent
+                self._no_speech_start_deadline_ts = time.time() + Config.NO_SPEECH_START_TIMEOUT_SEC
+                
                 self.logger.info("Listening... (speak now)")
     
     def _process_listening(self, audio_frame: np.ndarray) -> None:
@@ -388,6 +395,9 @@ class WyzerAssistant:
                 self.logger.debug("Speech started")
                 self.state.speech_detected = True
                 
+                # Clear no-speech-start deadline since speech has begun
+                self._no_speech_start_deadline_ts = 0.0
+                
                 # Clear barge-in pending flag when speech actually starts
                 if self._bargein_pending_speech:
                     self.logger.debug("Speech started after barge-in - clearing pending flag")
@@ -404,6 +414,18 @@ class WyzerAssistant:
         # Check stop conditions
         should_stop = False
         stop_reason = ""
+        
+        # 0. No-speech-start timeout: abort early if user never begins speaking
+        #    This provides a fast exit when user triggers hotword but stays silent.
+        #    Skip this check if barge-in is pending (use barge-in grace period instead).
+        if (not self.state.speech_detected 
+            and not self._bargein_pending_speech
+            and self._no_speech_start_deadline_ts > 0
+            and time.time() > self._no_speech_start_deadline_ts):
+            self.logger.info(f"[LISTENING] No speech start within {Config.NO_SPEECH_START_TIMEOUT_SEC}s -> abort")
+            self._no_speech_start_deadline_ts = 0.0  # Reset deadline
+            self._reset_to_idle()
+            return
         
         # 1. Silence timeout after speech
         if (self.state.speech_detected and 
@@ -1000,6 +1022,9 @@ class WyzerAssistantMultiprocess:
         self._bargein_pending_speech: bool = False
         self._bargein_wait_speech_deadline_ts: float = 0.0
         self._speaking_start_ts: float = 0.0
+        
+        # No-speech-start timeout tracking: deadline for speech to begin after LISTENING starts
+        self._no_speech_start_deadline_ts: float = 0.0
 
         # Audio buffer
         self.audio_buffer: List[np.ndarray] = []
@@ -1226,23 +1251,50 @@ class WyzerAssistantMultiprocess:
 
         # Hotword must barge-in instantly if TTS is speaking.
         # Only send INTERRUPT when the worker reports it's speaking.
-        if self.speak_hotword_interrupt and self._brain_speaking and self._core_to_brain_q:
+        is_bargein = self.speak_hotword_interrupt and self._brain_speaking and self._core_to_brain_q
+        if is_bargein:
             safe_put(self._core_to_brain_q, {"type": "INTERRUPT", "reason": "hotword"})
+            # Enable post-barge-in speech gating: require speech to start within a grace period
+            # This prevents the VAD from immediately timing out on residual silence after interrupting TTS
+            if Config.POST_BARGEIN_REQUIRE_SPEECH_START:
+                self._bargein_pending_speech = True
+                self._bargein_wait_speech_deadline_ts = current_time + Config.POST_BARGEIN_WAIT_FOR_SPEECH_SEC
+                self.logger.debug(
+                    f"Post-barge-in speech gating enabled; "
+                    f"waiting for speech start up to {Config.POST_BARGEIN_WAIT_FOR_SPEECH_SEC}s"
+                )
 
         # Drain a bit more to remove residual hotword audio
         self._drain_audio_queue(Config.POST_IDLE_DRAIN_SEC)
 
         self.state.transition_to(AssistantState.LISTENING)
         self.audio_buffer = []
+        
+        # Set no-speech-start deadline for quick abort if user stays silent
+        # Skip if barge-in is pending (barge-in uses its own grace period)
+        if not self._bargein_pending_speech:
+            self._no_speech_start_deadline_ts = time.time() + Config.NO_SPEECH_START_TIMEOUT_SEC
+        
         self.logger.info("Listening... (speak now)")
 
     def _process_listening_timeout_tick(self) -> None:
-        if not self._bargein_pending_speech:
-            return
+        """Check for timeout conditions when no audio frame is available"""
         current_time = time.time()
-        if current_time > self._bargein_wait_speech_deadline_ts:
-            self.logger.info("Post-barge-in speech wait timeout - returning to IDLE")
-            self._clear_bargein_flags()
+        
+        # Check post-barge-in speech wait timeout
+        if self._bargein_pending_speech:
+            if current_time > self._bargein_wait_speech_deadline_ts:
+                self.logger.info("Post-barge-in speech wait timeout - returning to IDLE")
+                self._clear_bargein_flags()
+                self._reset_to_idle()
+            return
+        
+        # Check no-speech-start timeout (only if speech hasn't started yet)
+        if (not self.state.speech_detected 
+            and self._no_speech_start_deadline_ts > 0
+            and current_time > self._no_speech_start_deadline_ts):
+            self.logger.info(f"[LISTENING] No speech start within {Config.NO_SPEECH_START_TIMEOUT_SEC}s -> abort")
+            self._no_speech_start_deadline_ts = 0.0  # Reset deadline
             self._reset_to_idle()
 
     def _process_listening(self, audio_frame: np.ndarray) -> None:
@@ -1263,6 +1315,10 @@ class WyzerAssistantMultiprocess:
             if not self.state.speech_detected:
                 self.logger.debug("Speech started")
                 self.state.speech_detected = True
+                
+                # Clear no-speech-start deadline since speech has begun
+                self._no_speech_start_deadline_ts = 0.0
+                
                 if self._bargein_pending_speech:
                     self.logger.debug("Speech started after barge-in - clearing pending flag")
                     self._bargein_pending_speech = False
@@ -1274,6 +1330,19 @@ class WyzerAssistantMultiprocess:
 
         should_stop = False
         stop_reason = ""
+        
+        # 0. No-speech-start timeout: abort early if user never begins speaking
+        #    This provides a fast exit when user triggers hotword but stays silent.
+        #    Skip this check if barge-in is pending (use barge-in grace period instead).
+        if (not self.state.speech_detected 
+            and not self._bargein_pending_speech
+            and self._no_speech_start_deadline_ts > 0
+            and time.time() > self._no_speech_start_deadline_ts):
+            self.logger.info(f"[LISTENING] No speech start within {Config.NO_SPEECH_START_TIMEOUT_SEC}s -> abort")
+            self._no_speech_start_deadline_ts = 0.0  # Reset deadline
+            self._reset_to_idle()
+            return
+        
         if (
             self.state.speech_detected
             and self.state.silence_frames >= Config.get_silence_timeout_frames()

@@ -789,9 +789,9 @@ class MoveWindowToMonitorTool(ToolBase):
                 },
                 "position": {
                     "type": "string",
-                    "enum": ["left", "right", "center", "maximize"],
-                    "description": "Position on monitor",
-                    "default": "maximize"
+                    "enum": ["preserve", "left", "right", "center", "maximize"],
+                    "description": "Position on monitor ('preserve' keeps current size/state)",
+                    "default": "preserve"
                 }
             },
             "required": ["monitor"],
@@ -804,7 +804,7 @@ class MoveWindowToMonitorTool(ToolBase):
         title = kwargs.get("title")
         process = kwargs.get("process")
         monitor_spec = kwargs.get("monitor", 0)
-        position = kwargs.get("position", "maximize")
+        position = kwargs.get("position", "preserve")
 
         if not title and not process:
             return {
@@ -868,7 +868,29 @@ class MoveWindowToMonitorTool(ToolBase):
             mon_w = monitor["width"]
             mon_h = monitor["height"]
 
-            if position == "maximize":
+            if position == "preserve":
+                # Get current window rect to preserve size
+                if HAS_PYWIN32:
+                    rect = win32gui.GetWindowRect(hwnd)
+                    win_w = rect[2] - rect[0]
+                    win_h = rect[3] - rect[1]
+                else:
+                    rect = ctypes.wintypes.RECT()
+                    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                    win_w = rect.right - rect.left
+                    win_h = rect.bottom - rect.top
+                
+                # Center the preserved window size on the target monitor
+                win_x = mon_x + (mon_w - win_w) // 2
+                win_y = mon_y + (mon_h - win_h) // 2
+                
+                # Clamp to monitor bounds
+                win_x = max(mon_x, min(win_x, mon_x + mon_w - win_w))
+                win_y = max(mon_y, min(win_y, mon_y + mon_h - win_h))
+                
+                user32.SetWindowPos(hwnd, 0, win_x, win_y, win_w, win_h, 0)
+
+            elif position == "maximize":
                 if HAS_PYWIN32:
                     win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                 else:

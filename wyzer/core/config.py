@@ -19,6 +19,10 @@ class Config:
     MAX_RECORD_SECONDS: float = float(os.environ.get("WYZER_MAX_RECORD_SECONDS", "10.0"))
     VAD_SILENCE_TIMEOUT: float = float(os.environ.get("WYZER_VAD_SILENCE_TIMEOUT", "1.2"))
     
+    # No-speech-start timeout: abort listening if VAD never detects speech start within this window
+    # This provides a fast exit when user triggers hotword but stays silent (instead of waiting for max duration).
+    NO_SPEECH_START_TIMEOUT_SEC: float = float(os.environ.get("WYZER_NO_SPEECH_START_TIMEOUT_SEC", "2.5"))
+    
     # VAD settings
     VAD_THRESHOLD: float = float(os.environ.get("WYZER_VAD_THRESHOLD", "0.5"))
     VAD_MIN_SPEECH_DURATION_MS: int = int(os.environ.get("WYZER_VAD_MIN_SPEECH_MS", "250"))
@@ -163,3 +167,8 @@ class Config:
     def get_silence_timeout_frames(cls) -> int:
         """Get number of frames for silence timeout"""
         return int(cls.VAD_SILENCE_TIMEOUT * cls.SAMPLE_RATE / cls.CHUNK_SAMPLES)
+    
+    @classmethod
+    def get_no_speech_start_timeout_frames(cls) -> int:
+        """Get number of frames for no-speech-start timeout (abort if speech never begins)"""
+        return int(cls.NO_SPEECH_START_TIMEOUT_SEC * cls.SAMPLE_RATE / cls.CHUNK_SAMPLES)
