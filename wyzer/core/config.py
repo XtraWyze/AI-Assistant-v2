@@ -17,7 +17,7 @@ class Config:
     
     # Recording limits
     MAX_RECORD_SECONDS: float = float(os.environ.get("WYZER_MAX_RECORD_SECONDS", "10.0"))
-    VAD_SILENCE_TIMEOUT: float = float(os.environ.get("WYZER_VAD_SILENCE_TIMEOUT", "0.8"))
+    VAD_SILENCE_TIMEOUT: float = float(os.environ.get("WYZER_VAD_SILENCE_TIMEOUT", "1.2"))
     
     # VAD settings
     VAD_THRESHOLD: float = float(os.environ.get("WYZER_VAD_THRESHOLD", "0.5"))

@@ -23,7 +23,7 @@ import numpy as np
 from wyzer.core.config import Config
 from wyzer.core.ipc import now_ms, safe_put
 from wyzer.core.logger import get_logger, init_logger
-from wyzer.core.followup_manager import FollowupManager
+from wyzer.core.followup_manager import FollowupManager, is_exit_sentinel
 from wyzer.stt.stt_router import STTRouter
 from wyzer.tts.tts_router import TTSRouter
 from wyzer.tools.timer_tool import check_timer_finished
@@ -50,6 +50,41 @@ def _apply_config(config_dict: Dict[str, Any]) -> None:
         Config.WHISPER_DEVICE = str(config_dict["whisper_device"])
     if "whisper_compute_type" in config_dict:
         Config.WHISPER_COMPUTE_TYPE = str(config_dict["whisper_compute_type"])
+
+
+def _is_capture_valid(text: str) -> bool:
+    """
+    Check if a transcript represents a valid speech capture.
+    
+    Returns False for empty, whitespace-only, or single-token transcripts
+    that likely result from silence timeout with no real speech.
+    This prevents follow-up mode from triggering after empty captures.
+    
+    Args:
+        text: The transcribed text from STT
+        
+    Returns:
+        True if transcript is valid for processing, False otherwise
+    """
+    if not text:
+        return False
+    
+    stripped = text.strip()
+    if not stripped:
+        return False
+    
+    # Count tokens (words) - single token is likely noise/artifact
+    tokens = stripped.split()
+    if len(tokens) <= 1:
+        # Single token might be noise, filler word, or partial hotword
+        # Allow it only if it's a recognized command word
+        single_token = tokens[0].lower() if tokens else ""
+        # Short filler words that aren't real commands
+        noise_words = {"um", "uh", "hmm", "hm", "ah", "oh", "er", "like", "so", "and"}
+        if single_token in noise_words:
+            return False
+    
+    return True
 
 
 def _read_wav_to_float32(wav_path: str) -> np.ndarray:
@@ -315,7 +350,13 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                 user_text = stt.transcribe(audio)
                 stt_ms = now_ms() - stt_start
 
-                if not user_text:
+                # Check if transcript is valid (not empty/minimal)
+                # This handles cases where VAD picked up noise or hotword bleed-through
+                # but no real speech was captured. We set capture_valid=False so the
+                # core process knows NOT to enter follow-up mode.
+                capture_valid = _is_capture_valid(user_text)
+
+                if not user_text or not capture_valid:
                     safe_put(
                         brain_to_core_q,
                         {
@@ -334,6 +375,8 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                                 },
                                 "is_followup": meta.get("is_followup", False),  # Preserve followup flag
                                 "followup_chain": meta.get("followup_chain"),  # Preserve chain count
+                                "capture_valid": False,  # Invalid capture - don't enter follow-up
+                                "user_text": user_text,  # Include for debugging even if invalid
                             },
                         },
                     )
@@ -343,11 +386,16 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                 user_text = str(msg.get("text") or "")
 
             # Check if this is an exit phrase (in any mode) - skip orchestrator processing
+            # This is the SINGLE source of truth for exit detection in multiprocess mode.
+            # We use check_exit_phrase() which returns a sentinel, preventing double-detection.
             is_followup = meta.get("is_followup", False)
+            exit_sentinel = None
             if user_text:
                 followup_mgr = FollowupManager()
-                if followup_mgr.is_exit_phrase(user_text):
+                exit_sentinel = followup_mgr.check_exit_phrase(user_text, log_detection=True)
+                if exit_sentinel:
                     # Exit phrase detected - don't process through orchestrator, return empty
+                    # Include the sentinel in meta so core process knows not to re-check
                     reply = ""
                     tts_text = None
                     tool_calls = None
@@ -376,6 +424,7 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                                 "is_followup": is_followup,
                                 "followup_chain": meta.get("followup_chain"),
                                 "show_followup_prompt": False,  # CRITICAL: Don't show follow-up prompt on exit
+                                "exit_sentinel": exit_sentinel,  # Sentinel for core to skip re-detection
                             },
                         },
                     )
@@ -455,6 +504,7 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                         "followup_chain": meta.get("followup_chain"),  # Preserve chain count
                         "show_followup_prompt": show_followup_prompt,  # Whether to show prompt
                         "has_tool_calls": bool(tool_calls),  # Whether response involved tools
+                        "capture_valid": True,  # Valid capture - allow follow-up if appropriate
                     },
                 },
             )

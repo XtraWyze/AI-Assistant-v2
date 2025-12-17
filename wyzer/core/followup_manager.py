@@ -14,9 +14,64 @@ If user says any other text, treat it as a normal query and allow chaining
 """
 import re
 import time
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Union
 from wyzer.core.logger import get_logger
 from wyzer.core.config import Config
+
+
+# ============================================================================
+# EXIT PHRASE SENTINEL
+# ============================================================================
+# When an exit phrase is detected, this sentinel dict is returned instead of
+# the raw transcript. This creates a single source of truth for exit-phrase
+# handling and prevents double-detection in downstream pipeline stages.
+#
+# Sentinel structure (JSON-safe for IPC):
+#   {"type": "exit_followup", "phrase": "<normalized>", "original": "<raw>"}
+#
+# Usage:
+#   result = followup_manager.check_exit_phrase(text)
+#   if is_exit_sentinel(result):
+#       # Handle exit: skip LLM, skip tools, return to IDLE
+#   else:
+#       # result is None, text is a normal query
+# ============================================================================
+
+EXIT_SENTINEL_TYPE = "exit_followup"
+
+
+def make_exit_sentinel(normalized_phrase: str, original_text: str) -> Dict[str, str]:
+    """
+    Create an exit phrase sentinel dict.
+    
+    Args:
+        normalized_phrase: The normalized exit phrase that was matched
+        original_text: The original user transcript
+        
+    Returns:
+        A JSON-safe dict sentinel: {"type": "exit_followup", "phrase": ..., "original": ...}
+    """
+    return {
+        "type": EXIT_SENTINEL_TYPE,
+        "phrase": normalized_phrase,
+        "original": original_text,
+    }
+
+
+def is_exit_sentinel(value: Any) -> bool:
+    """
+    Check if a value is an exit phrase sentinel.
+    
+    Args:
+        value: Any value to check
+        
+    Returns:
+        True if value is an exit sentinel dict, False otherwise
+    """
+    return (
+        isinstance(value, dict) 
+        and value.get("type") == EXIT_SENTINEL_TYPE
+    )
 
 
 class FollowupManager:
@@ -172,6 +227,66 @@ class FollowupManager:
                     return True
         
         return False
+    
+    def check_exit_phrase(self, text: str, log_detection: bool = True) -> Optional[Dict[str, str]]:
+        """
+        Check if transcript matches an exit phrase and return a sentinel if so.
+        
+        This is the PREFERRED method for exit phrase detection as it returns
+        a sentinel that can be propagated through the pipeline to prevent
+        double-detection. The sentinel is JSON-safe for IPC.
+        
+        Args:
+            text: User's transcript
+            log_detection: Whether to log the detection (default True).
+                           Set False to suppress duplicate log entries.
+            
+        Returns:
+            Exit sentinel dict if text matches exit phrase, None otherwise.
+            Sentinel format: {"type": "exit_followup", "phrase": "<normalized>", "original": "<raw>"}
+        """
+        if not text:
+            return None
+        
+        # Normalize: lowercase, remove punctuation, strip whitespace
+        normalized = self._normalize_text(text)
+        words = normalized.split()
+        
+        if not words:
+            return None
+        
+        # Check each exit phrase
+        for phrase in self.EXIT_PHRASES:
+            phrase_normalized = self._normalize_text(phrase)
+            phrase_words = phrase_normalized.split()
+            
+            if not phrase_words:
+                continue
+            
+            matched = False
+            
+            # Exact match
+            if normalized == phrase_normalized:
+                matched = True
+            
+            # Text starts with the phrase (e.g., "no thanks" starts with "no")
+            elif len(words) >= len(phrase_words) and words[:len(phrase_words)] == phrase_words:
+                matched = True
+            
+            # Text ends with the phrase (e.g., "forget it, cancel" ends with "cancel")
+            elif len(words) >= len(phrase_words) and words[-len(phrase_words):] == phrase_words:
+                matched = True
+            
+            # Single word exit phrase - check if it's the first word
+            elif len(phrase_words) == 1 and len(words) >= 1 and words[0] == phrase_words[0]:
+                matched = True
+            
+            if matched:
+                if log_detection:
+                    self.logger.info(f"[EXIT] Exit phrase detected: '{text}' -> '{normalized}'")
+                return make_exit_sentinel(normalized, text)
+        
+        return None
     
     def end_followup_window(self) -> None:
         """Explicitly end the FOLLOWUP window (e.g., when user says exit phrase)"""

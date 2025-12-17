@@ -22,7 +22,7 @@ from typing import Optional, List, Any, Dict
 from wyzer.core.config import Config
 from wyzer.core.logger import get_logger
 from wyzer.core.state import AssistantState, RuntimeState
-from wyzer.core.followup_manager import FollowupManager
+from wyzer.core.followup_manager import FollowupManager, is_exit_sentinel
 from wyzer.audio.mic_stream import MicStream
 from wyzer.audio.vad import VadDetector
 from wyzer.audio.hotword import HotwordDetector
@@ -571,9 +571,11 @@ class WyzerAssistant:
                 self.logger.info(f"Transcript: {transcript}")
                 print(f"\nYou: {transcript}")
                 
-                # Check if this is an exit phrase (both FOLLOWUP and initial interaction)
-                if self.followup_manager.is_exit_phrase(transcript):
-                    self.logger.info("[EXIT] Exit phrase detected - skipping LLM processing")
+                # Check if this is an exit phrase using sentinel pattern
+                # This is the SINGLE source of truth for exit detection (single-process mode)
+                exit_sentinel = self.followup_manager.check_exit_phrase(transcript)
+                if exit_sentinel:
+                    # Exit phrase detected - skip LLM processing, return to idle silently
                     if was_followup:
                         self.followup_manager.end_followup_window()
                     self._reset_to_idle()
@@ -1552,20 +1554,58 @@ class WyzerAssistantMultiprocess:
                 user_text = str(meta.get("user_text") or "").strip()
                 is_followup = meta.get("is_followup", False)
                 
-                # Capture whether to show follow-up prompt (set by brain worker)
-                self._show_followup_prompt = meta.get("show_followup_prompt", True)
+                # Check if this was a valid capture (not empty/minimal transcript)
+                # If capture_valid is False, we should NOT enter follow-up mode even
+                # if the response would normally trigger it. This prevents the case
+                # where user activates hotword but stays silent, then says "never mind"
+                # which would incorrectly be treated as a follow-up exit.
+                capture_valid = meta.get("capture_valid", True)  # Default True for backward compat
                 
-                # Check if this is an exit phrase (safety check for any context)
-                if user_text and self.followup_manager.is_exit_phrase(user_text):
-                    self.logger.info("[EXIT] Exit phrase detected in RESULT - silently returning to idle")
+                # Capture whether to show follow-up prompt (set by brain worker)
+                # Override to False if capture was invalid
+                self._show_followup_prompt = meta.get("show_followup_prompt", True) and capture_valid
+                
+                # Check if brain worker already detected exit phrase (sentinel in meta)
+                # This avoids double-detection: brain worker is the single source of truth
+                # for exit phrase detection in multiprocess mode.
+                exit_sentinel = meta.get("exit_sentinel")
+                if is_exit_sentinel(exit_sentinel):
+                    # Exit phrase already detected by brain worker - handle silently
+                    # NOTE: We do NOT send INTERRUPT here because:
+                    # 1. Brain worker already returned empty tts_text (no TTS to interrupt)
+                    # 2. Sending INTERRUPT would clear TTS queue, including important
+                    #    announcements like timer alarms that may have just been enqueued
+                    self.logger.debug(f"[EXIT] Handling exit sentinel from brain: {exit_sentinel.get('phrase')}")
                     if is_followup:
                         self.followup_manager.end_followup_window()
                     
-                    # Interrupt any TTS to avoid speaking the response
-                    if self._core_to_brain_q:
-                        safe_put(self._core_to_brain_q, {"type": "INTERRUPT", "reason": "exit_phrase"})
-                    
-                    # Silently exit without printing or speaking
+                    # Silently return to idle (no INTERRUPT needed - brain handled it)
+                    self._reset_to_idle()
+                    continue
+                
+                # Fallback: check for exit phrase in user_text if NOT already handled
+                # This catches edge cases where exit phrase was spoken outside followup
+                # context (e.g., "never mind" as initial utterance without hotword mode).
+                # Only check if:
+                # 1. No sentinel was set AND user_text is present
+                # 2. capture_valid is True (don't check empty/noise captures for exit phrases)
+                if user_text and not exit_sentinel and capture_valid:
+                    fallback_sentinel = self.followup_manager.check_exit_phrase(user_text, log_detection=True)
+                    if fallback_sentinel:
+                        self.logger.info("[EXIT] Fallback exit phrase detection - silently returning to idle")
+                        if is_followup:
+                            self.followup_manager.end_followup_window()
+                        
+                        # Interrupt any TTS
+                        if self._core_to_brain_q:
+                            safe_put(self._core_to_brain_q, {"type": "INTERRUPT", "reason": "exit_phrase"})
+                        
+                        self._reset_to_idle()
+                        continue
+                
+                # For invalid captures, skip printing and just reset quietly
+                if not capture_valid:
+                    self.logger.debug(f"[CAPTURE] Invalid capture (empty/minimal transcript), skipping follow-up")
                     self._reset_to_idle()
                     continue
                 
