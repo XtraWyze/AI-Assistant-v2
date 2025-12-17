@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "timestamp": 1765783320.1390784,
+  "timestamp": 1766013613.5411203,
   "folders": {
     "desktop": "C:\\Users\\kolyw\\Desktop",
     "downloads": "C:\\Users\\kolyw\\Downloads",
@@ -496,12 +496,7 @@
       "type": "exe"
     }
   },
-  "aliases": {
-    "vs code": {
-      "type": "app",
-      "target": "C:\\Program Files\\Microsoft VS Code\\Code.exe"
-    }
-  },
+  "aliases": {},
   "tier2_apps": [
     {
       "name": "Arduino Ide",
@@ -1211,6 +1206,223 @@
       "mtime": 1760074154.0
     },
     {
+      "name": "Easyanticheat Eos",
+      "exe_path": "C:\\Program Files (x86)\\EasyAntiCheat_EOS\\EasyAntiCheat_EOS.exe",
+      "source": "program_files",
+      "folder": "EasyAntiCheat_EOS",
+      "mtime": 1761887347.5999026
+    },
+    {
+      "name": "Easyfmsi",
+      "exe_path": "C:\\Program Files (x86)\\Futuremark\\SystemInfo\\EasyFMSI.exe",
+      "source": "program_files",
+      "folder": "SystemInfo",
+      "mtime": 1756158998.0
+    },
+    {
+      "name": "Fmsicompat",
+      "exe_path": "C:\\Program Files (x86)\\Futuremark\\SystemInfo\\FMSICompat.exe",
+      "source": "program_files",
+      "folder": "SystemInfo",
+      "mtime": 1756158998.0
+    },
+    {
+      "name": "Fmsidiag",
+      "exe_path": "C:\\Program Files (x86)\\Futuremark\\SystemInfo\\FMSIDiag.exe",
+      "source": "program_files",
+      "folder": "SystemInfo",
+      "mtime": 1756159000.0
+    },
+    {
+      "name": "Fmsiscan",
+      "exe_path": "C:\\Program Files (x86)\\Futuremark\\SystemInfo\\FMSIScan.exe",
+      "source": "program_files",
+      "folder": "SystemInfo",
+      "mtime": 1756159002.0
+    },
+    {
+      "name": "Fmsisvc",
+      "exe_path": "C:\\Program Files (x86)\\Futuremark\\SystemInfo\\FMSISvc.exe",
+      "source": "program_files",
+      "folder": "SystemInfo",
+      "mtime": 1756159002.0
+    },
+    {
+      "name": "Fmsix",
+      "exe_path": "C:\\Program Files (x86)\\Futuremark\\SystemInfo\\FMSIX.exe",
+      "source": "program_files",
+      "folder": "SystemInfo",
+      "mtime": 1756159004.0
+    },
+    {
+      "name": "Extexport",
+      "exe_path": "C:\\Program Files (x86)\\Internet Explorer\\ExtExport.exe",
+      "source": "program_files",
+      "folder": "Internet Explorer",
+      "mtime": 1765307913.1027968
+    },
+    {
+      "name": "Ieinstal",
+      "exe_path": "C:\\Program Files (x86)\\Internet Explorer\\ieinstal.exe",
+      "source": "program_files",
+      "folder": "Internet Explorer",
+      "mtime": 1765307913.2347186
+    },
+    {
+      "name": "Ielowutil",
+      "exe_path": "C:\\Program Files (x86)\\Internet Explorer\\ielowutil.exe",
+      "source": "program_files",
+      "folder": "Internet Explorer",
+      "mtime": 1711956138.5910475
+    },
+    {
+      "name": "Iexplore",
+      "exe_path": "C:\\Program Files (x86)\\Internet Explorer\\iexplore.exe",
+      "source": "program_files",
+      "folder": "Internet Explorer",
+      "mtime": 1765307913.1353688
+    },
+    {
+      "name": "Rzs3Wizardpkgs3",
+      "exe_path": "C:\\Program Files (x86)\\Razer\\RzS3WizardPkg\\RzS3WizardPkgS3.exe",
+      "source": "program_files",
+      "folder": "RzS3WizardPkg",
+      "mtime": 1686926246.0
+    },
+    {
+      "name": "Drivers",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\drivers.exe",
+      "source": "program_files",
+      "folder": "bin",
+      "mtime": 1755719174.0
+    },
+    {
+      "name": "Fossilize Replay",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\fossilize-replay.exe",
+      "source": "program_files",
+      "folder": "bin",
+      "mtime": 1763795002.0
+    },
+    {
+      "name": "Fossilize Replay64",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\fossilize-replay64.exe",
+      "source": "program_files",
+      "folder": "bin",
+      "mtime": 1763795010.0
+    },
+    {
+      "name": "Gldriverquery",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\gldriverquery.exe",
+      "source": "program_files",
+      "folder": "bin",
+      "mtime": 1507929144.0
+    },
+    {
+      "name": "Gldriverquery64",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\gldriverquery64.exe",
+      "source": "program_files",
+      "folder": "bin",
+      "mtime": 1509469058.0
+    },
+    {
+      "name": "Secure Desktop Capture",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\secure_desktop_capture.exe",
+      "source": "program_files",
+      "folder": "bin",
+      "mtime": 1763795004.0
+    },
+    {
+      "name": "Steamxboxutil",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\steamxboxutil.exe",
+      "source": "program_files",
+      "folder": "bin",
+      "mtime": 1763795004.0
+    },
+    {
+      "name": "Steamxboxutil64",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\steamxboxutil64.exe",
+      "source": "program_files",
+      "folder": "bin",
+      "mtime": 1763795010.0
+    },
+    {
+      "name": "Steam Monitor",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\steam_monitor.exe",
+      "source": "program_files",
+      "folder": "bin",
+      "mtime": 1763795004.0
+    },
+    {
+      "name": "Vulkandriverquery",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\vulkandriverquery.exe",
+      "source": "program_files",
+      "folder": "bin",
+      "mtime": 1763795004.0
+    },
+    {
+      "name": "Vulkandriverquery64",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\vulkandriverquery64.exe",
+      "source": "program_files",
+      "folder": "bin",
+      "mtime": 1763795010.0
+    },
+    {
+      "name": "Gameoverlayui",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\gameoverlayui.exe",
+      "source": "program_files",
+      "folder": "Steam",
+      "mtime": 1763795000.0
+    },
+    {
+      "name": "Gameoverlayui64",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\gameoverlayui64.exe",
+      "source": "program_files",
+      "folder": "Steam",
+      "mtime": 1763795010.0
+    },
+    {
+      "name": "Steam",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\steam.exe",
+      "source": "program_files",
+      "folder": "Steam",
+      "mtime": 1763795000.0
+    },
+    {
+      "name": "Steamerrorreporter",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\steamerrorreporter.exe",
+      "source": "program_files",
+      "folder": "Steam",
+      "mtime": 1763795006.0
+    },
+    {
+      "name": "Steamerrorreporter64",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\steamerrorreporter64.exe",
+      "source": "program_files",
+      "folder": "Steam",
+      "mtime": 1763795012.0
+    },
+    {
+      "name": "Steamsysinfo",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\steamsysinfo.exe",
+      "source": "program_files",
+      "folder": "Steam",
+      "mtime": 1763795008.0
+    },
+    {
+      "name": "Streaming",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\streaming_client.exe",
+      "source": "program_files",
+      "folder": "Steam",
+      "mtime": 1763795008.0
+    },
+    {
+      "name": "Writeminidump",
+      "exe_path": "C:\\Program Files (x86)\\Steam\\WriteMiniDump.exe",
+      "source": "program_files",
+      "folder": "Steam",
+      "mtime": 1326478852.0
+    },
+    {
       "name": "Comfyui",
       "exe_path": "C:\\Users\\kolyw\\AppData\\Local\\Programs\\ComfyUI\\ComfyUI.exe",
       "source": "user_programs",
@@ -1229,28 +1441,28 @@
       "exe_path": "C:\\Users\\kolyw\\AppData\\Local\\Programs\\Microsoft VS Code\\bin\\code-tunnel.exe",
       "source": "user_programs",
       "folder": "bin",
-      "mtime": 1765371746.0
+      "mtime": 1766000566.0
     },
     {
       "name": "Code",
       "exe_path": "C:\\Users\\kolyw\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
       "source": "user_programs",
       "folder": "Microsoft VS Code",
-      "mtime": 1765371746.0
+      "mtime": 1766000610.0
     },
     {
       "name": "Ollama App",
       "exe_path": "C:\\Users\\kolyw\\AppData\\Local\\Programs\\Ollama\\ollama app.exe",
       "source": "user_programs",
       "folder": "Ollama",
-      "mtime": 1763605218.0
+      "mtime": 1765517840.0
     },
     {
       "name": "Ollama",
       "exe_path": "C:\\Users\\kolyw\\AppData\\Local\\Programs\\Ollama\\ollama.exe",
       "source": "user_programs",
       "folder": "Ollama",
-      "mtime": 1763605218.0
+      "mtime": 1765517838.0
     },
     {
       "name": "Python",
@@ -36274,22 +36486,15 @@
       "letter": "C",
       "path": "C:\\",
       "total_gb": 930.63,
-      "free_gb": 48.11,
+      "free_gb": 54.64,
       "label": "Local Disk"
     },
     {
       "letter": "D",
       "path": "D:\\",
       "total_gb": 953.87,
-      "free_gb": 444.58,
+      "free_gb": 444.03,
       "label": "New Volume"
-    },
-    {
-      "letter": "E",
-      "path": "E:\\",
-      "total_gb": 238.47,
-      "free_gb": 78.43,
-      "label": "ESD-ISO"
     }
   ],
   "games": [
@@ -36486,8 +36691,8 @@
       "install_path": "C:/Program Files/Epic Games/rocketleague",
       "app_id": "Sugar",
       "aliases": [
-        "rl",
-        "rocket league\u00ae"
+        "rocket league\u00ae",
+        "rl"
       ],
       "confidence": 0.95
     },
@@ -36515,8 +36720,8 @@
       "install_path": null,
       "app_id": null,
       "aliases": [
-        "python 3.11 module docs ",
-        "python 3.11 module docs (64-bit)"
+        "python 3.11 module docs (64-bit)",
+        "python 3.11 module docs "
       ],
       "confidence": 0.8
     },
@@ -36530,8 +36735,8 @@
       "install_path": null,
       "app_id": null,
       "aliases": [
-        "rockstar games launcher",
-        "rockstar"
+        "rockstar",
+        "rockstar games launcher"
       ],
       "confidence": 0.8
     },
@@ -36615,8 +36820,8 @@
       "install_path": null,
       "app_id": null,
       "aliases": [
-        "battlestate games launcher",
-        "battlestate"
+        "battlestate",
+        "battlestate games launcher"
       ],
       "confidence": 0.8
     },
@@ -36959,7 +37164,7 @@
     }
   ],
   "games_scan_meta": {
-    "last_refresh": "2025-12-15 02:22:58",
+    "last_refresh": "2025-12-17 18:20:56",
     "counts": {
       "steam": 18,
       "epic": 4,
@@ -37414,12 +37619,12 @@
     }
   ],
   "uwp_scan_meta": {
-    "last_refresh": "2025-12-15 02:22:59",
+    "last_refresh": "2025-12-17 18:20:57",
     "count": 51,
     "status": "ok"
   },
   "scan_meta": {
-    "last_refresh": "2025-12-15 02:22:00",
+    "last_refresh": "2025-12-17 18:20:14",
     "dirs": {
       "C:\\Program Files": 1765613739.555908,
       "C:\\Program Files (x86)": 1764191160.0504584,

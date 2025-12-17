@@ -1,5 +1,5 @@
 """
-Orchestrator for Wyzer AI Assistant - Phase 6
+Orchestrator for Wyzer AI Assistant - Phase 7
 Coordinates LLM reasoning and tool execution.
 Supports multi-intent commands (Phase 6 enhancement).
 """
@@ -2035,11 +2035,20 @@ def _call_llm(user_text: str, registry) -> Dict[str, Any]:
     Returns:
         Dict with either {"reply": "..."} or {"intents": [...]} or legacy formats
     """
+    # Include session context for conversational continuity (Phase 7)
+    session_context = ""
+    try:
+        from wyzer.brain.prompt import get_session_context_block
+        session_context = get_session_context_block()
+    except Exception:
+        pass
+    
     # Build tool list for prompt
     tools_list = registry.list_tools()
     tools_desc = "\n".join([f"- {t['name']}: {t['description']}" for t in tools_list])
     
     prompt = f"""You are Wyzer, a local voice assistant. You can use tools to help users.
+{session_context}
 
 Available tools:
 {tools_desc}
@@ -2176,11 +2185,19 @@ def _call_llm_reply_only(user_text: str) -> Dict[str, Any]:
 
     Used as a fallback when the LLM returns spurious tool intents.
     """
+    # Include session context for better conversational continuity (Phase 7)
+    session_context = ""
+    try:
+        from wyzer.brain.prompt import get_session_context_block
+        session_context = get_session_context_block()
+    except Exception:
+        pass
+    
     prompt = f"""You are Wyzer, a local voice assistant.
 
 No tools are available for this request.
 Write a natural response to the user.
-
+{session_context}
 RESPONSE FORMAT: JSON only (no markdown):
 {{"reply": "your response"}}
 
@@ -2206,6 +2223,14 @@ def _call_llm_with_execution_summary(
     Returns:
         Dict with {"reply": "..."}
     """
+    # Include session context for conversational continuity (Phase 7)
+    session_context = ""
+    try:
+        from wyzer.brain.prompt import get_session_context_block
+        session_context = get_session_context_block()
+    except Exception:
+        pass
+    
     # Build a summary of what was executed
     summary_parts = []
     for result in execution_summary.ran:
@@ -2224,7 +2249,7 @@ def _call_llm_with_execution_summary(
     summary_text = "\n".join(summary_parts)
     
     prompt = f"""You are Wyzer, a local voice assistant.
-
+{session_context}
 The user asked: {user_text}
 
 I executed the following actions:
@@ -2256,8 +2281,16 @@ def _call_llm_with_tool_result(
     Returns:
         Dict with {"reply": "..."}
     """
+    # Include session context for conversational continuity (Phase 7)
+    session_context = ""
+    try:
+        from wyzer.brain.prompt import get_session_context_block
+        session_context = get_session_context_block()
+    except Exception:
+        pass
+    
     prompt = f"""You are Wyzer, a local voice assistant.
-
+{session_context}
 The user asked: {user_text}
 
 I executed the tool '{tool_name}' with arguments: {json.dumps(tool_args)}

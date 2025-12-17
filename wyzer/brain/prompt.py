@@ -37,14 +37,45 @@ See wyzer.core.orchestrator._call_llm() for the full tool-aware prompt format.
 """
 
 
-def format_prompt(user_input: str) -> str:
+def get_session_context_block() -> str:
+    """
+    Get session context from memory manager for LLM prompt injection.
+    
+    IMPORTANT (Phase 7 contract):
+    - Session context = RAM-only conversation turns from current run
+    - Does NOT include long-term memory from memory.json
+    - LLM may answer questions from session context if topic appeared in recent turns
+    - Long-term memory is only surfaced via explicit "list memories" command
+    
+    Returns:
+        Formatted session context block, or empty string if none
+    """
+    try:
+        from wyzer.memory.memory_manager import get_memory_manager
+        mem_mgr = get_memory_manager()
+        context = mem_mgr.get_session_context(max_turns=5)  # Keep prompt short
+        if context:
+            # Add source hint so LLM stays truthful about where info came from
+            note = "NOTE: The following is from the current session transcript (RAM only), not long-term memory."
+            return f"\n--- Recent conversation context ---\n{note}\n{context}\n--- End context ---\n"
+    except Exception:
+        pass
+    return ""
+
+
+def format_prompt(user_input: str, include_session_context: bool = True) -> str:
     """
     Format user input with system prompt.
     
     Args:
         user_input: User's transcribed speech
+        include_session_context: Whether to include session memory context
         
     Returns:
         Full prompt string for LLM
     """
-    return f"{SYSTEM_PROMPT}\n\nUser: {user_input}\n\nWyzer:"
+    session_block = ""
+    if include_session_context:
+        session_block = get_session_context_block()
+    
+    return f"{SYSTEM_PROMPT}{session_block}\n\nUser: {user_input}\n\nWyzer:"

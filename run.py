@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wyzer AI Assistant - Phase 6
+Wyzer AI Assistant - Phase 7
 Entry point for running the assistant.
 
 Usage:
@@ -296,7 +296,7 @@ def main():
     
     # Print startup banner
     print("\n" + "=" * 60)
-    print("  Wyzer AI Assistant - Phase 6")
+    print("  Wyzer AI Assistant - Phase 7")
     print("=" * 60)
     print(f"  Whisper Model: {args.model}")
     print(f"  Whisper Device: {args.whisper_device}")

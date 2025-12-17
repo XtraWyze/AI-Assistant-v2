@@ -148,6 +148,10 @@ class Config:
     HEARTBEAT_INTERVAL_SEC: float = float(os.environ.get("WYZER_HEARTBEAT_INTERVAL_SEC", "10.0"))
     VERIFY_MODE: bool = os.environ.get("WYZER_VERIFY_MODE", "false").lower() in ("true", "1", "yes")
     
+    # Memory settings (Phase 7)
+    SESSION_MEMORY_TURNS: int = int(os.environ.get("WYZER_SESSION_MEMORY_TURNS", "10"))
+    MEMORY_FILE_PATH: str = os.environ.get("WYZER_MEMORY_FILE_PATH", "wyzer/data/memory.json")
+    
     @classmethod
     def get_frame_duration_ms(cls) -> float:
         """Get frame duration in milliseconds"""

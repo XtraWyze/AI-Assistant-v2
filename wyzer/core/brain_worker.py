@@ -430,6 +430,100 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                     )
                     continue
 
+            # Check if this is an explicit memory command (Phase 7)
+            # Memory commands bypass tools/LLM entirely
+            from wyzer.memory.command_detector import handle_memory_command
+            memory_result = handle_memory_command(user_text) if user_text else None
+            if memory_result:
+                reply, memory_meta = memory_result
+                tts_text = reply
+                tts_start_ms = now_ms()
+                
+                # Enqueue TTS for memory response
+                if tts_enabled and tts_router and reply:
+                    tts_controller.enqueue(reply, meta={"_memory_response": True})
+                
+                # Record this turn in session memory
+                from wyzer.memory.memory_manager import get_memory_manager
+                mem_mgr = get_memory_manager()
+                mem_mgr.add_session_turn(user_text, reply)
+                
+                total_ms = now_ms() - start_ms
+                safe_put(
+                    brain_to_core_q,
+                    {
+                        "type": "RESULT",
+                        "id": req_id,
+                        "reply": reply,
+                        "tool_calls": None,
+                        "tts_text": tts_text,
+                        "meta": {
+                            "timings": {
+                                "stt_ms": stt_ms,
+                                "llm_ms": 0,  # No LLM call
+                                "tool_ms": 0,  # No tool call
+                                "tts_start_ms": tts_start_ms,
+                                "total_ms": total_ms,
+                            },
+                            "tts_interrupted": False,
+                            "user_text": user_text,
+                            "is_followup": is_followup,
+                            "followup_chain": meta.get("followup_chain"),
+                            "show_followup_prompt": False,
+                            "memory_action": memory_meta.get("memory_action"),
+                            "capture_valid": True,
+                        },
+                    },
+                )
+                continue
+
+            # Check if this is a "how do you know" source question (Phase 7 polish)
+            # These bypass LLM to give truthful deterministic answers
+            from wyzer.memory.command_detector import handle_source_question
+            source_result = handle_source_question(user_text) if user_text else None
+            if source_result:
+                reply, source_meta = source_result
+                tts_text = reply
+                tts_start_ms = now_ms()
+                
+                # Enqueue TTS for source response
+                if tts_enabled and tts_router and reply:
+                    tts_controller.enqueue(reply, meta={"_source_response": True})
+                
+                # Record this turn in session memory
+                from wyzer.memory.memory_manager import get_memory_manager
+                mem_mgr = get_memory_manager()
+                mem_mgr.add_session_turn(user_text, reply)
+                
+                total_ms = now_ms() - start_ms
+                safe_put(
+                    brain_to_core_q,
+                    {
+                        "type": "RESULT",
+                        "id": req_id,
+                        "reply": reply,
+                        "tool_calls": None,
+                        "tts_text": tts_text,
+                        "meta": {
+                            "timings": {
+                                "stt_ms": stt_ms,
+                                "llm_ms": 0,  # No LLM call
+                                "tool_ms": 0,  # No tool call
+                                "tts_start_ms": tts_start_ms,
+                                "total_ms": total_ms,
+                            },
+                            "tts_interrupted": False,
+                            "user_text": user_text,
+                            "is_followup": is_followup,
+                            "followup_chain": meta.get("followup_chain"),
+                            "show_followup_prompt": False,
+                            "source_question": True,
+                            "capture_valid": True,
+                        },
+                    },
+                )
+                continue
+
             # LLM + tools via orchestrator
             # Always call orchestrator - it handles NO_OLLAMA mode internally
             # and the hybrid router can handle deterministic commands without LLM
@@ -452,6 +546,12 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                             tool_ms += int(res.get("latency_ms") or 0)
                 except Exception:
                     tool_ms = 0
+
+            # Record this turn in session memory (after successful orchestrator response)
+            from wyzer.memory.memory_manager import get_memory_manager
+            mem_mgr = get_memory_manager()
+            if user_text and reply:
+                mem_mgr.add_session_turn(user_text, reply)
 
             tts_text: Optional[str] = reply
             tts_start_ms: Optional[int] = None
