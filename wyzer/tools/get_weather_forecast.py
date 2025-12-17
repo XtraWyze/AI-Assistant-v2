@@ -197,6 +197,10 @@ class GetWeatherForecastTool(ToolBase):
                     "pattern": "^(metric|imperial|celsius|fahrenheit|c|f)$",
                     "description": "Unit system. Accepted: metric/imperial or celsius/fahrenheit (c/f). Default fahrenheit/imperial.",
                 },
+                "day_offset": {
+                    "type": "integer",
+                    "description": "Day offset for response formatting (0=today, 1=tomorrow, etc.). Used by orchestrator, not the tool itself.",
+                },
             },
             "required": [],
             "additionalProperties": False,

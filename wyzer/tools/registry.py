@@ -84,6 +84,9 @@ def build_default_registry() -> ToolRegistry:
     # Phase 6 tools - Monitor info
     from wyzer.tools.monitor_info import MonitorInfoTool
     
+    # Get window monitor tool
+    from wyzer.tools.get_window_monitor import GetWindowMonitorTool
+    
     # Phase 6 tools - Media controls
     from wyzer.tools.media_controls import (
         MediaPlayPauseTool,
@@ -91,7 +94,8 @@ def build_default_registry() -> ToolRegistry:
         MediaPreviousTool,
         VolumeUpTool,
         VolumeDownTool,
-        VolumeMuteToggleTool
+        VolumeMuteToggleTool,
+        GetNowPlayingTool
     )
 
     # True volume control (pycaw)
@@ -106,6 +110,9 @@ def build_default_registry() -> ToolRegistry:
         SystemStorageListTool,
         SystemStorageOpenTool
     )
+    
+    # Timer tool
+    from wyzer.tools.timer_tool import TimerTool
     
     registry = ToolRegistry()
     
@@ -132,6 +139,9 @@ def build_default_registry() -> ToolRegistry:
     # Register monitor info tool
     registry.register(MonitorInfoTool())
     
+    # Register get window monitor tool
+    registry.register(GetWindowMonitorTool())
+    
     # Register media control tools
     registry.register(MediaPlayPauseTool())
     registry.register(MediaNextTool())
@@ -139,6 +149,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(VolumeUpTool())
     registry.register(VolumeDownTool())
     registry.register(VolumeMuteToggleTool())
+    registry.register(GetNowPlayingTool())
 
     # Register true volume tool (preferred over VK-based volume_* tools)
     registry.register(VolumeControlTool())
@@ -150,5 +161,8 @@ def build_default_registry() -> ToolRegistry:
     registry.register(SystemStorageScanTool())
     registry.register(SystemStorageListTool())
     registry.register(SystemStorageOpenTool())
+    
+    # Register timer tool
+    registry.register(TimerTool())
     
     return registry

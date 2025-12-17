@@ -443,6 +443,7 @@ class FocusWindowTool(ToolBase):
                     "description": "Process name (e.g., 'chrome.exe', 'notepad')"
                 }
             },
+            "required": [],
             "additionalProperties": False
         }
     
@@ -520,6 +521,7 @@ class MinimizeWindowTool(ToolBase):
                     "description": "Process name (e.g., 'chrome.exe', 'notepad')"
                 }
             },
+            "required": [],
             "additionalProperties": False
         }
     
@@ -595,6 +597,7 @@ class MaximizeWindowTool(ToolBase):
                     "description": "Process name (e.g., 'chrome.exe', 'notepad')"
                 }
             },
+            "required": [],
             "additionalProperties": False
         }
     
@@ -675,6 +678,7 @@ class CloseWindowTool(ToolBase):
                     "default": False
                 }
             },
+            "required": [],
             "additionalProperties": False
         }
     

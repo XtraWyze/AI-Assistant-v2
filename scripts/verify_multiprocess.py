@@ -195,6 +195,22 @@ def verify_multiprocess() -> int:
     else:
         logger.warning("     ⚠ WARN: Brain worker process not clearly logged")
     
+    # A3b: Verify tool worker pool
+    logger.info("\n[A3b] Checking for tool worker heartbeats...")
+    if log_capture.find("role=ToolWorker"):
+        logger.info("     ✓ PASS: Tool worker heartbeats found")
+        # Show sample
+        for log in log_capture.logs:
+            if "role=ToolWorker" in log:
+                logger.info(f"     {log}")
+                break
+    elif log_capture.find("[POOL] Worker") and log_capture.find("started"):
+        logger.info("     ✓ PASS: Tool workers started (no heartbeat yet)")
+    elif log_capture.find("workers=["):
+        logger.info("     ✓ PASS: Tool workers visible in Brain heartbeat")
+    else:
+        logger.warning("     ⚠ WARN: No tool worker logs found (may be disabled)")
+    
     # A4: Verify no blocking on heavy operations
     logger.info("\n[A4] Checking for heavy operation async behavior...")
     async_indicators = [

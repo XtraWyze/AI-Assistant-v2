@@ -159,6 +159,111 @@ def shutdown_tool_pool():
         _tool_pool = None
 
 
+def get_tool_pool_heartbeats() -> List[Dict[str, Any]]:
+    """Get worker heartbeats from tool pool for Brain heartbeat logging"""
+    global _tool_pool
+    if _tool_pool is None:
+        return []
+    try:
+        return _tool_pool.get_worker_heartbeats()
+    except Exception:
+        return []
+
+
+def _tool_error_to_speech(
+    error: Any,
+    tool: str,
+    args: Optional[Dict[str, Any]] = None
+) -> str:
+    """
+    Convert a tool error into a user-friendly speech reply.
+    
+    Args:
+        error: The error returned by the tool (can be str, dict, or None)
+        tool: The name of the tool that failed
+        args: The arguments that were passed to the tool
+        
+    Returns:
+        A friendly speech-safe error message
+    """
+    args = args or {}
+    
+    # Parse error type and message from dict or string
+    error_type = ""
+    error_msg = ""
+    if isinstance(error, dict):
+        error_type = str(error.get("type", "")).lower()
+        error_msg = str(error.get("message", ""))
+    elif isinstance(error, str):
+        error_msg = error
+        # Try to infer type from message
+        if "not found" in error.lower():
+            error_type = "not_found"
+        elif "permission" in error.lower() or "denied" in error.lower() or "access" in error.lower():
+            error_type = "permission_denied"
+    
+    # --- Window-related errors ---
+    if error_type == "window_not_found":
+        # Extract target from args
+        target = args.get("title") or args.get("process") or args.get("query") or ""
+        if target:
+            return f"I can't find a {target} window. Is it open?"
+        return "I can't find that window. Is it open?"
+    
+    if error_type == "invalid_monitor":
+        return f"That monitor doesn't exist. {error_msg}"
+    
+    # --- Permission errors ---
+    if error_type == "permission_denied":
+        return "Windows blocked that action. Try running Wyzer as administrator."
+    
+    # --- Audio device errors ---
+    if error_type == "no_devices":
+        return "I couldn't find any audio devices."
+    
+    if error_type == "invalid_device_query":
+        return "Please specify which audio device you want."
+    
+    if error_type == "device_not_found":
+        device = args.get("device", "")
+        if device:
+            return f"I couldn't find an audio device matching '{device}'."
+        return "I couldn't find that audio device."
+    
+    # --- Volume control errors ---
+    if error_type == "not_found" and tool == "volume_control":
+        process = args.get("process", "")
+        if process:
+            return f"I can't find {process} to adjust its volume. Is it running?"
+        return "I can't find that app to adjust its volume."
+    
+    if error_type == "unsupported_platform":
+        return "That's not supported on this system."
+    
+    # --- Timer errors ---
+    if tool == "timer":
+        if error_type == "no_timer":
+            return "There is no active timer."
+        if error_type == "invalid_duration":
+            return "That timer duration isn't valid."
+    
+    # --- Argument errors ---
+    if error_type in {"invalid_args", "missing_argument", "invalid_action"}:
+        return f"I didn't understand that command. {error_msg}"
+    
+    # --- Generic execution errors ---
+    if error_type == "execution_error":
+        return "Something went wrong. Please try again."
+    
+    # --- Fallback: use message if available, else generic ---
+    if error_msg:
+        # Clean up technical messages for speech
+        clean_msg = error_msg.rstrip(".")
+        return f"I couldn't complete that: {clean_msg}."
+    
+    return "I couldn't complete that. Please try again."
+
+
 def handle_user_text(text: str) -> Dict[str, Any]:
     """
     Handle user text input with optional multi-intent tool execution.
@@ -514,7 +619,7 @@ def _execute_intents(intents, registry) -> ExecutionSummary:
             tool=intent.tool,
             ok=not has_error,
             result=tool_result if not has_error else None,
-            error=str(tool_result.get("error")) if has_error else None
+            error=tool_result.get("error") if has_error else None
         )
         
         results.append(exec_result)
@@ -1208,8 +1313,19 @@ def _fastpath_parse_clause(clause: str) -> Optional[List[Intent]]:
             # Force close is intentionally not supported in fast-path.
             return [Intent(tool="close_window", args={"process": target, "force": False})]
 
+    # Ordinal word to number mapping for monitor references
+    _ORDINAL_MAP = {
+        "first": 1, "1st": 1,
+        "second": 2, "2nd": 2, "secondary": 2, "other": 2,
+        "third": 3, "3rd": 3,
+        "fourth": 4, "4th": 4,
+        "fifth": 5, "5th": 5,
+        "sixth": 6, "6th": 6,
+    }
+    _ORDINAL_PATTERN = "|".join(_ORDINAL_MAP.keys())
+
     m = re.match(
-        r"^move\s+(?P<target>.+?)\s+to\s+(?:(?P<primary>primary)\s+monitor|monitor\s+(?P<mon>\d+)|(?P<mon2>\d+))(?P<rest>.*)$",
+        rf"^move\s+(?P<target>.+?)\s+to\s+(?:(?:the\s+)?(?P<primary>primary|main)\s+monitor|(?:the\s+)?(?P<ordinal>{_ORDINAL_PATTERN})\s+monitor|monitor\s+(?P<mon>\d+)|(?P<mon2>\d+))(?P<rest>.*)$",
         c_lower,
     )
     if m:
@@ -1219,6 +1335,8 @@ def _fastpath_parse_clause(clause: str) -> Optional[List[Intent]]:
 
         if m.group("primary"):
             monitor: Any = "primary"
+        elif m.group("ordinal"):
+            monitor = _ORDINAL_MAP.get(m.group("ordinal").lower(), 1)
         else:
             mon_s = m.group("mon") or m.group("mon2")
             if not mon_s:
@@ -1290,6 +1408,23 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
                 return f"You have {count} monitor(s)."
             return "Here's your monitor information."
 
+        if tool == "get_window_monitor":
+            monitor = result.get("monitor") or {}
+            matched = result.get("matched_window") or {}
+            process = matched.get("process", "").replace(".exe", "")
+            title = matched.get("title", "")
+            mon_num = monitor.get("number")
+            is_primary = monitor.get("primary", False)
+            
+            app_name = process.capitalize() if process else (title or "That window")
+            
+            if mon_num is not None:
+                primary_str = " (your primary monitor)" if is_primary else ""
+                return f"{app_name} is on monitor {mon_num}{primary_str}."
+            elif monitor.get("error"):
+                return f"I found {app_name} but couldn't determine which monitor it's on."
+            return "Here's the window monitor information."
+
         if tool == "get_location":
             city = result.get("city")
             region = result.get("region")
@@ -1301,6 +1436,43 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
 
         if tool == "get_weather_forecast":
             loc = (result.get("location") or {}).get("name") if isinstance(result.get("location"), dict) else None
+            
+            # Check if a specific day was requested via day_offset in args
+            day_offset = (args.get("day_offset") or 0) if isinstance(args, dict) else 0
+            
+            if day_offset > 0:
+                # User asked about a future day (e.g., "tomorrow", "Thursday")
+                forecast_daily = result.get("forecast_daily") or []
+                if isinstance(forecast_daily, list) and len(forecast_daily) > day_offset:
+                    day_data = forecast_daily[day_offset]
+                    weather = day_data.get("weather")
+                    temp_max = day_data.get("temp_max")
+                    temp_min = day_data.get("temp_min")
+                    
+                    # Generate a friendly day label
+                    if day_offset == 1:
+                        day_label = "Tomorrow"
+                    else:
+                        # Try to get weekday name from the date
+                        date_str = day_data.get("date", "")
+                        try:
+                            import datetime
+                            dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+                            day_label = dt.strftime("%A")  # e.g., "Thursday"
+                        except Exception:
+                            day_label = date_str if date_str else "That day"
+                    
+                    if loc and weather:
+                        if temp_max is not None and temp_min is not None:
+                            return f"{day_label}: {weather}, high of {temp_max}°, low of {temp_min}° in {loc}."
+                        return f"{day_label}: {weather} in {loc}."
+                    if weather:
+                        if temp_max is not None and temp_min is not None:
+                            return f"{day_label}: {weather}, high of {temp_max}°, low of {temp_min}°."
+                        return f"{day_label}: {weather}."
+                # Fallback if day_offset data not available
+            
+            # Default: use current weather
             current = result.get("current") if isinstance(result.get("current"), dict) else {}
             temp = current.get("temperature")
             weather = current.get("weather")
@@ -1352,21 +1524,98 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
                 return f"Opened {opened_clean}."
             return "Drive opened."
 
+        if tool == "get_now_playing":
+            status = result.get("status")
+            if status == "no_media":
+                return "Nothing is currently playing."
+            
+            title = result.get("title")
+            artist = result.get("artist")
+            playback_status = result.get("playback_status", "playing")
+            
+            # Build response - keep it short (title and artist only)
+            if title and artist:
+                response = f"{title} by {artist}"
+                if playback_status == "paused":
+                    response = f"Paused: {response}"
+                return response + "."
+            elif title:
+                if playback_status == "paused":
+                    return f"Paused: {title}."
+                return f"Playing {title}."
+            return "Media is playing but I couldn't get the details."
+
+        # ═══════════════════════════════════════════════════════════════════
+        # Timer tool: format timer responses for speech
+        # ═══════════════════════════════════════════════════════════════════
+        if tool == "timer":
+            status = result.get("status")
+            action = str(args.get("action") or "").lower()
+            
+            if status == "finished":
+                return "Your timer is finished."
+            
+            if action == "start" and status == "running":
+                duration = result.get("duration", 0)
+                if duration >= 3600:
+                    hours = duration // 3600
+                    mins = (duration % 3600) // 60
+                    if mins > 0:
+                        return f"Timer set for {hours} hour{'s' if hours != 1 else ''} and {mins} minute{'s' if mins != 1 else ''}."
+                    return f"Timer set for {hours} hour{'s' if hours != 1 else ''}."
+                elif duration >= 60:
+                    mins = duration // 60
+                    secs = duration % 60
+                    if secs > 0:
+                        return f"Timer set for {mins} minute{'s' if mins != 1 else ''} and {secs} second{'s' if secs != 1 else ''}."
+                    return f"Timer set for {mins} minute{'s' if mins != 1 else ''}."
+                else:
+                    return f"Timer set for {duration} second{'s' if duration != 1 else ''}."
+            
+            if action == "cancel" and status == "cancelled":
+                return "Timer cancelled."
+            
+            if action == "status":
+                if status == "idle":
+                    return "No timer is running."
+                if status == "running":
+                    remaining = result.get("remaining_seconds", 0)
+                    if remaining >= 3600:
+                        hours = remaining // 3600
+                        mins = (remaining % 3600) // 60
+                        if mins > 0:
+                            return f"About {hours} hour{'s' if hours != 1 else ''} and {mins} minute{'s' if mins != 1 else ''} remaining."
+                        return f"About {hours} hour{'s' if hours != 1 else ''} remaining."
+                    elif remaining >= 60:
+                        mins = remaining // 60
+                        secs = remaining % 60
+                        if secs > 0:
+                            return f"About {mins} minute{'s' if mins != 1 else ''} and {secs} second{'s' if secs != 1 else ''} remaining."
+                        return f"About {mins} minute{'s' if mins != 1 else ''} remaining."
+                    else:
+                        return f"About {remaining} second{'s' if remaining != 1 else ''} remaining."
+            
+            return "Timer updated."
+
         return None
 
     # Prefer first failure.
     for idx, r in enumerate(execution_summary.ran):
         if not r.ok:
-            # Provide more specific error messages based on tool and error type
+            # Get args for this intent if available
+            intent_args = intents[idx].args if idx < len(intents) else {}
+            
+            # Special case for open_target - keep existing behavior
             if r.tool == "open_target":
-                # Try to extract what wasn't found from the query in intents
-                query = ""
-                if idx < len(intents):
-                    query = (intents[idx].args or {}).get("query", "")
+                query = (intent_args or {}).get("query", "")
                 if query:
                     return f"Could not find {query}."
                 return "Could not find that target."
-            return "I couldn't complete that." if not r.error else f"I couldn't complete that: {r.error}"
+            
+            # Use the error mapper for user-friendly messages
+            if r.error:
+                return _tool_error_to_speech(r.error, r.tool, intent_args)
+            return "I couldn't complete that. Please try again."
 
     if not execution_summary.ran:
         return "Done."
@@ -1809,6 +2058,7 @@ TOOL USAGE GUIDANCE:
         - Legacy volume tools volume_up/volume_down/volume_mute_toggle exist but volume_control is preferred
 - For switching the default audio output device (speakers/headset): use set_audio_output_device with device="name" (fuzzy match allowed)
 - For monitor info: use monitor_info to check available monitors
+- For checking which monitor an app is on: use get_window_monitor with process="appname" (e.g., "spotify", "chrome") to find which monitor displays that window
 - For library management: use local_library_refresh to rebuild the index ONLY when the user explicitly asks to refresh/rebuild/rescan/update the local library/index
 - For storage/drives (IMPORTANT - pick only ONE tool):
     - system_storage_scan: Full system scan of ALL drives - use ONLY when user says "system scan", "scan my drives", or "scan disk" (no specific drive mentioned)

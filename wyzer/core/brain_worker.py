@@ -26,12 +26,14 @@ from wyzer.core.logger import get_logger, init_logger
 from wyzer.core.followup_manager import FollowupManager
 from wyzer.stt.stt_router import STTRouter
 from wyzer.tts.tts_router import TTSRouter
+from wyzer.tools.timer_tool import check_timer_finished
 
 
 def _apply_config(config_dict: Dict[str, Any]) -> None:
-    # Logger first
+    # Logger first - include quiet mode
     log_level = str(config_dict.get("log_level", "INFO")).upper()
-    init_logger(log_level)
+    quiet_mode = config_dict.get("quiet_mode", False) or os.environ.get("WYZER_QUIET_MODE", "false").lower() in ("true", "1", "yes")
+    init_logger(log_level, quiet_mode=quiet_mode)
 
     # Ensure orchestrator uses the worker's config (it reads Config.*)
     if "ollama_url" in config_dict:
@@ -152,6 +154,7 @@ class _TTSController:
                         "type": "LOG",
                         "level": "DEBUG",
                         "msg": "tts_finished" if ok else "tts_interrupted",
+                        "meta": {"show_followup_prompt": meta.get("show_followup_prompt", False)},
                     },
                 )
 
@@ -225,14 +228,31 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             except Exception:
                 q_in_size = q_out_size = -1
             
+            # Get tool worker heartbeats
+            worker_hbs = orchestrator.get_tool_pool_heartbeats()
+            workers_str = ""
+            if worker_hbs:
+                workers_str = " workers=[" + ",".join(
+                    f"W{w['id']}:jobs={w['jobs']}" for w in worker_hbs
+                ) + "]"
+            
             logger.info(
                 f"[HEARTBEAT] role=Brain pid={os.getpid()} "
                 f"q_in={q_in_size} q_out={q_out_size} "
-                f"last_job={last_job_id} interrupt_gen={interrupt_generation}"
+                f"last_job={last_job_id} interrupt_gen={interrupt_generation}{workers_str}"
             )
             last_heartbeat = current_time
         
-        msg = core_to_brain_q.get()
+        # Check if a timer has finished and announce it
+        if check_timer_finished():
+            logger.info("[TIMER] Timer finished, announcing alarm")
+            tts_controller.enqueue("Your timer is finished.", meta={"_timer_alarm": True})
+        
+        # Use timeout so we can poll for timer completion
+        try:
+            msg = core_to_brain_q.get(timeout=0.1)
+        except queue.Empty:
+            continue
         mtype = (msg or {}).get("type")
 
         if mtype == "SHUTDOWN":

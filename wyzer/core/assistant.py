@@ -977,9 +977,11 @@ class WyzerAssistantMultiprocess:
         tts_output_device: Optional[int] = None,
         speak_hotword_interrupt: bool = True,
         log_level: str = "INFO",
+        quiet_mode: bool = False,
         ipc_queue_maxsize: int = 50,
     ):
         self.logger = get_logger()
+        self.quiet_mode = quiet_mode
 
         self.enable_hotword = enable_hotword
         self.speak_hotword_interrupt = speak_hotword_interrupt
@@ -1030,6 +1032,7 @@ class WyzerAssistantMultiprocess:
 
         self._brain_config: Dict[str, Any] = {
             "log_level": log_level,
+            "quiet_mode": quiet_mode,
             "ipc_queue_maxsize": ipc_queue_maxsize,
             "whisper_model": whisper_model,
             "whisper_device": whisper_device,
@@ -1052,6 +1055,10 @@ class WyzerAssistantMultiprocess:
             return
 
         import time
+        
+        # In quiet mode, show simple Loading... message
+        if self.quiet_mode:
+            print("Loading...", flush=True)
         
         # Log Main/Parent process role for architecture verification
         _role_log = {
@@ -1091,6 +1098,10 @@ class WyzerAssistantMultiprocess:
             self.logger.info("Listening... (speak now)")
         else:
             self.logger.info(f"Listening for hotword: {Config.HOTWORD_KEYWORDS}")
+
+        # In quiet mode, show simple Ready. message
+        if self.quiet_mode:
+            print("Ready.", flush=True)
 
         try:
             self._main_loop()
@@ -1498,6 +1509,10 @@ class WyzerAssistantMultiprocess:
                     self._brain_speaking = True
                 elif text in {"tts_finished", "tts_interrupted"}:
                     self._brain_speaking = False
+                    # Get show_followup_prompt from the TTS message metadata
+                    tts_meta = msg.get("meta") or {}
+                    show_followup = tts_meta.get("show_followup_prompt", False)
+                    
                     # When TTS finishes, check if this was a followup prompt that needs listening
                     if self._waiting_for_followup_tts:
                         self._waiting_for_followup_tts = False
@@ -1511,9 +1526,12 @@ class WyzerAssistantMultiprocess:
                         self.state.speech_frames_count = 0
                         self.state.total_frames_recorded = 0
                         self.followup_manager.start_followup_window()
-                    # When TTS finishes for non-followup response, enter FOLLOWUP (if enabled and not no-hotword mode)
-                    elif Config.FOLLOWUP_ENABLED and self.enable_hotword and self.state.is_in_state(AssistantState.IDLE):
+                    # When TTS finishes for non-followup response, enter FOLLOWUP ONLY if response was a question
+                    elif Config.FOLLOWUP_ENABLED and self.enable_hotword and show_followup:
                         self._start_followup_window()
+                    # Response was not a question - reset to IDLE and require hotword
+                    elif self.enable_hotword:
+                        self._reset_to_idle()
 
                 if level == "DEBUG":
                     self.logger.debug(text)

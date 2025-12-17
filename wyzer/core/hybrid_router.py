@@ -55,8 +55,11 @@ def _parse_volume_scope_and_process(clause: str) -> tuple[str, str]:
     cl = c.lower()
 
     # Strip common query prefixes so we don't treat them as app names.
-    cl = re.sub(r"^(?:what\s+is|what's|whats|get|check|show|tell\s+me|current)\s+", "", cl)
+    # Include bare "what" for patterns like "what spotify volume at"
+    cl = re.sub(r"^(?:what\s+is|what's|whats|what|get|check|show|tell\s+me|current)\s+", "", cl)
     cl = re.sub(r"^the\s+", "", cl)
+    # Strip trailing question words like "at", "at now", etc.
+    cl = re.sub(r"\s+(?:at|at now|now|right now)\s*\??\s*$", "", cl)
 
     # "set <proc> volume ..." should treat <proc> as app.
     m = re.match(r"^set\s+(?P<proc>.+?)\s+(?:volume|sound|audio)\b", cl)
@@ -79,14 +82,22 @@ def _parse_volume_scope_and_process(clause: str) -> tuple[str, str]:
         if first and first not in {"the", "my", "this", "that", "set", "volume", "sound", "audio"}:
             return "app", first
 
-    # "mute spotify" / "turn down chrome" etc.
-    m = re.match(r"^(?:turn\s+(?:up|down)|mute|unmute|quieter|louder)\s+(?P<proc>.+)$", cl)
+    # "mute spotify" / "turn down chrome" / "turn down spotify by 10%" etc.
+    # Stop at "by", "to", percent sign, or numbers to avoid including delta in process name
+    m = re.match(r"^(?:turn\s+(?:up|down)|mute|unmute|quieter|louder)\s+(?P<proc>.+?)(?:\s+(?:by|to)\s+|\s+\d|\s*%|$)", cl)
     if m:
         proc = _strip_trailing_punct(m.group("proc")).strip()
         proc_l = proc.lower()
         if proc_l in {"it", "it up", "it down", "the volume", "volume", "sound", "audio"}:
             return "master", ""
         if proc and proc not in {"it", "volume", "sound", "audio"}:
+            return "app", proc
+
+    # "turn spotify down by 3%" / "turn chrome up" - app name between turn and direction
+    m = re.match(r"^turn\s+(?P<proc>[a-z0-9][a-z0-9 _\-\.]{1,60})\s+(?:up|down)\b", cl)
+    if m:
+        proc = _strip_trailing_punct(m.group("proc")).strip()
+        if proc and proc not in {"it", "the", "volume", "sound", "audio"}:
             return "app", proc
 
     return "master", ""
@@ -112,6 +123,65 @@ MULTI_INTENT_MARKERS = [
     ";",
     ",",
 ]
+
+# Patterns that indicate the query needs LLM reasoning/explanation
+# These are questions that can't be answered with simple tool calls
+_REASONING_RE = re.compile(
+    r"(?:"
+    r"^why\s+|"                                    # "why is the sky blue"
+    r"^how\s+(?:do|does|can|could|would|should|to)\s+|"  # "how do I...", "how to..."
+    r"^what\s+(?:is|are|does|do|should|would|could)\s+(?!the\s+time|the\s+date|my\s+|the\s+weather|the\s+temp|[a-z]+\s+volume)|"  # General "what is X" (but not time/weather/date/volume)
+    r"^explain\s+|"                                # "explain how..."
+    r"^tell\s+me\s+(?:about|why|how)|"            # "tell me about...", "tell me why..."
+    r"^can\s+you\s+(?:explain|help|tell)|"        # "can you explain..."
+    r"^should\s+i\s+|"                            # "should I..."
+    r"^what\s+(?:if|happens?\s+(?:if|when))|"     # "what if...", "what happens if..."
+    r"^is\s+(?:it|this|there)\s+(?:a\s+)?(?:good|bad|better|best|way|possible)|"  # "is it possible...", "is there a better way"
+    r"^compare\s+|"                                # "compare X and Y"
+    r"^difference\s+between\s+|"                   # "difference between X and Y"
+    r"^which\s+(?:is|one|should)|"                 # "which is better", "which one should I"
+    r"\bwhy\s+(?:is|are|does|do|did|would|should|can|could)\b|"  # mid-sentence "why is..."
+    r"\bhow\s+(?:does|do|is|are|would|should|can|could)\s+(?:it|this|that)\b|"  # "how does this work"
+    r"\bexplain(?:ing)?\b|"                        # any "explain" in text
+    r"\brecommend(?:ation)?s?\b|"                  # "recommend", "recommendations"
+    r"\bsuggestion?s?\b|"                          # "suggest", "suggestions"
+    r"\badvice\b|"                                 # "advice"
+    r"\bopinion\b|"                                # "opinion"
+    r"\bhelp\s+me\s+(?:understand|decide|choose|figure)|"  # "help me understand"
+    r"\btell\s+me\s+(?:about|why|how)\b"           # mid-sentence "tell me about..."
+    r")",
+    re.IGNORECASE,
+)
+
+
+# Check if text is a volume query that should bypass reasoning check
+def _is_volume_query(text: str) -> bool:
+    """Check if text is a volume-related query that should bypass LLM reasoning."""
+    tl = (text or "").strip().lower()
+    return bool(re.search(r"\b(?:volume|sound|audio|mute|unmute|louder|quieter)\b", tl))
+
+
+def _is_now_playing_query(text: str) -> bool:
+    """Check if text is a now-playing query that should bypass LLM reasoning."""
+    tl = (text or "").strip().lower()
+    return bool(re.search(
+        r"\b(?:what(?:'?s|\s+is)\s+(?:currently\s+)?playing|what\s+(?:song|track|music|media)\s+is\s+(?:this|playing)|now\s+playing|current\s+(?:song|track|media)|playing\s+(?:right\s+)?now)\b",
+        tl
+    ))
+
+
+def needs_reasoning(text: str) -> bool:
+    """Check if text requires LLM reasoning/explanation rather than tool execution."""
+    tl = (text or "").strip()
+    if not tl:
+        return False
+    # Volume queries should never need reasoning - they're simple tool calls
+    if _is_volume_query(tl):
+        return False
+    # Now playing queries should never need reasoning
+    if _is_now_playing_query(tl):
+        return False
+    return bool(_REASONING_RE.search(tl))
 
 
 def looks_multi_intent(text: str) -> bool:
@@ -219,8 +289,45 @@ _AUDIO_DEVICE_LIST_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Word-to-digit mapping for monitor numbers
+_WORD_TO_DIGIT = {
+    "one": "1", "two": "2", "three": "3", "four": "5", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+    "first": "1", "second": "2", "third": "3", "fourth": "4", "fifth": "5",
+    "1st": "1", "2nd": "2", "3rd": "3", "4th": "4", "5th": "5",
+    "secondary": "2", "other": "2",
+}
+
 # Anchored move window to monitor.
-_MOVE_MONITOR_RE = re.compile(r"^(?:move|send)\s+(.+?)\s+to\s+(?:monitor|screen)\s+(\d+|next|previous|left|right)$", re.IGNORECASE)
+# Supports: "move X to monitor 2", "move X to primary monitor", "move X to the second monitor"
+_MOVE_MONITOR_RE = re.compile(
+    r"^(?:move|send)\s+(.+?)\s+to\s+(?:(?:the\s+)?(?:monitor|screen)\s+)?"
+    r"(primary|main|secondary|other|\d+|one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th|next|previous|left|right)"
+    r"(?:\s+(?:monitor|screen))?$",
+    re.IGNORECASE
+)
+
+# Get window monitor: "what monitor is X on" / "which screen is X on"
+_GET_WINDOW_MONITOR_RE = re.compile(
+    r"^(?:what|which)\s+(?:monitor|screen|display)\s+is\s+(.+?)\s+(?:on|displayed\s+on|showing\s+on)\??$",
+    re.IGNORECASE,
+)
+
+# Monitor info patterns: queries about connected monitors (count, resolution, scanning)
+# NOTE: Be careful not to match "what monitor is X on" which asks about app location
+_MONITOR_INFO_RE = re.compile(
+    r"^(?:"
+    r"(?:scan|check|list|show|display)\s+(?:my\s+)?(?:monitors?|screens?|displays?)|"  # scan monitors, check monitors
+    r"(?:how\s+many)\s+(?:monitors?|screens?|displays?)\s+(?:do\s+i\s+have|are\s+(?:there|connected|available))|"  # how many monitors do i have
+    r"(?:get|show|check|tell\s+me)\s+(?:my\s+)?(?:monitor|screen|display)\s+(?:info|information|details)|"  # get monitor info
+    r"(?:monitor|screen|display)\s+(?:info|information|details|count|resolution|status)|"  # monitor info, monitor count
+    r"(?:what|which)\s+(?:monitors?|screens?|displays?)\s+(?:do\s+i\s+have|are\s+connected|available)|"  # what monitors do i have
+    r"(?:list|show|display)\s+(?:all\s+)?(?:my\s+)?(?:monitors?|screens?|displays?)|"  # list all monitors
+    r"(?:what)\s+(?:are\s+)?(?:my\s+)?(?:monitors?|screens?|displays?)\s*\??"  # what are my monitors (ends query)
+    r")$",
+    re.IGNORECASE,
+)
 
 # Conservative URL/domain detection: if it looks like a URL/domain, we force LLM.
 _URL_SCHEME_RE = re.compile(r"\bhttps?://", re.IGNORECASE)
@@ -229,6 +336,67 @@ _DOMAIN_RE = re.compile(
     r"\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:[a-z]{2,})(?:/[^\s]*)?\b",
     re.IGNORECASE,
 )
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Timer patterns: set, cancel, or check a countdown timer
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Word-to-number mapping for timer durations
+_WORD_TO_NUMBER = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+    "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+    "a": 1, "an": 1,  # "a minute", "an hour"
+}
+
+# Timer start: "set a timer for X minutes/seconds", "start a timer for X minutes"
+# Matches both digits (10) and word numbers (ten, three)
+_TIMER_START_RE = re.compile(
+    r"^(?:set|start|create)\s+(?:a\s+)?timer\s+(?:for\s+)?(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|a|an)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)(?:\s+timer)?[.?!]?$",
+    re.IGNORECASE,
+)
+
+# Timer cancel: "cancel the timer", "stop the timer", "clear timer"
+_TIMER_CANCEL_RE = re.compile(
+    r"^(?:cancel|stop|clear|end|delete|remove)\s+(?:the\s+|my\s+)?timer[.?!]?$",
+    re.IGNORECASE,
+)
+
+# Timer status: "how much time is left", "timer status", "check timer"
+_TIMER_STATUS_RE = re.compile(
+    r"^(?:"
+    r"(?:how\s+much\s+)?time\s+(?:is\s+)?(?:left|remaining)(?:\s+on\s+(?:the\s+|my\s+)?timer)?|"
+    r"(?:check|get|show)\s+(?:the\s+|my\s+)?timer(?:\s+status)?|"
+    r"timer\s+status|"
+    r"what(?:'s|\s+is)\s+(?:the\s+|my\s+)?timer(?:\s+at)?|"
+    r"how\s+long\s+(?:is\s+)?(?:left|remaining)(?:\s+on\s+(?:the\s+|my\s+)?timer)?"
+    r")[.?!]?$",
+    re.IGNORECASE,
+)
+
+
+def _parse_timer_value(value_str: str) -> int:
+    """Parse a timer value from string (digit or word) to integer."""
+    value_str = value_str.strip().lower()
+    # Try as digit first
+    if value_str.isdigit():
+        return int(value_str)
+    # Try word lookup
+    return _WORD_TO_NUMBER.get(value_str, 0)
+
+
+def _parse_timer_duration_seconds(value: int, unit: str) -> int:
+    """Convert a timer duration value and unit to seconds."""
+    unit_lower = unit.lower().rstrip("s")  # normalize: "minutes" -> "minute"
+    if unit_lower in {"sec", "second"}:
+        return value
+    elif unit_lower in {"min", "minute"}:
+        return value * 60
+    elif unit_lower in {"hour", "hr"}:
+        return value * 3600
+    return value  # default to seconds
 
 
 def _looks_like_url_or_domain(text: str) -> bool:
@@ -264,24 +432,125 @@ def _decide_single_clause(text: str) -> HybridDecision:
             confidence=0.95,
         )
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # Timer queries: start, cancel, or check status
+    # ═══════════════════════════════════════════════════════════════════════
+    
+    # Timer start: "set a timer for 5 minutes"
+    m = _TIMER_START_RE.match(clause)
+    if m:
+        value = _parse_timer_value(m.group(1))
+        if value < 1:
+            value = 1  # Minimum 1 second
+        unit = m.group(2)
+        duration_seconds = _parse_timer_duration_seconds(value, unit)
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{
+                "tool": "timer",
+                "args": {"action": "start", "duration_seconds": duration_seconds},
+                "continue_on_error": False
+            }],
+            reply="",
+            confidence=0.95,
+        )
+    
+    # Timer cancel: "cancel the timer"
+    if _TIMER_CANCEL_RE.match(clause):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{
+                "tool": "timer",
+                "args": {"action": "cancel"},
+                "continue_on_error": False
+            }],
+            reply="",
+            confidence=0.92,
+        )
+    
+    # Timer status: "how much time is left"
+    if _TIMER_STATUS_RE.match(clause):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{
+                "tool": "timer",
+                "args": {"action": "status"},
+                "continue_on_error": False
+            }],
+            reply="",
+            confidence=0.92,
+        )
+
     # Weather queries - extract location if provided
     if _WEATHER_RE.search(clause):
+        clause_lower = clause.lower()
         # Try to extract location from the query
         location = None
         
+        # Weekday names for temporal parsing
+        weekday_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        
         # Pattern: "weather in <location>" / "temperature in <location>" / "forecast for <location>"
-        m = re.search(r"\b(?:in|for|at|near)\s+(.+?)(?:\?|$)", clause, re.IGNORECASE)
+        m = re.search(r"\b(?:in|for|at|near|on)\s+(.+?)(?:\?|$)", clause, re.IGNORECASE)
         if m:
             location = (m.group(1) or "").strip().rstrip("?").strip()
-            # Filter out common non-location words
+            # Filter out common non-location words and temporal words
             location_l = location.lower()
-            if location_l in {"it", "this", "here", "there", "the area", "outside"}:
+            temporal_words = {"it", "this", "here", "there", "the area", "outside", "tomorrow", "today", "the week", "this week", "next week", "weather", "the weather", "forecast", "the forecast"}
+            temporal_words.update(weekday_names)
+            if location_l in temporal_words:
                 location = None
+        
+        # Extract temporal reference (tomorrow, this week, weekday names, etc.)
+        day_offset = 0  # 0 = today
+        days = 3  # default forecast days
+        
+        if "tomorrow" in clause_lower:
+            day_offset = 1
+            days = 2  # Include today + tomorrow
+        elif re.search(r"\bnext\s+week\b", clause_lower):
+            days = 14
+            day_offset = 7
+        elif re.search(r"\b(?:this\s+)?week(?:ly)?\b", clause_lower):
+            days = 7
+        else:
+            # Check for weekday names (e.g., "on Thursday", "this Friday", "next Monday")
+            import datetime
+            today = datetime.date.today()
+            today_weekday = today.weekday()  # 0=Monday, 6=Sunday
+            
+            # Check if user said "next <weekday>" (meaning next week's occurrence)
+            next_week_match = re.search(r"\bnext\s+(" + "|".join(weekday_names) + r")\b", clause_lower)
+            
+            for i, day_name in enumerate(weekday_names):
+                if day_name in clause_lower:
+                    # Calculate days until that weekday
+                    target_weekday = i  # 0=Monday, 6=Sunday
+                    days_until = (target_weekday - today_weekday) % 7
+                    
+                    if next_week_match and next_week_match.group(1) == day_name:
+                        # "next Thursday" means next week's Thursday
+                        days_until = days_until + 7 if days_until > 0 else 7
+                    elif days_until == 0:
+                        # Same day of week - could be today or next week
+                        # If they say "this Monday" it's today, otherwise assume next week
+                        if "this" in clause_lower:
+                            days_until = 0
+                        else:
+                            days_until = 7  # Next occurrence
+                    
+                    day_offset = days_until
+                    days = max(day_offset + 1, 7)  # Ensure we fetch enough days
+                    break
         
         # Build arguments
         weather_args = {}
         if location:
             weather_args["location"] = location
+        if day_offset > 0:
+            weather_args["day_offset"] = day_offset
+        if days != 3:
+            weather_args["days"] = days
         
         return HybridDecision(
             mode="tool_plan",
@@ -312,6 +581,27 @@ def _decide_single_clause(text: str) -> HybridDecision:
             intents=[{"tool": "get_location", "args": {}, "continue_on_error": False}],
             reply="",
             confidence=0.9,
+        )
+
+    # Get window monitor queries: "what monitor is X on"
+    m = _GET_WINDOW_MONITOR_RE.match(clause)
+    if m:
+        target = (m.group(1) or "").strip().strip('"').strip("'")
+        if target and target.lower() not in {"it", "this", "that", "something", "anything"}:
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{"tool": "get_window_monitor", "args": {"process": target}, "continue_on_error": False}],
+                reply="",
+                confidence=0.92,
+            )
+
+    # Monitor info queries: queries about connected monitors
+    if _MONITOR_INFO_RE.match(clause):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "monitor_info", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.92,
         )
 
     # Local library refresh/scan commands
@@ -565,6 +855,9 @@ def _decide_single_clause(text: str) -> HybridDecision:
         target = (m.group(1) or "").strip().strip('"').strip("'")
         monitor = (m.group(2) or "").strip().lower()
         
+        # Convert word numbers to digits
+        monitor = _WORD_TO_DIGIT.get(monitor, monitor)
+        
         # If the target is missing or too ambiguous, defer to LLM.
         if not target or target.lower() in {"it", "this", "that", "something", "anything"}:
             return HybridDecision(mode="llm", intents=None, reply="", confidence=0.4)
@@ -631,13 +924,23 @@ def _decide_single_clause(text: str) -> HybridDecision:
     # --- True volume control (pycaw) ---
     # If the command looks like volume/mute and the tool exists, prefer volume_control.
     # We keep this conservative and only match obvious phrases.
-    if re.search(r"\b(?:mute|unmute|volume|sound|audio|louder|quieter|turn\s+it\s+(?:up|down))\b", tl):
+    # Match: "turn down X", "turn X down", "turn it up", etc.
+    if re.search(r"\b(?:mute|unmute|volume|sound|audio|louder|quieter|turn\s+(?:it\s+)?(?:up|down)|turn\s+\w+\s+(?:up|down))\b", tl):
         scope, proc = _parse_volume_scope_and_process(clause)
 
         # Get volume / what is the volume
-        is_query = bool(re.search(r"\b(?:get|check|show|tell\s+me|what\s+is|what's|whats|current)\b", tl))
+        # Expanded query detection: explicit query words OR "what ... volume" patterns OR bare "<app> volume" queries
+        is_explicit_query = bool(re.search(r"\b(?:get|check|show|tell\s+me|what\s+is|what's|whats|current)\b", tl))
+        is_what_volume = bool(re.search(r"\bwhat\b.*\bvolume\b", tl))  # "what spotify volume at"
         is_volume_worded = any(k in tl for k in ["volume", "sound", "audio"])
-        if is_query and is_volume_worded and _extract_volume_percent(tl) is None and not re.search(
+        has_action_word = bool(re.search(r"\b(?:set|up|down|louder|quieter|increase|decrease|raise|lower|mute|unmute)\b", tl))
+        has_percent = _extract_volume_percent(tl) is not None
+        
+        # Bare volume query: "<app> volume" or "volume" with no action/percent = asking for current level
+        is_bare_volume_query = is_volume_worded and not has_action_word and not has_percent
+        is_query = is_explicit_query or is_what_volume or is_bare_volume_query
+        
+        if is_query and is_volume_worded and not has_percent and not re.search(
             r"\b(?:up|down|louder|quieter|increase|decrease|raise|lower)\b", tl
         ):
             args: Dict[str, Any] = {"scope": scope, "action": "get"}
@@ -690,8 +993,9 @@ def _decide_single_clause(text: str) -> HybridDecision:
                 )
 
         # Relative change: up/down/louder/quieter, optional numeric delta.
+        # Match: "volume up", "turn up X", "turn X up", "louder", etc.
         if re.search(r"\b(?:volume\s+up|turn\s+up|louder|raise|increase|sound\s+up)\b", tl) or re.search(
-            r"\bturn\s+it\s+up\b", tl
+            r"\bturn\s+(?:it\s+)?up\b|\bturn\s+\w+\s+up\b", tl
         ):
             pct = _extract_volume_percent(tl)
             delta = int(pct) if pct is not None else _parse_volume_delta_hint(tl)
@@ -705,8 +1009,9 @@ def _decide_single_clause(text: str) -> HybridDecision:
                 confidence=0.88,
             )
 
+        # Match: "volume down", "turn down X", "turn X down", "quieter", etc.
         if re.search(r"\b(?:volume\s+down|turn\s+down|quieter|lower|decrease|sound\s+down)\b", tl) or re.search(
-            r"\bturn\s+it\s+down\b", tl
+            r"\bturn\s+(?:it\s+)?down\b|\bturn\s+\w+\s+down\b", tl
         ):
             pct = _extract_volume_percent(tl)
             delta = int(pct) if pct is not None else _parse_volume_delta_hint(tl)
@@ -743,6 +1048,15 @@ def _decide_single_clause(text: str) -> HybridDecision:
             intents=[{"tool": "volume_down", "args": {}, "continue_on_error": False}],
             reply="",
             confidence=0.85,
+        )
+
+    # "What's playing", "what song is playing", "what is currently playing", "now playing"
+    if re.search(r"\b(?:what(?:'?s|\s+is)\s+(?:currently\s+)?playing|what\s+(?:song|track|music|media)\s+is\s+(?:this|playing)|now\s+playing|current\s+(?:song|track|media)|playing\s+(?:right\s+)?now)\b", tl):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "get_now_playing", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.9,
         )
 
     if re.search(r"\b(?:play\s*pause|play/pause|pause|play|resume)\b", tl):
@@ -785,6 +1099,10 @@ def decide(text: str) -> HybridDecision:
     if not raw:
         return HybridDecision(mode="llm", intents=None, reply="", confidence=0.0)
 
+    # Check for reasoning/explanation questions first - these always go to LLM
+    if needs_reasoning(raw):
+        return HybridDecision(mode="llm", intents=None, reply="", confidence=0.85)
+
     # Try multi-intent parsing: handle "open steam and chrome" directly without LLM
     if looks_multi_intent(raw):
         try:
@@ -797,7 +1115,7 @@ def decide(text: str) -> HybridDecision:
             # If multi-intent parser fails, fall back to LLM
             pass
         
-        # If multi-intent parsing didn't work, use LLM
+        # If multi-intent parsing didn't work, use LLM for reasoning/splitting
         return HybridDecision(mode="llm", intents=None, reply="", confidence=0.2)
 
     return _decide_single_clause(raw)

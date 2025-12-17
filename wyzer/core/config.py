@@ -47,7 +47,7 @@ class Config:
         {
             "name": "wyzer",
             "model_path": "wiser.onnx",
-            "threshold": 0.5,
+            "threshold": 0.75,
             "cooldown_ms": 1500
         }
     ]
@@ -110,6 +110,9 @@ class Config:
     
     # Logging
     LOG_LEVEL: str = os.environ.get("WYZER_LOG_LEVEL", "INFO")
+    
+    # Quiet Mode - hides debug info like heartbeats for cleaner user experience
+    QUIET_MODE: bool = os.environ.get("WYZER_QUIET_MODE", "false").lower() in ("true", "1", "yes")
     
     # Tool Safety Settings (Phase 6)
     ENABLE_FORCE_CLOSE: bool = os.environ.get("WYZER_ENABLE_FORCE_CLOSE", "false").lower() in ("true", "1", "yes")

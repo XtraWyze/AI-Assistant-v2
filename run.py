@@ -224,6 +224,12 @@ Examples:
         help="Disable barge-in (hotword interrupt during speaking)"
     )
     
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Enable quiet mode (hide debug info like heartbeats for cleaner output)"
+    )
+    
     return parser.parse_args()
 
 
@@ -236,8 +242,9 @@ def main():
     
     args = parse_args()
     
-    # Initialize logger
-    init_logger(args.log_level)
+    # Initialize logger (with quiet mode if requested)
+    quiet_mode = args.quiet or os.environ.get("WYZER_QUIET_MODE", "false").lower() in ("true", "1", "yes")
+    init_logger(args.log_level, quiet_mode=quiet_mode)
     logger = get_logger()
 
     # Handle --no-ollama flag
@@ -246,6 +253,12 @@ def main():
         Config.NO_OLLAMA = True
         args.llm = "off"  # Also set LLM mode to off for consistency
         logger.info("Running in no-ollama mode (LLM features disabled)")
+    
+    # Handle --quiet flag
+    if args.quiet:
+        os.environ["WYZER_QUIET_MODE"] = "true"
+        Config.QUIET_MODE = True
+        logger.info("Running in quiet mode (debug info hidden)")
     
     # Apply profile tweaks (keep behavior identical by default)
     whisper_compute_type = "int8"
@@ -289,6 +302,7 @@ def main():
     print(f"  Whisper Device: {args.whisper_device}")
     print(f"  Profile: {args.profile}")
     print(f"  Single Process: {args.single_process}")
+    print(f"  Quiet Mode: {quiet_mode}")
     print(f"  Hotword Enabled: {not args.no_hotword}")
     if not args.no_hotword:
         print(f"  Hotword Keywords: {', '.join(Config.HOTWORD_KEYWORDS)}")
@@ -355,6 +369,7 @@ def main():
                 tts_output_device=tts_output_device,
                 speak_hotword_interrupt=not args.no_speak_interrupt,
                 log_level=args.log_level,
+                quiet_mode=quiet_mode,
             )
         
         logger.info("Starting assistant... (Press Ctrl+C to stop)")

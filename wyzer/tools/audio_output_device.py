@@ -349,7 +349,7 @@ class SetAudioOutputDeviceTool(ToolBase):
                 },
             },
             "required": [],
-            "additionalProperties": False,
+            "additionalProperties": False
         }
 
     def run(self, **kwargs) -> Dict[str, Any]:

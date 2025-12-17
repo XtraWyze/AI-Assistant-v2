@@ -32,7 +32,7 @@ class ExecutionResult:
     tool: str
     ok: bool
     result: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
+    error: Any = None  # Can be dict with 'type'/'message', string, or None
 
 
 @dataclass
