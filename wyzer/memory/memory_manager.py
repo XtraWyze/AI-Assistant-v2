@@ -105,6 +105,11 @@ class MemoryManager:
         
         # Memory file path
         self._memory_file = _get_memory_file_path()
+        
+        # Session flag: inject all long-term memories into LLM prompts
+        # Default from Config (which respects CLI > env var > config default)
+        # Can be toggled via voice commands during session
+        self._use_memories: bool = getattr(Config, 'USE_MEMORIES', True)
     
     # =========================================================================
     # Session Memory (RAM-only)
@@ -402,6 +407,96 @@ class MemoryManager:
         """Check if there are any saved memories."""
         with self._lock:
             return len(self._load_memories()) > 0
+
+    # =========================================================================
+    # Session Flag: use_memories (ALL long-term memories → LLM prompts)
+    # =========================================================================
+    
+    def set_use_memories(self, enabled: bool, source: str = "unknown") -> bool:
+        """
+        Set the use_memories session flag.
+        
+        When enabled, ALL long-term memories are injected into LLM prompts.
+        Session-scoped only (cleared on restart).
+        
+        Args:
+            enabled: True to enable memory injection, False to disable
+            source: Source of the change (voice_command, cli_flag, etc.)
+            
+        Returns:
+            True if state changed, False if already in requested state
+        """
+        logger = get_logger()
+        with self._lock:
+            if self._use_memories == enabled:
+                return False
+            self._use_memories = enabled
+            logger.info(f"[STATE] use_memories={enabled} (source={source})")
+            return True
+    
+    def get_use_memories(self) -> bool:
+        """Check if use_memories flag is enabled."""
+        with self._lock:
+            return self._use_memories
+    
+    def get_all_memories_for_injection(self, max_bullets: int = 30, max_chars: int = 1200) -> str:
+        """
+        Get ALL long-term memories formatted for LLM prompt injection.
+        
+        Only called when use_memories flag is True.
+        Deduplicates and compresses into bullet points with hard caps.
+        
+        Args:
+            max_bullets: Maximum number of bullet points (default 30)
+            max_chars: Maximum total characters (default 1200)
+            
+        Returns:
+            Formatted block with labeled memory section, or empty string
+        """
+        with self._lock:
+            if not self._use_memories:
+                return ""
+            
+            memories = self._load_memories()
+            if not memories:
+                return ""
+            
+            # Deduplicate by normalized text
+            seen_normalized = set()
+            unique_texts = []
+            for mem in memories:
+                text = mem.get("text", "").strip()
+                if not text:
+                    continue
+                normalized = _normalize_for_matching(text)
+                if normalized not in seen_normalized:
+                    seen_normalized.add(normalized)
+                    # Transform to second person for consistency
+                    from wyzer.memory.command_detector import _transform_first_to_second_person
+                    transformed = _transform_first_to_second_person(text)
+                    unique_texts.append(transformed if transformed else text)
+            
+            if not unique_texts:
+                return ""
+            
+            # Build bullet points with caps
+            bullets = []
+            total_chars = 0
+            header = "[LONG-TERM MEMORY — facts about the user]\n"
+            footer = "\nIMPORTANT: Use this information to answer questions about the user. If they ask about their name, preferences, or anything listed above, refer to this memory."
+            reserved = len(header) + len(footer)
+            
+            for text in unique_texts[:max_bullets]:
+                bullet = f"- {text}"
+                if total_chars + len(bullet) + 1 > max_chars - reserved:
+                    break
+                bullets.append(bullet)
+                total_chars += len(bullet) + 1  # +1 for newline
+            
+            if not bullets:
+                return ""
+            
+            return header + "\n".join(bullets) + footer
 
     def recall(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """

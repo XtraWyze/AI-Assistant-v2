@@ -104,9 +104,43 @@ def normalize_plan(model_output: Dict[str, Any]) -> IntentPlan:
     )
 
 
+def filter_unknown_tools(intents: List[Intent], tool_registry) -> tuple[List[Intent], List[str]]:
+    """
+    Filter out intents with unknown tools (non-fatal handling).
+    
+    Instead of throwing an error for unknown tools, we filter them out
+    and return info about what was removed. This allows partial execution
+    of valid intents even when some are invalid.
+    
+    Args:
+        intents: List of Intent objects
+        tool_registry: ToolRegistry instance for checking tool existence
+        
+    Returns:
+        Tuple of (valid_intents, unknown_tool_names)
+    """
+    valid = []
+    unknown = []
+    
+    for intent in intents:
+        if not isinstance(intent.tool, str) or not intent.tool:
+            unknown.append("<empty>")
+            continue
+        if not tool_registry.has_tool(intent.tool):
+            unknown.append(intent.tool)
+            continue
+        valid.append(intent)
+    
+    return valid, unknown
+
+
 def validate_intents(intents: List[Intent], tool_registry) -> None:
     """
     Validate intent list against tool registry and constraints.
+    
+    NOTE: As of unknown-tool graceful handling, this function no longer
+    throws for unknown tools. Use filter_unknown_tools() first to remove
+    unknown tools, then call this to validate the remaining intents.
     
     Args:
         intents: List of Intent objects
@@ -130,13 +164,8 @@ def validate_intents(intents: List[Intent], tool_registry) -> None:
                 f"Intent #{idx + 1}: Tool name must be a non-empty string"
             )
         
-        # Check tool exists in registry
-        if not tool_registry.has_tool(intent.tool):
-            available_tools = [t["name"] for t in tool_registry.list_tools()]
-            raise ValueError(
-                f"Intent #{idx + 1}: Unknown tool '{intent.tool}'. "
-                f"Available tools: {', '.join(available_tools)}"
-            )
+        # NOTE: Unknown tool check removed - handled by filter_unknown_tools()
+        # This allows graceful degradation instead of hard failure.
         
         # Check args is a dict
         if not isinstance(intent.args, dict):

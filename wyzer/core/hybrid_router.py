@@ -147,6 +147,9 @@ _REASONING_RE = re.compile(
     r"\bsuggestion?s?\b|"                          # "suggest", "suggestions"
     r"\badvice\b|"                                 # "advice"
     r"\bopinion\b|"                                # "opinion"
+    r"\bsimilar\s+to\b|"                           # "similar to X"
+    r"\b(?:any|some|an?)\s+(?:anime|show|movie|game|book|song|album|series|film)\s+like\b|"  # "any anime like X"
+    r"\bwhat(?:'?s|\s+is)\s+(?:a|an|some)\s+(?:anime|show|movie|game|book|song|album|series|film)\s+like\b|"  # "what's an anime like X"
     r"\bhelp\s+me\s+(?:understand|decide|choose|figure)|"  # "help me understand"
     r"\btell\s+me\s+(?:about|why|how)\b"           # mid-sentence "tell me about..."
     r")",

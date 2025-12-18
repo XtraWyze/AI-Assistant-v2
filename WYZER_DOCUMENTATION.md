@@ -18,7 +18,8 @@
 10. [LLM Integration](#llm-integration)
 11. [Multi-Intent Commands](#multi-intent-commands)
 12. [Hybrid Router](#hybrid-router)
-13. [Troubleshooting](#troubleshooting)
+13. [Memory System](#memory-system)
+14. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -32,6 +33,7 @@ Wyzer is a **local voice assistant** that runs entirely on your Windows machine.
 - **Text-to-Speech (TTS)**: Piper TTS for natural voice responses
 - **Tool Execution**: Control your system, manage windows, play media, and more
 - **Multi-Intent Commands**: Execute multiple actions in a single request
+- **Memory System**: Remember facts about you with explicit "remember X" commands
 
 ### Key Principles
 
@@ -519,6 +521,48 @@ These patterns always route to the LLM:
 
 ---
 
+## Memory System
+
+Wyzer has a **two-tier memory system** for personalization:
+
+### Session Memory (RAM-only)
+- Stores recent conversation turns (last 5-10 turns)
+- Cleared on restart
+- Provides context for follow-up questions
+
+### Long-Term Memory (Disk-persisted)
+- Explicitly saved facts via "remember X" commands
+- Stored in `wyzer/data/memory.json`
+- Persists across restarts
+
+### Memory Commands
+
+| Voice Command | Action |
+|---------------|--------|
+| "Remember that my name is John" | Save fact to long-term memory |
+| "Remember my birthday is Sept 10" | Save fact to long-term memory |
+| "What do you remember?" | List all saved memories |
+| "Forget that" | Delete most recent memory |
+| "Forget my birthday" | Delete specific memory |
+| "Use memories" | Enable memory injection into LLM prompts |
+| "Stop using memories" | Disable memory injection |
+
+### Memory Injection
+
+When enabled (default: **ON**), all long-term memories are injected into LLM prompts so Wyzer can answer questions about you:
+
+- "What's my name?" → Uses remembered facts
+- "When's my birthday?" → Uses remembered facts
+
+**Control Methods:**
+- **Voice:** "use memories" / "stop using memories"
+- **CLI:** `--no-memories` flag disables injection
+- **Env:** `WYZER_USE_MEMORIES=0` disables injection
+
+**Priority Order:** CLI flag > env var > config default (true)
+
+---
+
 ## Troubleshooting
 
 ### Common Issues
@@ -611,6 +655,10 @@ AI-Assistant-v2/
 │   │   ├── tool_worker_pool.py # Parallel tool execution
 │   │   └── logger.py           # Logging
 │   │
+│   ├── memory/                 # Memory system
+│   │   ├── memory_manager.py   # Session & long-term memory
+│   │   └── command_detector.py # Memory command parsing
+│   │
 │   ├── tools/                  # Tool implementations
 │   │   ├── tool_base.py        # Base tool class
 │   │   ├── registry.py         # Tool registry
@@ -635,6 +683,7 @@ AI-Assistant-v2/
 │   │   └── piper/              # Piper TTS files
 │   │
 │   └── data/                   # Runtime data
+│       ├── memory.json         # Long-term memory storage
 │       ├── timer_state.json
 │       └── system_storage_index.json
 │
@@ -675,6 +724,9 @@ python run.py --quiet            # Clean output
 | "Pause" | Pause media |
 | "Close Spotify" | Close Spotify window |
 | "Set timer for 5 minutes" | Start a timer |
+| "Remember my name is John" | Save fact to memory |
+| "What do you remember?" | List memories |
+| "Use memories" | Enable memory injection |
 
 ### Keyboard Controls
 | Key | Action |
@@ -683,5 +735,5 @@ python run.py --quiet            # Clean output
 
 ---
 
-*Wyzer AI Assistant - Phase 6*
+*Wyzer AI Assistant - Phase 7*
 *Local, Private, Powerful*

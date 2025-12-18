@@ -24,6 +24,7 @@ from wyzer.core.intent_plan import (
     normalize_plan,
     Intent,
     validate_intents,
+    filter_unknown_tools,
     ExecutionResult,
     ExecutionSummary
 )
@@ -94,7 +95,32 @@ _EXPLICIT_CONTINUATION_RE = re.compile(
 # Purely informational query patterns that should NEVER trigger tools
 # These are conversational/knowledge queries, not action requests
 _INFORMATIONAL_QUERY_RE = re.compile(
-    r"^(?:tell me about|what (?:is|are|was|were)|who (?:is|are|was|were)|explain|describe|how does|how do|why (?:is|are|do|does)|when (?:did|was|were))\s+.+",
+    r"^(?:"
+    r"tell me about|"
+    r"what (?:is|are|was|were)|"
+    r"what'?s (?:a|an|some) (?:anime|show|movie|game|book|song|album|series|film) (?:like|similar to)|"  # "what's an anime like X"
+    r"who (?:is|are|was|were)|"
+    r"explain|"
+    r"describe|"
+    r"how does|"
+    r"how do|"
+    r"why (?:is|are|do|does)|"
+    r"when (?:did|was|were)"
+    r")\s+.+",
+    re.IGNORECASE
+)
+
+# Patterns that need action-word checking before being marked informational
+_RECOMMEND_SUGGEST_RE = re.compile(
+    r"^(?:recommend|suggest)\s+.+",
+    re.IGNORECASE
+)
+_WHAT_SHOULD_RE = re.compile(
+    r"^what (?:should|would|could) (?:i|you)\s+.+",
+    re.IGNORECASE
+)
+_ACTION_WORDS_RE = re.compile(
+    r"\b(?:scan|open|set|change|timer|volume|weather|location|storage|monitor|window|close|minimize|maximize|focus|mute|unmute|play|pause|launch|start)\b",
     re.IGNORECASE
 )
 
@@ -196,8 +222,29 @@ def is_informational_query(text: str) -> bool:
     
     These queries should use reply-only mode - no tools needed.
     Examples: "tell me about X", "what is Y", "who was Z"
+    
+    Special handling for "what should I..." - only informational
+    if it doesn't contain action words like scan/open/set/etc.
     """
-    return bool(_INFORMATIONAL_QUERY_RE.match(text.strip()))
+    stripped = text.strip()
+    
+    # Check main pattern first
+    if _INFORMATIONAL_QUERY_RE.match(stripped):
+        return True
+    
+    # Special handling for "recommend/suggest..." patterns
+    # Only informational if no action words present
+    if _RECOMMEND_SUGGEST_RE.match(stripped):
+        if not _ACTION_WORDS_RE.search(stripped):
+            return True
+    
+    # Special handling for "what should I..." patterns
+    if _WHAT_SHOULD_RE.match(stripped):
+        # Only informational if no action words present
+        if not _ACTION_WORDS_RE.search(stripped):
+            return True
+    
+    return False
 
 
 def rewrite_continuation(text: str) -> str:
@@ -673,6 +720,29 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 intent_plan.intents = intent_plan.intents[:1]
 
             if intent_plan.intents:
+                # Filter unknown tools (though this path is for explicit tool requests)
+                valid_intents, unknown_tools = filter_unknown_tools(intent_plan.intents, registry)
+                if unknown_tools:
+                    logger.warning(f"[UNKNOWN_TOOL] Explicit tool path had unknown tool(s): {', '.join(unknown_tools)}")
+                
+                if not valid_intents:
+                    # Explicit tool request with unknown tool - fall back to reply
+                    logger.info("[INTENT PLAN] Explicit tool was unknown, falling back to reply-only")
+                    reply_only = _call_llm_reply_only(text)
+                    end_time = time.perf_counter()
+                    latency_ms = int((end_time - start_time) * 1000)
+                    return {
+                        "reply": reply_only.get("reply", "I don't have that capability."),
+                        "latency_ms": latency_ms,
+                        "meta": {
+                            "hybrid_route": "llm",
+                            "hybrid_confidence": float(hybrid_decision.confidence or 0.0),
+                            "unknown_tools_fallback": True,
+                        },
+                    }
+                
+                intent_plan.intents = valid_intents
+                
                 try:
                     validate_intents(intent_plan.intents, registry)
                 except ValueError as e:
@@ -763,7 +833,32 @@ def handle_user_text(text: str) -> Dict[str, Any]:
             tool_names = [intent.tool for intent in intent_plan.intents]
             logger.info(f"[INTENT PLAN] Executing {len(intent_plan.intents)} intent(s): {', '.join(tool_names)}")
             
-            # Validate all intents before execution
+            # Filter out unknown tools (graceful degradation instead of hard failure)
+            valid_intents, unknown_tools = filter_unknown_tools(intent_plan.intents, registry)
+            
+            if unknown_tools:
+                # Log unknown tools for debugging (single line, includes tool names)
+                logger.warning(f"[UNKNOWN_TOOL] Skipping unknown tool(s): {', '.join(unknown_tools)}")
+            
+            # If ALL intents were unknown, fall back to reply-only
+            if not valid_intents:
+                logger.info("[INTENT PLAN] All intents had unknown tools, falling back to reply-only")
+                reply_only = _call_llm_reply_only(text)
+                end_time = time.perf_counter()
+                latency_ms = int((end_time - start_time) * 1000)
+                return {
+                    "reply": reply_only.get("reply", "I'm not sure how to help with that."),
+                    "latency_ms": latency_ms,
+                    "meta": {
+                        "unknown_tools_fallback": True,
+                        "unknown_tools": unknown_tools,
+                    },
+                }
+            
+            # Update intents to only valid ones
+            intent_plan.intents = valid_intents
+            
+            # Validate remaining intents (max count, args format, etc.)
             try:
                 validate_intents(intent_plan.intents, registry)
             except ValueError as e:
@@ -2366,17 +2461,32 @@ def _call_llm(user_text: str, registry) -> Dict[str, Any]:
     except Exception:
         pass
     
+    # Include all memories block (use_memories flag) - all long-term memories if enabled
+    all_memories_context = ""
+    try:
+        from wyzer.brain.prompt import get_all_memories_block
+        all_memories_context = get_all_memories_block()
+    except Exception:
+        pass
+    
     # Build tool list for prompt
     tools_list = registry.list_tools()
     tools_desc = "\n".join([f"- {t['name']}: {t['description']}" for t in tools_list])
+    tool_names = ", ".join([t['name'] for t in tools_list])
     
     prompt = f"""You are Wyzer, a local voice assistant. You can use tools to help users.
-{session_context}{promoted_context}{redaction_context}
+{session_context}{promoted_context}{redaction_context}{all_memories_context}
 
 CONVERSATIONAL CONTEXT:
 - If the user says something vague like "tell me more", "can you elaborate", "go on", "what else", or "continue", check the recent conversation context above.
 - When a follow-up references a previous topic, continue discussing THAT topic in detail. Do NOT ask "what would you like to know?" - instead, provide more information about the last discussed subject.
 - Use the session context to maintain topic continuity across turns.
+
+CRITICAL - TOOL USAGE RULES:
+- You may ONLY use tools from the list below. Do NOT invent or hallucinate tool names.
+- Valid tool names are: {tool_names}
+- If the user asks a general knowledge question (e.g., recommendations, explanations, opinions, facts), respond with {{"reply": "..."}} ONLY - no tools.
+- Tools are for ACTIONS on the user's computer (open apps, control media, check system info, etc.), NOT for answering questions.
 
 Available tools:
 {tools_desc}
@@ -2438,6 +2548,18 @@ Response: {{"intents": [{{"tool": "get_time", "args": {{}}}}], "reply": ""}}
 
 User: "hello"
 Response: {{"reply": "Hello! How can I help you?"}}
+
+User: "what's an anime like One Piece"
+Response: {{"reply": "If you enjoy One Piece, you might like Naruto, Fairy Tail, or Hunter x Hunter - they all have long adventure arcs with strong themes of friendship and growth."}}
+
+User: "recommend me a good movie"
+Response: {{"reply": "It depends on your mood! For action, try John Wick. For something emotional, The Shawshank Redemption is a classic. For sci-fi, Inception is fantastic."}}
+
+User: "what is the capital of France"
+Response: {{"reply": "The capital of France is Paris."}}
+
+User: "explain how photosynthesis works"
+Response: {{"reply": "Photosynthesis is how plants convert sunlight, water, and carbon dioxide into glucose and oxygen. They capture light energy with chlorophyll and use it to power this chemical transformation."}}
 
 RESPONSE FORMAT: You must respond with valid JSON only (no markdown, no code blocks).
 Option 1 - Direct reply (no tool needed):
@@ -2537,11 +2659,19 @@ def _call_llm_reply_only(user_text: str) -> Dict[str, Any]:
     except Exception:
         pass
     
+    # Include all memories block (use_memories flag) - all long-term memories if enabled
+    all_memories_context = ""
+    try:
+        from wyzer.brain.prompt import get_all_memories_block
+        all_memories_context = get_all_memories_block()
+    except Exception:
+        pass
+    
     prompt = f"""You are Wyzer, a local voice assistant.
 
 No tools are available for this request.
 Write a natural response to the user.
-{session_context}{promoted_context}{redaction_context}
+{session_context}{promoted_context}{redaction_context}{all_memories_context}
 
 CONVERSATIONAL CONTEXT:
 - If the user says something vague like "tell me more", "can you elaborate", "go on", "what else", or "continue", check the recent conversation context above.
@@ -2597,6 +2727,14 @@ def _call_llm_with_execution_summary(
     except Exception:
         pass
     
+    # Include all memories block (use_memories flag) - all long-term memories if enabled
+    all_memories_context = ""
+    try:
+        from wyzer.brain.prompt import get_all_memories_block
+        all_memories_context = get_all_memories_block()
+    except Exception:
+        pass
+    
     # Build a summary of what was executed
     summary_parts = []
     for result in execution_summary.ran:
@@ -2615,7 +2753,7 @@ def _call_llm_with_execution_summary(
     summary_text = "\n".join(summary_parts)
     
     prompt = f"""You are Wyzer, a local voice assistant.
-{session_context}{promoted_context}
+{session_context}{promoted_context}{redaction_context}{all_memories_context}
 The user asked: {user_text}
 
 I executed the following actions:
@@ -2671,8 +2809,16 @@ def _call_llm_with_tool_result(
     except Exception:
         pass
     
+    # Include all memories block (use_memories flag) - all long-term memories if enabled
+    all_memories_context = ""
+    try:
+        from wyzer.brain.prompt import get_all_memories_block
+        all_memories_context = get_all_memories_block()
+    except Exception:
+        pass
+    
     prompt = f"""You are Wyzer, a local voice assistant.
-{session_context}{promoted_context}{redaction_context}
+{session_context}{promoted_context}{redaction_context}{all_memories_context}
 The user asked: {user_text}
 
 I executed the tool '{tool_name}' with arguments: {json.dumps(tool_args)}

@@ -152,6 +152,10 @@ class Config:
     SESSION_MEMORY_TURNS: int = int(os.environ.get("WYZER_SESSION_MEMORY_TURNS", "10"))
     MEMORY_FILE_PATH: str = os.environ.get("WYZER_MEMORY_FILE_PATH", "wyzer/data/memory.json")
     
+    # Memory Injection flag - inject all long-term memories into LLM prompts
+    # Default: True (can be disabled via --no-memories flag or WYZER_USE_MEMORIES=0 env var)
+    USE_MEMORIES: bool = True
+    
     @classmethod
     def get_frame_duration_ms(cls) -> float:
         """Get frame duration in milliseconds"""

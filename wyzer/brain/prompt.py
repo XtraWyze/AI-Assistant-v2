@@ -115,6 +115,33 @@ def get_redaction_block() -> str:
     return ""
 
 
+def get_all_memories_block() -> str:
+    """
+    Get ALL long-term memories for LLM prompt injection.
+    
+    Only returns content when use_memories session flag is True.
+    Controlled by "use memories" / "stop using memories" voice commands.
+    
+    Contract:
+    - Default OFF (memories not injected unless explicitly enabled)
+    - Session-scoped (cleared on restart)
+    - Deduplicates and caps at 30 bullets / 1200 chars
+    - Labeled block instructs LLM to use only if relevant
+    
+    Returns:
+        Formatted memory block, or empty string if flag is OFF or no memories
+    """
+    try:
+        from wyzer.memory.memory_manager import get_memory_manager
+        mem_mgr = get_memory_manager()
+        memory_block = mem_mgr.get_all_memories_for_injection()
+        if memory_block:
+            return f"\n{memory_block}\n"
+    except Exception:
+        pass
+    return ""
+
+
 def format_prompt(user_input: str, include_session_context: bool = True) -> str:
     """
     Format user input with system prompt.

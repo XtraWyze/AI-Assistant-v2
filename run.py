@@ -230,6 +230,13 @@ Examples:
         help="Enable quiet mode (hide debug info like heartbeats for cleaner output)"
     )
     
+    # Memory injection flag (default: on, use --no-memories to disable)
+    parser.add_argument(
+        "--no-memories",
+        action="store_true",
+        help="Disable long-term memory injection into LLM prompts (default: on)"
+    )
+    
     return parser.parse_args()
 
 
@@ -259,6 +266,21 @@ def main():
         os.environ["WYZER_QUIET_MODE"] = "true"
         Config.QUIET_MODE = True
         logger.info("Running in quiet mode (debug info hidden)")
+    
+    # Handle memory injection flags
+    # Default: True (on). Override to False via --no-memories or WYZER_USE_MEMORIES=0
+    use_memories_setting = True
+    use_memories_source = "default"
+    
+    if args.no_memories:
+        use_memories_setting = False
+        use_memories_source = "cli_flag"
+    elif os.environ.get("WYZER_USE_MEMORIES", "").lower() in ("0", "false", "no", "off"):
+        use_memories_setting = False
+        use_memories_source = "env_var"
+    
+    Config.USE_MEMORIES = use_memories_setting
+    logger.info(f"[STATE] use_memories={use_memories_setting} (source={use_memories_source})")
     
     # Apply profile tweaks (keep behavior identical by default)
     whisper_compute_type = "int8"

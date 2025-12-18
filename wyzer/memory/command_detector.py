@@ -89,6 +89,8 @@ class MemoryCommandType(Enum):
     RECALL = "recall"  # Phase 8: "do you remember X" / "what do you remember about X"
     PROMOTE = "promote"  # Phase 9: "use that" / "use this" / "use it"
     CLEAR_PROMOTED = "clear_promoted"  # Phase 9: "stop using that" / "don't use that"
+    USE_ALL_MEMORIES = "use_all_memories"  # "use memories" / "enable memories"
+    DISABLE_MEMORIES = "disable_memories"  # "stop using memories" / "disable memories"
     NONE = "none"
 
 
@@ -123,6 +125,43 @@ def detect_memory_command(user_text: str) -> Optional[MemoryCommand]:
     # If there are separators like "and then", ";", etc., let multi_intent_parser handle it
     if MULTI_INTENT_SEPARATORS_RE.search(text):
         return None
+    
+    # === USE_ALL_MEMORIES: Enable memory injection for this session ===
+    # "use memories", "enable memories", "turn on memories", "use all memories"
+    use_memories_patterns = [
+        r'^use\s+(?:all\s+)?memories\.?$',
+        r'^enable\s+memories\.?$',
+        r'^turn\s+on\s+memories\.?$',
+        r'^activate\s+memories\.?$',
+        r'^use\s+my\s+memories\.?$',
+        r'^enable\s+(?:all\s+)?(?:my\s+)?memories\.?$',
+    ]
+    for pattern in use_memories_patterns:
+        if re.match(pattern, text_lower):
+            return MemoryCommand(
+                command_type=MemoryCommandType.USE_ALL_MEMORIES,
+                text="",
+                original_input=text
+            )
+    
+    # === DISABLE_MEMORIES: Disable memory injection for this session ===
+    # "stop using memories", "disable memories", "turn off memories", "don't use memories"
+    disable_memories_patterns = [
+        r'^stop\s+using\s+(?:all\s+)?memories\.?$',
+        r'^disable\s+memories\.?$',
+        r'^turn\s+off\s+memories\.?$',
+        r'^deactivate\s+memories\.?$',
+        r'^(?:don\'?t|do\s+not)\s+use\s+(?:all\s+)?memories\.?$',
+        r'^stop\s+(?:using\s+)?my\s+memories\.?$',
+        r'^disable\s+(?:all\s+)?(?:my\s+)?memories\.?$',
+    ]
+    for pattern in disable_memories_patterns:
+        if re.match(pattern, text_lower):
+            return MemoryCommand(
+                command_type=MemoryCommandType.DISABLE_MEMORIES,
+                text="",
+                original_input=text
+            )
     
     # === List memories ===
     list_patterns = [
@@ -192,6 +231,34 @@ def detect_memory_command(user_text: str) -> Optional[MemoryCommand]:
             # Extract the content to remember (use original case)
             content_start = match.start(group_idx)
             content = text[content_start:].strip()
+            if content:
+                return MemoryCommand(
+                    command_type=MemoryCommandType.REMEMBER,
+                    text=content,
+                    original_input=text
+                )
+    
+    # === Trailing "remember that" patterns (common speech: "X, remember that" / "X. Remember that.") ===
+    # These patterns have the content BEFORE "remember that"
+    trailing_remember_patterns = [
+        # "X, remember that" - content before comma + remember that
+        (r'^(.+?)[,;]\s*remember\s+that\.?$', 1),
+        # "X. Remember that." - content before period + remember that
+        (r'^(.+?)\.\s*remember\s+that\.?$', 1),
+        # "X - remember that" - content before dash
+        (r'^(.+?)\s*[-–—]\s*remember\s+that\.?$', 1),
+        # "X, remember this" - variation with "this"
+        (r'^(.+?)[,;]\s*remember\s+(?:this|it)\.?$', 1),
+        # "X. Remember this." - period variant
+        (r'^(.+?)\.\s*remember\s+(?:this|it)\.?$', 1),
+    ]
+    for pattern, group_idx in trailing_remember_patterns:
+        match = re.match(pattern, text_lower)
+        if match:
+            # Extract the content to remember from the FIRST group (use original case)
+            content_start = match.start(group_idx)
+            content_end = match.end(group_idx)
+            content = text[content_start:content_end].strip()
             if content:
                 return MemoryCommand(
                     command_type=MemoryCommandType.REMEMBER,
@@ -497,6 +564,36 @@ def handle_memory_command(user_text: str) -> Optional[Tuple[str, dict]]:
             return (
                 "I wasn't using any saved memories.",
                 {"memory_action": "clear_promoted", "ok": True, "cleared_count": 0}
+            )
+    
+    elif cmd.command_type == MemoryCommandType.USE_ALL_MEMORIES:
+        # Enable injection of ALL long-term memories into LLM prompts
+        # Session-scoped only, no disk writes
+        changed = memory_mgr.set_use_memories(True, source="voice_command")
+        if changed:
+            return (
+                "Okay — I'll use all your saved memories now.",
+                {"memory_action": "use_all_memories", "ok": True, "enabled": True}
+            )
+        else:
+            return (
+                "I'm already using your memories.",
+                {"memory_action": "use_all_memories", "ok": True, "enabled": True, "already_set": True}
+            )
+    
+    elif cmd.command_type == MemoryCommandType.DISABLE_MEMORIES:
+        # Disable injection of long-term memories into LLM prompts
+        # Session-scoped only, no disk writes
+        changed = memory_mgr.set_use_memories(False, source="voice_command")
+        if changed:
+            return (
+                "Okay — I'll stop using your memories.",
+                {"memory_action": "disable_memories", "ok": True, "enabled": False}
+            )
+        else:
+            return (
+                "I wasn't using your memories.",
+                {"memory_action": "disable_memories", "ok": True, "enabled": False, "already_set": True}
             )
     
     return None
