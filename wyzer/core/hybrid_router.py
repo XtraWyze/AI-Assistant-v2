@@ -277,9 +277,9 @@ _MINIMIZE_RE = re.compile(r"^(minimize|shrink)\s+(.+)$", re.IGNORECASE)
 # Anchored maximize/fullscreen/expand.
 _MAXIMIZE_RE = re.compile(r"^(maximize|fullscreen|expand|full\s+screen)\s+(.+)$", re.IGNORECASE)
 
-# Anchored audio device switching: "switch audio [device] to <device>" / "set audio [device] to <device>"
+# Anchored audio device switching: "switch/set/change/swap audio [output] [device] to <device>"
 _AUDIO_DEVICE_SWITCH_RE = re.compile(
-    r"^(?:switch\s+(?:audio|sound)(?:\s+device)?\s+to|set\s+(?:audio|sound)(?:\s+device)?\s+to)\s+(.+)$",
+    r"^(?:(?:switch|set|change|swap)\s+(?:audio(?:\s+output)?|sound|output)(?:\s+device)?\s+to)\s+(.+)$",
     re.IGNORECASE,
 )
 
@@ -354,19 +354,20 @@ _WORD_TO_NUMBER = {
 # Timer start: "set a timer for X minutes/seconds", "start a timer for X minutes"
 # Matches both digits (10) and word numbers (ten, three)
 # Also supports compound durations like "4 minutes and 20 seconds"
+# Note: Speech recognition often transcribes "a timer" as "our timer", "our timings", "the timer", etc.
 _TIMER_NUMBER_PATTERN = r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|a|an)"
 _TIMER_UNIT_PATTERN = r"(seconds?|secs?|minutes?|mins?|hours?|hrs?)"
 
 # Simple single-unit timer: "set a timer for 5 minutes"
 _TIMER_START_RE = re.compile(
-    rf"^(?:set|start|create)\s+(?:a\s+)?timer\s+(?:for\s+)?{_TIMER_NUMBER_PATTERN}\s*{_TIMER_UNIT_PATTERN}(?:\s+timer)?[.?!]?$",
+    rf"^(?:set|start|create)\s+(?:a|an|the|our|up\s+a|up\s+the)?\s*(?:timer|timers|timing|timings)\s+(?:for\s+)?{_TIMER_NUMBER_PATTERN}\s*{_TIMER_UNIT_PATTERN}(?:\s+timer)?[.?!]?$",
     re.IGNORECASE,
 )
 
 # Compound duration timer: "set a timer for 4 minutes and 20 seconds"
 # Supports: "X hours Y minutes Z seconds", "X minutes and Y seconds", etc.
 _TIMER_COMPOUND_RE = re.compile(
-    rf"^(?:set|start|create)\s+(?:a\s+)?timer\s+(?:for\s+)?{_TIMER_NUMBER_PATTERN}\s*{_TIMER_UNIT_PATTERN}(?:\s+(?:and\s+)?{_TIMER_NUMBER_PATTERN}\s*{_TIMER_UNIT_PATTERN})?(?:\s+(?:and\s+)?{_TIMER_NUMBER_PATTERN}\s*{_TIMER_UNIT_PATTERN})?(?:\s+timer)?[.?!]?$",
+    rf"^(?:set|start|create)\s+(?:a|an|the|our|up\s+a|up\s+the)?\s*(?:timer|timers|timing|timings)\s+(?:for\s+)?{_TIMER_NUMBER_PATTERN}\s*{_TIMER_UNIT_PATTERN}(?:\s+(?:and\s+)?{_TIMER_NUMBER_PATTERN}\s*{_TIMER_UNIT_PATTERN})?(?:\s+(?:and\s+)?{_TIMER_NUMBER_PATTERN}\s*{_TIMER_UNIT_PATTERN})?(?:\s+timer)?[.?!]?$",
     re.IGNORECASE,
 )
 

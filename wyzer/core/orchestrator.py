@@ -45,6 +45,228 @@ def _get_no_ollama_reply() -> str:
     return random.choice(_NO_OLLAMA_FALLBACK_REPLIES)
 
 
+# ============================================================================
+# CONTINUATION PHRASE DETECTION & TOPIC TRACKING
+# ============================================================================
+# Deterministic pre-pass: detect vague follow-ups and rewrite them to include
+# the last topic explicitly. This ensures continuity even if context is short.
+
+# Continuation phrases that indicate user wants more on the previous topic
+_CONTINUATION_PHRASES = [
+    r"^tell me more[\.\?]?$",
+    r"^can you tell me more[\.\?]?$",
+    r"^more[\.\?]?$",
+    r"^go on[\.\?]?$",
+    r"^continue[\.\?]?$",
+    r"^keep going[\.\?]?$",
+    r"^what else[\.\?]?$",
+    r"^and[\.\?]?$",
+    r"^elaborate[\.\?]?$",
+    r"^can you elaborate[\.\?]?$",
+    r"^please elaborate[\.\?]?$",
+    r"^explain more[\.\?]?$",
+    r"^tell me more about (?:it|that|this)[\.\?]?$",
+    r"^more (?:info|information|details?)[\.\?]?$",
+    r"^give me more[\.\?]?$",
+    r"^anything else[\.\?]?$",
+    r"^what about it[\.\?]?$",
+    r"^like what[\.\?]?$",
+    r"^expand on that[\.\?]?$",
+    r"^can you expand on that[\.\?]?$",
+    r"^keep talking[\.\?]?$",
+    r"^yes[\.\?]?$",
+    r"^yeah[\.\?]?$",
+    r"^sure[\.\?]?$",
+    r"^okay[\.\?]?$",
+    r"^ok[\.\?]?$",
+    r"^go ahead[\.\?]?$",
+    r"^i'm listening[\.\?]?$",
+    r"^im listening[\.\?]?$",
+]
+_CONTINUATION_RE = re.compile("|".join(_CONTINUATION_PHRASES), re.IGNORECASE)
+
+# "Tell me more about X" pattern - explicit topic continuation (reply-only, no tools)
+_EXPLICIT_CONTINUATION_RE = re.compile(
+    r"^(?:tell me more about|more about|explain more about|elaborate on|expand on|continue (?:explaining|about))\s+(.+?)[\.\?]?$",
+    re.IGNORECASE
+)
+
+# Purely informational query patterns that should NEVER trigger tools
+# These are conversational/knowledge queries, not action requests
+_INFORMATIONAL_QUERY_RE = re.compile(
+    r"^(?:tell me about|what (?:is|are|was|were)|who (?:is|are|was|were)|explain|describe|how does|how do|why (?:is|are|do|does)|when (?:did|was|were))\s+.+",
+    re.IGNORECASE
+)
+
+# Module-level last topic storage (RAM only, cleared on restart)
+_last_topic: Optional[str] = None
+_last_topic_lock = None  # Lazy init for threading
+_continuation_hops: int = 0  # Tracks consecutive continuation requests
+_MAX_CONTINUATION_HOPS: int = 3  # After this many, ask narrowing question
+
+def _get_topic_lock():
+    """Lazy init threading lock for topic access."""
+    global _last_topic_lock
+    if _last_topic_lock is None:
+        import threading
+        _last_topic_lock = threading.Lock()
+    return _last_topic_lock
+
+
+def set_last_topic(topic: str) -> None:
+    """
+    Update the last discussed topic (called after non-vague queries).
+    
+    Topic hygiene rules:
+    - Only set from USER turns, never from assistant replies
+    - Skip empty/garbage topics (STT glitches like "tell me about...")
+    - Minimum 3 chars, must contain at least one letter
+    """
+    global _last_topic, _continuation_hops
+    if not topic:
+        return
+    
+    clean = topic.strip()
+    
+    # Hygiene: reject empty, too short, or letter-less garbage
+    if len(clean) < 3:
+        return
+    if not any(c.isalpha() for c in clean):
+        return
+    # Reject if it's just filler words
+    filler_only = {"the", "a", "an", "it", "that", "this", "them", "those"}
+    if clean.lower() in filler_only:
+        return
+    
+    with _get_topic_lock():
+        _last_topic = clean
+        _continuation_hops = 0  # Reset hops when new topic is set
+
+
+def get_last_topic() -> Optional[str]:
+    """Get the last discussed topic."""
+    with _get_topic_lock():
+        return _last_topic
+
+
+def increment_continuation_hops() -> int:
+    """Increment and return continuation hop count."""
+    global _continuation_hops
+    with _get_topic_lock():
+        _continuation_hops += 1
+        return _continuation_hops
+
+
+def get_continuation_hops() -> int:
+    """Get current continuation hop count."""
+    with _get_topic_lock():
+        return _continuation_hops
+
+
+def reset_continuation_hops() -> None:
+    """Reset continuation hop count (called on non-continuation queries)."""
+    global _continuation_hops
+    with _get_topic_lock():
+        _continuation_hops = 0
+
+
+def is_continuation_phrase(text: str) -> bool:
+    """Check if text is a vague continuation phrase."""
+    return bool(_CONTINUATION_RE.match(text.strip()))
+
+
+def is_explicit_continuation(text: str) -> Optional[str]:
+    """
+    Check if text is an explicit continuation like "tell me more about X".
+    
+    Returns the topic X if matched, None otherwise.
+    """
+    match = _EXPLICIT_CONTINUATION_RE.match(text.strip())
+    if match:
+        topic = match.group(1).strip()
+        # Clean up trailing punctuation
+        topic = re.sub(r'[\.\?\!]+$', '', topic).strip()
+        return topic if len(topic) > 2 else None
+    return None
+
+
+def is_informational_query(text: str) -> bool:
+    """
+    Check if text is a purely informational/knowledge query.
+    
+    These queries should use reply-only mode - no tools needed.
+    Examples: "tell me about X", "what is Y", "who was Z"
+    """
+    return bool(_INFORMATIONAL_QUERY_RE.match(text.strip()))
+
+
+def rewrite_continuation(text: str) -> str:
+    """
+    If text is a continuation phrase, rewrite it to include the last topic.
+    
+    Example:
+        "Can you tell me more?" + last_topic="One Piece"
+        -> "Continue explaining One Piece in more detail."
+    
+    Returns original text if not a continuation phrase or no topic available.
+    """
+    if not is_continuation_phrase(text):
+        return text
+    
+    topic = get_last_topic()
+    if not topic:
+        return text  # No topic to continue, let LLM handle generically
+    
+    # Rewrite to be explicit
+    return f"Continue explaining {topic} in more detail."
+
+
+def _extract_topic_from_query(text: str) -> Optional[str]:
+    """
+    Extract the main topic from a user query for tracking.
+    
+    Simple heuristic: if query asks about something specific, extract it.
+    Returns None for vague or tool-focused queries.
+    """
+    lower = text.lower().strip()
+    
+    # Skip if it's a continuation phrase
+    if is_continuation_phrase(text):
+        return None
+    
+    # Skip if it's clearly a command (open, close, volume, etc.)
+    command_indicators = [
+        "open ", "close ", "launch ", "start ", "run ", "execute ",
+        "volume ", "mute", "pause", "play ", "stop ", "minimize",
+        "maximize", "focus ", "switch to ", "set timer", "what time",
+        "what's the time", "weather", "temperature", "refresh library",
+    ]
+    if any(lower.startswith(ind) or ind in lower for ind in command_indicators):
+        return None
+    
+    # Extract topic from "tell me about X" or "what is X" patterns
+    patterns = [
+        r"(?:tell me about|explain|describe|what (?:is|are)|who (?:is|are)|talk about)\s+(.+?)[\.\?]?$",
+        r"^(.+?)\s*\?$",  # Simple question like "One Piece?"
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            topic = match.group(1).strip()
+            # Clean up trailing punctuation
+            topic = re.sub(r'[\.\?\!]+$', '', topic).strip()
+            if len(topic) > 2:
+                return topic
+    
+    # Fallback: if it's a conversational query (not a command), use the whole thing
+    # but only if it's reasonably short (likely a topic)
+    if len(text) < 100 and not any(c in lower for c in ["please", "can you", "could you", "would you"]):
+        return text.strip()
+    
+    return None
+
+
 _FASTPATH_SPLIT_RE = re.compile(r"\b(?:and then|then|and)\b", re.IGNORECASE)
 _FASTPATH_COMMA_SPLIT_RE = re.compile(r"\s*,\s*")
 _FASTPATH_SEMI_SPLIT_RE = re.compile(r"\s*;\s*")
@@ -277,8 +499,93 @@ def handle_user_text(text: str) -> Dict[str, Any]:
     start_time = time.perf_counter()
     logger = get_logger_instance()
     
+    # =========================================================================
+    # CONTINUATION PHRASE PRE-PASS (deterministic topic continuity)
+    # =========================================================================
+    # If user says "tell me more" etc., rewrite to include the last topic.
+    # This ensures continuity even if session context is short/truncated.
+    original_text = text
+    is_continuation = is_continuation_phrase(text)
+    explicit_topic = is_explicit_continuation(text)  # "tell me more about X" -> X
+    is_info_query = is_informational_query(text)  # "tell me about X", "what is Y"
+    narrowing_question = None  # Set if continuation depth exceeded
+    
+    if is_continuation:
+        # Track continuation hops to prevent infinite "tell me more" loops
+        hops = increment_continuation_hops()
+        if hops > _MAX_CONTINUATION_HOPS:
+            # Too many consecutive continuations - ask narrowing question
+            topic = get_last_topic() or "that"
+            narrowing_question = f"I've covered the basics of {topic}. Would you like to know about specific characters, plot details, history, or something else?"
+            logger.info(f"[CONTINUATION] Hop limit reached ({hops}), asking narrowing question")
+        else:
+            rewritten = rewrite_continuation(text)
+            if rewritten != text:
+                logger.info(f"[CONTINUATION] Rewriting '{text}' -> '{rewritten}' (hop {hops}/{_MAX_CONTINUATION_HOPS})")
+                text = rewritten
+    elif explicit_topic:
+        # "Tell me more about One Piece" - update topic and mark as continuation
+        set_last_topic(explicit_topic)
+        logger.info(f"[CONTINUATION] Explicit topic: '{explicit_topic}'")
+        is_continuation = True  # Treat as continuation (reply-only)
+    else:
+        # Not a continuation - extract and save topic for future follow-ups
+        reset_continuation_hops()  # Reset hop counter on non-continuation
+        topic = _extract_topic_from_query(text)
+        if topic:
+            set_last_topic(topic)
+            logger.debug(f"[TOPIC] Tracking topic: {topic}")
+    
     try:
         registry = get_registry()
+        
+        # =====================================================================
+        # REPLY-ONLY FAST-PATH: Skip tools for conversational queries
+        # =====================================================================
+        # HARD INVARIANT (Phase 7+): When use_reply_only is True, we MUST NOT:
+        #   - Run intent planning
+        #   - Access tool registry for execution
+        #   - Validate tool arguments
+        #   - Execute any tools
+        # This prevents tool hallucinations on conversational/knowledge queries.
+        # Future refactors: DO NOT add "plan first" logic before this check.
+        # =====================================================================
+        use_reply_only = is_continuation or is_info_query
+        if use_reply_only:
+            reason = "continuation" if is_continuation else "informational query"
+            logger.info(f"[REPLY-ONLY] Using reply-only mode ({reason})")
+            
+            # Handle narrowing question (continuation depth exceeded)
+            if narrowing_question:
+                end_time = time.perf_counter()
+                latency_ms = int((end_time - start_time) * 1000)
+                return {
+                    "reply": narrowing_question,
+                    "latency_ms": latency_ms,
+                    "meta": {"reply_only": True, "reason": "narrowing", "original_text": original_text},
+                }
+            
+            # Early return if NO_OLLAMA mode is enabled
+            if getattr(Config, "NO_OLLAMA", False):
+                end_time = time.perf_counter()
+                latency_ms = int((end_time - start_time) * 1000)
+                return {
+                    "reply": "I can't answer that without the language model.",
+                    "latency_ms": latency_ms,
+                    "meta": {"reply_only": True, "reason": reason, "no_ollama": True},
+                }
+            
+            # Use reply-only LLM call (no tools)
+            llm_response = _call_llm_reply_only(text)
+            reply = llm_response.get("reply", "")
+            
+            end_time = time.perf_counter()
+            latency_ms = int((end_time - start_time) * 1000)
+            return {
+                "reply": reply,
+                "latency_ms": latency_ms,
+                "meta": {"reply_only": True, "reason": reason, "original_text": original_text},
+            }
 
         # Hybrid router FIRST: deterministic tool plans for obvious commands; LLM otherwise.
         hybrid_decision = hybrid_router.decide(text)
@@ -2066,6 +2373,11 @@ def _call_llm(user_text: str, registry) -> Dict[str, Any]:
     prompt = f"""You are Wyzer, a local voice assistant. You can use tools to help users.
 {session_context}{promoted_context}{redaction_context}
 
+CONVERSATIONAL CONTEXT:
+- If the user says something vague like "tell me more", "can you elaborate", "go on", "what else", or "continue", check the recent conversation context above.
+- When a follow-up references a previous topic, continue discussing THAT topic in detail. Do NOT ask "what would you like to know?" - instead, provide more information about the last discussed subject.
+- Use the session context to maintain topic continuity across turns.
+
 Available tools:
 {tools_desc}
 
@@ -2230,6 +2542,12 @@ def _call_llm_reply_only(user_text: str) -> Dict[str, Any]:
 No tools are available for this request.
 Write a natural response to the user.
 {session_context}{promoted_context}{redaction_context}
+
+CONVERSATIONAL CONTEXT:
+- If the user says something vague like "tell me more", "can you elaborate", "go on", "what else", or "continue", check the recent conversation context above.
+- When a follow-up references a previous topic, continue discussing THAT topic in detail. Do NOT ask "what would you like to know?" - instead, provide more information about the last discussed subject.
+- Use the session context to maintain topic continuity across turns.
+
 RESPONSE FORMAT: JSON only (no markdown):
 {{"reply": "your response"}}
 

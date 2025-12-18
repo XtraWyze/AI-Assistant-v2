@@ -19,5 +19,12 @@
     "text": "my birthday is 9, 10 of 1996.",
     "index_text": "my birthday is 9, 10 of 1996",
     "tags": []
+  },
+  {
+    "id": "1169ccdd-af71-44ba-b357-c7860cb5dcfa",
+    "created_at": "2025-12-18T03:56:01.760183Z",
+    "text": "my dog's name is Kush.",
+    "index_text": "my dog's name is kush",
+    "tags": []
   }
 ]
