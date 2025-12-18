@@ -63,6 +63,53 @@ def get_session_context_block() -> str:
     return ""
 
 
+def get_promoted_memory_block() -> str:
+    """
+    Get promoted memory context for LLM prompt injection.
+    
+    IMPORTANT (Phase 9 contract):
+    - Promoted memory = user-approved long-term memory for THIS session only
+    - Only returns memories that user explicitly promoted with "use that"
+    - This is the ONLY way long-term memory reaches the LLM - after user consent
+    - Cleared on restart or explicit "stop using that" command
+    
+    Returns:
+        Formatted promoted memory block, or empty string if none
+    """
+    try:
+        from wyzer.memory.memory_manager import get_memory_manager
+        mem_mgr = get_memory_manager()
+        promoted_context = mem_mgr.get_promoted_context()
+        if promoted_context:
+            return f"\n{promoted_context}\n"
+    except Exception:
+        pass
+    return ""
+
+
+def get_redaction_block() -> str:
+    """
+    Get redaction block for LLM prompt injection (forgotten facts).
+    
+    IMPORTANT (Phase 9 polish):
+    - If user has forgotten certain facts, this block instructs LLM to NOT use them
+    - Prevents LLM from answering from session context after user said "forget X"
+    - Session-scoped (cleared on restart)
+    
+    Returns:
+        Formatted redaction block, or empty string if nothing forgotten
+    """
+    try:
+        from wyzer.memory.memory_manager import get_memory_manager
+        mem_mgr = get_memory_manager()
+        redaction_context = mem_mgr.get_redaction_block()
+        if redaction_context:
+            return f"\n{redaction_context}\n"
+    except Exception:
+        pass
+    return ""
+
+
 def format_prompt(user_input: str, include_session_context: bool = True) -> str:
     """
     Format user input with system prompt.

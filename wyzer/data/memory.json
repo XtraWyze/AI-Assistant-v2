@@ -1,9 +1,23 @@
 [
   {
-    "id": "df6e561a-1881-435a-9978-1e739ced741f",
-    "created_at": "2025-12-17T23:32:27.855719Z",
+    "id": "86afb629-b7a8-4de0-84a4-57ecbe6f8340",
+    "created_at": "2025-12-18T00:16:19.044803Z",
     "text": "my name's Levi.",
     "index_text": "my name's levi",
+    "tags": []
+  },
+  {
+    "id": "690ed2f2-7109-438f-89ce-b56903e4a422",
+    "created_at": "2025-12-18T00:18:43.548412Z",
+    "text": "my birthday is 9, 10, and 96.",
+    "index_text": "my birthday is 9, 10, and 96",
+    "tags": []
+  },
+  {
+    "id": "61366dad-8a3a-4dbc-9422-734b32f0f003",
+    "created_at": "2025-12-18T00:19:06.736373Z",
+    "text": "my birthday is 9, 10 of 1996.",
+    "index_text": "my birthday is 9, 10 of 1996",
     "tags": []
   }
 ]

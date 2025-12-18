@@ -2043,12 +2043,28 @@ def _call_llm(user_text: str, registry) -> Dict[str, Any]:
     except Exception:
         pass
     
+    # Include promoted memory context (Phase 9) - user-approved memory for this session
+    promoted_context = ""
+    try:
+        from wyzer.brain.prompt import get_promoted_memory_block
+        promoted_context = get_promoted_memory_block()
+    except Exception:
+        pass
+    
+    # Include redaction block (Phase 9 polish) - forgotten facts LLM should not use
+    redaction_context = ""
+    try:
+        from wyzer.brain.prompt import get_redaction_block
+        redaction_context = get_redaction_block()
+    except Exception:
+        pass
+    
     # Build tool list for prompt
     tools_list = registry.list_tools()
     tools_desc = "\n".join([f"- {t['name']}: {t['description']}" for t in tools_list])
     
     prompt = f"""You are Wyzer, a local voice assistant. You can use tools to help users.
-{session_context}
+{session_context}{promoted_context}{redaction_context}
 
 Available tools:
 {tools_desc}
@@ -2193,11 +2209,27 @@ def _call_llm_reply_only(user_text: str) -> Dict[str, Any]:
     except Exception:
         pass
     
+    # Include promoted memory context (Phase 9) - user-approved memory for this session
+    promoted_context = ""
+    try:
+        from wyzer.brain.prompt import get_promoted_memory_block
+        promoted_context = get_promoted_memory_block()
+    except Exception:
+        pass
+    
+    # Include redaction block (Phase 9 polish) - forgotten facts LLM should not use
+    redaction_context = ""
+    try:
+        from wyzer.brain.prompt import get_redaction_block
+        redaction_context = get_redaction_block()
+    except Exception:
+        pass
+    
     prompt = f"""You are Wyzer, a local voice assistant.
 
 No tools are available for this request.
 Write a natural response to the user.
-{session_context}
+{session_context}{promoted_context}{redaction_context}
 RESPONSE FORMAT: JSON only (no markdown):
 {{"reply": "your response"}}
 
@@ -2231,6 +2263,22 @@ def _call_llm_with_execution_summary(
     except Exception:
         pass
     
+    # Include promoted memory context (Phase 9) - user-approved memory for this session
+    promoted_context = ""
+    try:
+        from wyzer.brain.prompt import get_promoted_memory_block
+        promoted_context = get_promoted_memory_block()
+    except Exception:
+        pass
+    
+    # Include redaction block (Phase 9 polish) - forgotten facts LLM should not use
+    redaction_context = ""
+    try:
+        from wyzer.brain.prompt import get_redaction_block
+        redaction_context = get_redaction_block()
+    except Exception:
+        pass
+    
     # Build a summary of what was executed
     summary_parts = []
     for result in execution_summary.ran:
@@ -2249,7 +2297,7 @@ def _call_llm_with_execution_summary(
     summary_text = "\n".join(summary_parts)
     
     prompt = f"""You are Wyzer, a local voice assistant.
-{session_context}
+{session_context}{promoted_context}
 The user asked: {user_text}
 
 I executed the following actions:
@@ -2289,8 +2337,24 @@ def _call_llm_with_tool_result(
     except Exception:
         pass
     
+    # Include promoted memory context (Phase 9) - user-approved memory for this session
+    promoted_context = ""
+    try:
+        from wyzer.brain.prompt import get_promoted_memory_block
+        promoted_context = get_promoted_memory_block()
+    except Exception:
+        pass
+    
+    # Include redaction block (Phase 9 polish) - forgotten facts LLM should not use
+    redaction_context = ""
+    try:
+        from wyzer.brain.prompt import get_redaction_block
+        redaction_context = get_redaction_block()
+    except Exception:
+        pass
+    
     prompt = f"""You are Wyzer, a local voice assistant.
-{session_context}
+{session_context}{promoted_context}{redaction_context}
 The user asked: {user_text}
 
 I executed the tool '{tool_name}' with arguments: {json.dumps(tool_args)}

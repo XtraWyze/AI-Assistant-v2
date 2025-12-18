@@ -92,6 +92,17 @@ class MemoryManager:
         # Session facts: short facts extracted or noted during session (not persisted)
         self._session_facts: List[str] = []
         
+        # Phase 9: Promoted memory buffer (RAM-only, session-scoped)
+        # These are user-approved memories for this conversation only
+        self._promoted_memories: List[str] = []
+        
+        # Phase 9: Last recall result (for "use that" promotion)
+        self._last_recall_result: Optional[str] = None
+        
+        # Phase 9: Recently forgotten texts (for LLM redaction)
+        # This prevents LLM from using forgotten info from session context
+        self._recently_forgotten: set = set()
+        
         # Memory file path
         self._memory_file = _get_memory_file_path()
     
@@ -99,7 +110,7 @@ class MemoryManager:
     # Session Memory (RAM-only)
     # =========================================================================
     
-    def add_session_turn(self, user_text: str, assistant_text: str) -> None:
+    def add_session_turn(self, user_text: str, assistant_text: str, preserve_recall: bool = False) -> None:
         """
         Add a conversation turn to session memory.
         
@@ -109,12 +120,20 @@ class MemoryManager:
         Args:
             user_text: User's input text
             assistant_text: Assistant's response
+            preserve_recall: If True, don't clear last_recall_result (used for RECALL commands)
         """
         with self._lock:
             self._session_turns.append((user_text.strip(), assistant_text.strip()))
             # Trim to max turns
             if len(self._session_turns) > self._max_turns:
                 self._session_turns = self._session_turns[-self._max_turns:]
+            
+            # Phase 9 hardening: Clear last recall result after any NON-recall session turn
+            # This prevents stale "use that" references across tool runs or other commands.
+            # "use that" is only valid immediately after a RECALL command.
+            # RECALL commands pass preserve_recall=True to keep the result for "use that".
+            if not preserve_recall:
+                self._last_recall_result = None
     
     def get_session_context(self, max_turns: Optional[int] = None) -> str:
         """
@@ -314,6 +333,16 @@ class MemoryManager:
             if removed:
                 if self._save_memories(remaining):
                     logger.info(f"[MEMORY] forget: removed {len(removed)} entries matching '{query}'")
+                    # Phase 9: Clear promoted memories and track for redaction
+                    self.clear_promoted()
+                    for entry in removed:
+                        text = entry.get("text", "")
+                        if text:
+                            transformed = _transform_first_to_second_person(text)
+                            if transformed:
+                                self._recently_forgotten.add(transformed)
+                            else:
+                                self._recently_forgotten.add(text)
                     return {"ok": True, "removed": removed}
                 else:
                     return {"ok": False, "error": "Failed to save changes", "removed": []}
@@ -343,6 +372,15 @@ class MemoryManager:
             if self._save_memories(memories):
                 removed_text = removed.get("text", "")[:50]
                 logger.info(f"[MEMORY] forget_last: removed '{removed_text}{'...' if len(removed.get('text', '')) > 50 else ''}'")
+                # Phase 9: Clear promoted memories and track for redaction
+                self.clear_promoted()
+                text = removed.get("text", "")
+                if text:
+                    transformed = _transform_first_to_second_person(text)
+                    if transformed:
+                        self._recently_forgotten.add(transformed)
+                    else:
+                        self._recently_forgotten.add(text)
                 return {"ok": True, "removed": removed}
             else:
                 return {"ok": False, "error": "Failed to save changes", "removed": None}
@@ -445,6 +483,174 @@ class MemoryManager:
             logger.debug(f"[MEMORY] recall '{query}': {len(results)} matches (searched {len(memories)})")
             
             return results
+
+    # =========================================================================
+    # Phase 9: Promoted Memory (RAM-only, session-scoped)
+    # =========================================================================
+    
+    def promote(self, memory_text: str) -> bool:
+        """
+        Promote a memory for temporary use in the current session.
+        
+        Phase 9: User has explicitly authorized this memory for LLM use.
+        
+        IMPORTANT:
+        - Stored only in RAM (not written to disk)
+        - Cleared on restart
+        - Cleared by explicit user command
+        
+        Args:
+            memory_text: The memory text to promote
+            
+        Returns:
+            True if promoted successfully
+        """
+        logger = get_logger()
+        with self._lock:
+            if not memory_text or not memory_text.strip():
+                return False
+            
+            text = memory_text.strip()
+            
+            # Avoid duplicates
+            normalized = _normalize_for_matching(text)
+            for existing in self._promoted_memories:
+                if _normalize_for_matching(existing) == normalized:
+                    logger.debug(f"[MEMORY] promote: already promoted '{text[:50]}'")
+                    return True  # Already promoted, still success
+            
+            self._promoted_memories.append(text)
+            logger.info(f"[MEMORY] promote: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            return True
+    
+    def clear_promoted(self) -> int:
+        """
+        Clear all promoted memories (user command: "stop using that").
+        
+        Returns:
+            Number of promoted memories cleared
+        """
+        logger = get_logger()
+        with self._lock:
+            count = len(self._promoted_memories)
+            self._promoted_memories.clear()
+            self._last_recall_result = None
+            logger.info(f"[MEMORY] clear_promoted: cleared {count} promoted memories")
+            return count
+    
+    def get_promoted_context(self) -> str:
+        """
+        Get formatted promoted memory context for LLM prompt injection.
+        
+        Phase 9: Only returns promoted memories (user-approved for this session).
+        This is the ONLY way long-term memory reaches the LLM - after user consent.
+        
+        Returns:
+            Formatted string like:
+                User-approved memory for this conversation:
+                - your name is Levi
+            
+            Empty string if no promoted memories.
+        """
+        with self._lock:
+            if not self._promoted_memories:
+                return ""
+            
+            lines = ["User-approved memory for this conversation:"]
+            for mem in self._promoted_memories:
+                # Use pronoun transformation for consistency
+                transformed = _transform_first_to_second_person(mem)
+                if transformed:
+                    lines.append(f"- {transformed}")
+                else:
+                    lines.append(f"- {mem}")
+            
+            return "\n".join(lines)
+    
+    def get_promoted_count(self) -> int:
+        """Get number of promoted memories."""
+        with self._lock:
+            return len(self._promoted_memories)
+    
+    def get_redaction_block(self) -> str:
+        """
+        Get formatted redaction block for LLM prompt injection.
+        
+        Phase 9: If user has forgotten certain facts, prevent LLM from using
+        them even if they appear in session context.
+        
+        Returns:
+            Formatted string like:
+                The user has asked me to forget and not use these details:
+                - your name is levi
+            
+            Empty string if nothing forgotten this session.
+        """
+        with self._lock:
+            if not self._recently_forgotten:
+                return ""
+            
+            lines = ["The user has asked me to forget and not use these details:"]
+            for text in self._recently_forgotten:
+                lines.append(f"- {text}")
+            
+            return "\n".join(lines)
+    
+    def has_redactions(self) -> bool:
+        """Check if there are any recently forgotten items."""
+        with self._lock:
+            return len(self._recently_forgotten) > 0
+    
+    def clear_redactions(self) -> None:
+        """Clear redactions (for testing or session reset)."""
+        with self._lock:
+            self._recently_forgotten.clear()
+    
+    def set_last_recall_result(self, memory_text: Optional[str]) -> None:
+        """
+        Store the most recent recall result for "use that" promotion.
+        
+        Args:
+            memory_text: The recalled memory text (or None to clear)
+        """
+        with self._lock:
+            self._last_recall_result = memory_text
+    
+    def get_last_recall_result(self) -> Optional[str]:
+        """
+        Get the most recent recall result.
+        
+        Returns:
+            The last recalled memory text, or None if no recent recall
+        """
+        with self._lock:
+            return self._last_recall_result
+    
+    def has_recent_recall(self) -> bool:
+        """
+        Check if there's a recent recall result available for promotion.
+        
+        Returns:
+            True if there's a recall result that can be promoted
+        """
+        with self._lock:
+            return self._last_recall_result is not None
+
+
+def _transform_first_to_second_person(text: str) -> Optional[str]:
+    """
+    Transform first-person memory text to second-person for pronoun-safe context.
+    
+    Imported from command_detector for use in get_promoted_context.
+    
+    Args:
+        text: The memory text to transform
+        
+    Returns:
+        Transformed text in second person, or None if no confident transformation
+    """
+    from wyzer.memory.command_detector import _transform_first_to_second_person as transform_fn
+    return transform_fn(text)
 
 
 # Module-level singleton

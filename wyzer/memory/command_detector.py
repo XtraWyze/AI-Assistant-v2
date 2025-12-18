@@ -87,6 +87,8 @@ class MemoryCommandType(Enum):
     FORGET_LAST = "forget_last"  # "forget that" / "forget it" / "delete that"
     LIST = "list"
     RECALL = "recall"  # Phase 8: "do you remember X" / "what do you remember about X"
+    PROMOTE = "promote"  # Phase 9: "use that" / "use this" / "use it"
+    CLEAR_PROMOTED = "clear_promoted"  # Phase 9: "stop using that" / "don't use that"
     NONE = "none"
 
 
@@ -215,6 +217,27 @@ def detect_memory_command(user_text: str) -> Optional[MemoryCommand]:
                 original_input=text
             )
     
+    # === Phase 9: CLEAR_PROMOTED commands (stop using promoted memory) ===
+    # These phrases mean "stop using the promoted memories"
+    # IMPORTANT: Check BEFORE generic forget patterns to avoid false matches
+    clear_promoted_patterns = [
+        r'^stop\s+using\s+that\.?$',
+        r'^stop\s+using\s+(?:this|it)\.?$',
+        r'^(?:don\'?t|do\s+not)\s+use\s+that\.?$',
+        r'^(?:don\'?t|do\s+not)\s+use\s+(?:this|it)\.?$',
+        r'^forget\s+(?:that|it)\s+for\s+now\.?$',
+        r'^(?:don\'?t|do\s+not)\s+use\s+that\s+anymore\.?$',
+        r'^stop\s+using\s+(?:that|this|it)\s+(?:for\s+now|anymore)\.?$',
+        r'^never\s*mind\s+(?:that|it)\.?$',
+    ]
+    for pattern in clear_promoted_patterns:
+        if re.match(pattern, text_lower):
+            return MemoryCommand(
+                command_type=MemoryCommandType.CLEAR_PROMOTED,
+                text="",
+                original_input=text
+            )
+    
     # === Forget commands (with search query) ===
     forget_patterns = [
         # "forget that X" - most explicit (note: "forget that" alone is caught above)
@@ -239,6 +262,25 @@ def detect_memory_command(user_text: str) -> Optional[MemoryCommand]:
                     text=content,
                     original_input=text
                 )
+    
+    # === Phase 9: PROMOTE commands (use recalled memory for this conversation) ===
+    # These exact phrases mean "use the most recent recall result"
+    # IMPORTANT: Only matches if there's a recent recall result (checked at runtime)
+    promote_patterns = [
+        r'^use\s+that\.?$',
+        r'^use\s+this\.?$',
+        r'^use\s+it\.?$',
+        r'^use\s+that\s+for\s+(?:this\s+)?conversation\.?$',
+        r'^use\s+(?:that|this|it)\s+for\s+now\.?$',
+        r'^(?:yes|yeah|yep|ok|okay)[,.]?\s*use\s+(?:that|this|it)\.?$',
+    ]
+    for pattern in promote_patterns:
+        if re.match(pattern, text_lower):
+            return MemoryCommand(
+                command_type=MemoryCommandType.PROMOTE,
+                text="",
+                original_input=text
+            )
     
     return None
 
@@ -372,12 +414,16 @@ def handle_memory_command(user_text: str) -> Optional[Tuple[str, dict]]:
         matches = memory_mgr.recall(cmd.text, limit=5)
         
         if not matches:
+            # Clear any previous recall result since this search found nothing
+            memory_mgr.set_last_recall_result(None)
             return (
                 "I don't have anything saved about that.",
                 {"memory_action": "recall", "query": cmd.text, "count": 0, "matches": []}
             )
         elif len(matches) == 1:
             text = matches[0].get("text", "")
+            # Phase 9: Store the recall result for potential "use that" promotion
+            memory_mgr.set_last_recall_result(text)
             # Quote-safe response: try pronoun transform, else quote the raw text
             # This prevents LLM from misinterpreting "my name" as the assistant's name
             transformed = _transform_first_to_second_person(text)
@@ -391,6 +437,10 @@ def handle_memory_command(user_text: str) -> Optional[Tuple[str, dict]]:
                 {"memory_action": "recall", "query": cmd.text, "count": 1, "matches": matches}
             )
         else:
+            # Multiple matches - store the first/best match for potential promotion
+            first_match_text = matches[0].get("text", "")
+            memory_mgr.set_last_recall_result(first_match_text)
+            
             # Multiple matches - list as bullets with quotes for safety
             bullets = []
             for mem in matches:
@@ -405,6 +455,48 @@ def handle_memory_command(user_text: str) -> Optional[Tuple[str, dict]]:
             return (
                 response,
                 {"memory_action": "recall", "query": cmd.text, "count": len(matches), "matches": matches}
+            )
+    
+    elif cmd.command_type == MemoryCommandType.PROMOTE:
+        # Phase 9: Promote recalled memory for temporary use in this session
+        # IMPORTANT: Only works if there's a recent recall result
+        last_recall = memory_mgr.get_last_recall_result()
+        
+        if not last_recall:
+            # No recent recall - cannot promote
+            return (
+                "I don't have anything to use. Try asking 'do you remember...' first.",
+                {"memory_action": "promote", "ok": False, "error": "no_recent_recall"}
+            )
+        
+        # Promote the last recalled memory
+        if memory_mgr.promote(last_recall):
+            # Phase 9 hardening: Clear the recall result after successful promote
+            # This prevents double-promotion or stale references
+            memory_mgr.set_last_recall_result(None)
+            return (
+                "Okay — I'll use that for this conversation.",
+                {"memory_action": "promote", "ok": True, "promoted": last_recall}
+            )
+        else:
+            return (
+                "Sorry, I couldn't use that.",
+                {"memory_action": "promote", "ok": False, "error": "promote_failed"}
+            )
+    
+    elif cmd.command_type == MemoryCommandType.CLEAR_PROMOTED:
+        # Phase 9: Clear promoted memories (stop using them)
+        count = memory_mgr.clear_promoted()
+        
+        if count > 0:
+            return (
+                "Okay — I won't use that anymore.",
+                {"memory_action": "clear_promoted", "ok": True, "cleared_count": count}
+            )
+        else:
+            return (
+                "I wasn't using any saved memories.",
+                {"memory_action": "clear_promoted", "ok": True, "cleared_count": 0}
             )
     
     return None

@@ -444,9 +444,11 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                     tts_controller.enqueue(reply, meta={"_memory_response": True})
                 
                 # Record this turn in session memory
+                # For RECALL commands, preserve the recall result so "use that" can promote it
                 from wyzer.memory.memory_manager import get_memory_manager
                 mem_mgr = get_memory_manager()
-                mem_mgr.add_session_turn(user_text, reply)
+                is_recall = memory_meta.get("memory_action") == "recall"
+                mem_mgr.add_session_turn(user_text, reply, preserve_recall=is_recall)
                 
                 total_ms = now_ms() - start_ms
                 safe_put(

@@ -1124,10 +1124,678 @@ def test_pronoun_safe_responses():
     print("✓ Pronoun-safe responses: PASSED")
 
 
+# =============================================================================
+# PHASE 9: PROMOTE (TEMPORARY USE) TESTS
+# =============================================================================
+
+def test_promote_basic():
+    """Test basic promote functionality."""
+    print("\n=== test_promote_basic ===")
+    
+    from wyzer.memory.memory_manager import MemoryManager
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mgr = MemoryManager()
+        mgr._memory_file = Path(tmpdir) / "test_memory.json"
+        
+        # Initially no promoted memories
+        assert mgr.get_promoted_count() == 0, "Should start with no promoted memories"
+        assert mgr.get_promoted_context() == "", "Should return empty string for no promoted"
+        print("✓ Initially no promoted memories")
+        
+        # Promote a memory
+        result = mgr.promote("my name is Levi")
+        assert result == True, "promote() should return True"
+        assert mgr.get_promoted_count() == 1, "Should have 1 promoted memory"
+        print("✓ Promoted 1 memory")
+        
+        # Check context format
+        context = mgr.get_promoted_context()
+        assert "User-approved memory for this conversation:" in context
+        assert "your name is levi" in context.lower(), f"Should contain transformed memory: {context}"
+        print(f"✓ Context format correct: '{context.strip()}'")
+        
+        # Promote another
+        mgr.promote("my favorite color is blue")
+        assert mgr.get_promoted_count() == 2
+        context2 = mgr.get_promoted_context()
+        assert "your name is levi" in context2.lower()
+        assert "your favorite color is blue" in context2.lower()
+        print("✓ Multiple promoted memories work")
+        
+        # Clear all
+        count = mgr.clear_promoted()
+        assert count == 2, f"Should clear 2, got {count}"
+        assert mgr.get_promoted_count() == 0
+        assert mgr.get_promoted_context() == ""
+        print("✓ clear_promoted() works correctly")
+    
+    print("✓ Promote basic: PASSED")
+
+
+def test_promote_requires_recent_recall():
+    """Test that promote only works after a recall."""
+    print("\n=== test_promote_requires_recent_recall ===")
+    
+    from wyzer.memory.command_detector import handle_memory_command
+    from wyzer.memory.memory_manager import MemoryManager
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Setup manager
+        from wyzer.memory import memory_manager as mm
+        old_manager = mm._memory_manager
+        
+        mgr = MemoryManager()
+        mgr._memory_file = Path(tmpdir) / "test_memory.json"
+        mm._memory_manager = mgr
+        
+        try:
+            # Try to promote without any recall
+            result = handle_memory_command("use that")
+            assert result is not None
+            response, meta = result
+            assert meta.get("ok") == False, "Should fail without recent recall"
+            assert "no_recent_recall" in str(meta.get("error", ""))
+            assert "try asking" in response.lower(), f"Should suggest recall first: {response}"
+            print(f"✓ Without recall: '{response}'")
+            
+            # Now add a memory and do a recall
+            mgr.remember("my name is Levi")
+            result2 = handle_memory_command("do you remember my name")
+            assert result2 is not None
+            assert "levi" in result2[0].lower()
+            print("✓ Recall found the memory")
+            
+            # Now promote should work
+            result3 = handle_memory_command("use that")
+            assert result3 is not None
+            response3, meta3 = result3
+            assert meta3.get("ok") == True, f"Promote should succeed: {meta3}"
+            assert "i'll use that" in response3.lower(), f"Should confirm: {response3}"
+            assert mgr.get_promoted_count() == 1
+            print(f"✓ After recall, promote works: '{response3}'")
+            
+        finally:
+            mm._memory_manager = old_manager
+    
+    print("✓ Promote requires recent recall: PASSED")
+
+
+def test_promote_injects_into_context():
+    """Test that promoted memory is injected into LLM prompts."""
+    print("\n=== test_promote_injects_into_context ===")
+    
+    from wyzer.brain.prompt import get_promoted_memory_block
+    from wyzer.memory.memory_manager import MemoryManager
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        from wyzer.memory import memory_manager as mm
+        old_manager = mm._memory_manager
+        
+        mgr = MemoryManager()
+        mgr._memory_file = Path(tmpdir) / "test_memory.json"
+        mm._memory_manager = mgr
+        
+        try:
+            # Initially empty
+            block = get_promoted_memory_block()
+            assert block == "", "Should be empty initially"
+            print("✓ Initially empty")
+            
+            # Promote a memory
+            mgr.promote("my name is Levi")
+            block2 = get_promoted_memory_block()
+            assert block2 != "", "Should have content after promote"
+            assert "User-approved memory for this conversation:" in block2
+            assert "your name is levi" in block2.lower()
+            print(f"✓ Promoted memory in block: {block2.strip()}")
+            
+            # Clear and verify empty
+            mgr.clear_promoted()
+            block3 = get_promoted_memory_block()
+            assert block3 == "", "Should be empty after clear"
+            print("✓ Empty after clear")
+            
+        finally:
+            mm._memory_manager = old_manager
+    
+    print("✓ Promote injects into context: PASSED")
+
+
+def test_promote_clears_correctly():
+    """Test clear_promoted command works correctly."""
+    print("\n=== test_promote_clears_correctly ===")
+    
+    from wyzer.memory.command_detector import handle_memory_command, detect_memory_command, MemoryCommandType
+    from wyzer.memory.memory_manager import MemoryManager
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        from wyzer.memory import memory_manager as mm
+        old_manager = mm._memory_manager
+        
+        mgr = MemoryManager()
+        mgr._memory_file = Path(tmpdir) / "test_memory.json"
+        mm._memory_manager = mgr
+        
+        try:
+            # Setup: add memory, recall, promote
+            mgr.remember("my name is Levi")
+            handle_memory_command("do you remember my name")
+            handle_memory_command("use that")
+            assert mgr.get_promoted_count() == 1
+            print("✓ Setup: promoted 1 memory")
+            
+            # Clear with command
+            result = handle_memory_command("stop using that")
+            assert result is not None
+            response, meta = result
+            assert meta.get("ok") == True
+            assert meta.get("cleared_count") == 1
+            assert "won't use that" in response.lower(), f"Response: {response}"
+            assert mgr.get_promoted_count() == 0
+            print(f"✓ 'stop using that': '{response}'")
+            
+            # Test alternate clear phrases
+            clear_phrases = [
+                "don't use that",
+                "do not use that",
+                "stop using it",
+                "forget that for now",
+                "don't use that anymore",
+            ]
+            
+            for phrase in clear_phrases:
+                cmd = detect_memory_command(phrase)
+                assert cmd is not None, f"Should detect: {phrase}"
+                assert cmd.command_type == MemoryCommandType.CLEAR_PROMOTED, f"Should be CLEAR_PROMOTED: {phrase}"
+            
+            print(f"✓ Detected {len(clear_phrases)} clear phrases")
+            
+        finally:
+            mm._memory_manager = old_manager
+    
+    print("✓ Promote clears correctly: PASSED")
+
+
+def test_promote_no_disk_write():
+    """Test that promote does NOT write to disk."""
+    print("\n=== test_promote_no_disk_write ===")
+    
+    from wyzer.memory.memory_manager import MemoryManager
+    import os
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        mgr = MemoryManager()
+        mgr._memory_file = Path(tmpdir) / "test_memory.json"
+        
+        # Add a memory to create the file
+        mgr.remember("my name is Levi")
+        assert mgr._memory_file.exists()
+        
+        # Get file stats before promote
+        stat_before = os.stat(mgr._memory_file)
+        mtime_before = stat_before.st_mtime
+        size_before = stat_before.st_size
+        
+        # Promote
+        mgr.promote("my name is Levi")
+        mgr.promote("another fact")
+        
+        # File should NOT be modified
+        stat_after = os.stat(mgr._memory_file)
+        assert mtime_before == stat_after.st_mtime, "promote() should not modify disk"
+        assert size_before == stat_after.st_size, "promote() should not change file size"
+        print("✓ promote() does not write to disk")
+        
+        # Clear promoted - also should not write
+        mgr.clear_promoted()
+        stat_after2 = os.stat(mgr._memory_file)
+        assert mtime_before == stat_after2.st_mtime, "clear_promoted() should not modify disk"
+        print("✓ clear_promoted() does not write to disk")
+    
+    print("✓ Promote no disk write: PASSED")
+
+
+def test_promote_multi_intent_safety():
+    """Test that promote commands with multi-intent separators are NOT triggered."""
+    print("\n=== test_promote_multi_intent_safety ===")
+    
+    from wyzer.memory.command_detector import detect_memory_command
+    
+    # Multi-intent with separators should NOT be detected as promote
+    multi_intent_cases = [
+        "use that and then open chrome",
+        "use that; play music",
+        "use it then close spotify",
+        "stop using that and then open settings",
+    ]
+    
+    for input_text in multi_intent_cases:
+        cmd = detect_memory_command(input_text)
+        assert cmd is None, f"Multi-intent should NOT be detected as memory: {input_text}"
+    
+    print(f"✓ {len(multi_intent_cases)} multi-intent cases correctly ignored")
+    print("✓ Promote multi-intent safety: PASSED")
+
+
+def test_promote_command_detection():
+    """Test that promote commands are detected correctly."""
+    print("\n=== test_promote_command_detection ===")
+    
+    from wyzer.memory.command_detector import detect_memory_command, MemoryCommandType
+    
+    # PROMOTE patterns
+    promote_patterns = [
+        "use that",
+        "use this",
+        "use it",
+        "use that for this conversation",
+        "use it for now",
+        "yes, use that",
+        "ok use it",
+    ]
+    
+    for pattern in promote_patterns:
+        cmd = detect_memory_command(pattern)
+        assert cmd is not None, f"Should detect: {pattern}"
+        assert cmd.command_type == MemoryCommandType.PROMOTE, f"Should be PROMOTE: {pattern} (got {cmd.command_type})"
+    
+    print(f"✓ Detected {len(promote_patterns)} PROMOTE patterns")
+    
+    # CLEAR_PROMOTED patterns
+    clear_patterns = [
+        "stop using that",
+        "stop using it",
+        "don't use that",
+        "do not use that",
+        "forget that for now",
+        "don't use that anymore",
+    ]
+    
+    for pattern in clear_patterns:
+        cmd = detect_memory_command(pattern)
+        assert cmd is not None, f"Should detect: {pattern}"
+        assert cmd.command_type == MemoryCommandType.CLEAR_PROMOTED, f"Should be CLEAR_PROMOTED: {pattern}"
+    
+    print(f"✓ Detected {len(clear_patterns)} CLEAR_PROMOTED patterns")
+    
+    # Non-promote commands should NOT be detected as promote
+    non_promote = [
+        "use chrome",  # This is an open command
+        "use the app",  # Too general
+        "use something else",  # Not a promote pattern
+    ]
+    
+    for pattern in non_promote:
+        cmd = detect_memory_command(pattern)
+        if cmd is not None:
+            assert cmd.command_type != MemoryCommandType.PROMOTE, f"Should NOT be PROMOTE: {pattern}"
+    
+    print("✓ Non-promote patterns correctly ignored")
+    
+    print("✓ Promote command detection: PASSED")
+
+
+def test_promote_session_scoped():
+    """Test that promoted memories are session-scoped (RAM-only)."""
+    print("\n=== test_promote_session_scoped ===")
+    
+    from wyzer.memory.memory_manager import MemoryManager
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create first manager instance
+        mgr1 = MemoryManager()
+        mgr1._memory_file = Path(tmpdir) / "test_memory.json"
+        
+        # Add and promote
+        mgr1.remember("my name is Levi")
+        mgr1.promote("my name is Levi")
+        assert mgr1.get_promoted_count() == 1
+        print("✓ First instance has 1 promoted memory")
+        
+        # Create second manager instance (simulates restart)
+        mgr2 = MemoryManager()
+        mgr2._memory_file = Path(tmpdir) / "test_memory.json"
+        
+        # Second instance should NOT have promoted memories
+        assert mgr2.get_promoted_count() == 0, "New instance should have no promoted memories"
+        print("✓ Second instance starts with no promoted memories (session-scoped)")
+        
+        # But long-term memory should persist
+        memories = mgr2.list_memories()
+        assert len(memories) == 1, "Long-term memory should persist"
+        assert "levi" in memories[0]["text"].lower()
+        print("✓ Long-term memory persists across instances")
+    
+    print("✓ Promote session-scoped: PASSED")
+
+
+def test_promote_clears_after_successful_promote():
+    """Test that last_recall_result is cleared after successful promotion."""
+    print("\n=== test_promote_clears_after_successful_promote ===")
+    
+    from wyzer.memory.command_detector import handle_memory_command
+    from wyzer.memory.memory_manager import MemoryManager
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        from wyzer.memory import memory_manager as mm
+        old_manager = mm._memory_manager
+        
+        mgr = MemoryManager()
+        mgr._memory_file = Path(tmpdir) / "test_memory.json"
+        mm._memory_manager = mgr
+        
+        try:
+            # Setup: add memory and recall
+            mgr.remember("my name is Levi")
+            handle_memory_command("do you remember my name")
+            
+            # Verify recall result is stored
+            assert mgr.has_recent_recall(), "Should have recent recall"
+            print("✓ Recall result is stored")
+            
+            # Promote
+            result = handle_memory_command("use that")
+            assert result is not None
+            assert result[1].get("ok") == True
+            print("✓ Promotion succeeded")
+            
+            # Verify recall result is NOW cleared (prevents double-promotion)
+            assert not mgr.has_recent_recall(), "Recall result should be cleared after promotion"
+            print("✓ Recall result cleared after promotion")
+            
+            # Second "use that" should fail
+            result2 = handle_memory_command("use that")
+            assert result2 is not None
+            assert result2[1].get("ok") == False, "Second 'use that' should fail"
+            assert "no_recent_recall" in str(result2[1].get("error", ""))
+            print("✓ Second 'use that' correctly fails")
+            
+        finally:
+            mm._memory_manager = old_manager
+    
+    print("✓ Promote clears after successful promote: PASSED")
+
+
+def test_promote_invalidated_by_session_turn():
+    """Test that last_recall_result is cleared when a session turn is added."""
+    print("\n=== test_promote_invalidated_by_session_turn ===")
+    
+    from wyzer.memory.command_detector import handle_memory_command
+    from wyzer.memory.memory_manager import MemoryManager
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        from wyzer.memory import memory_manager as mm
+        old_manager = mm._memory_manager
+        
+        mgr = MemoryManager()
+        mgr._memory_file = Path(tmpdir) / "test_memory.json"
+        mm._memory_manager = mgr
+        
+        try:
+            # Setup: add memory and recall
+            mgr.remember("my name is Levi")
+            handle_memory_command("do you remember my name")
+            
+            # Verify recall result is stored
+            assert mgr.has_recent_recall(), "Should have recent recall"
+            print("✓ Recall result is stored")
+            
+            # Simulate a non-memory command (e.g., tool run) by adding a session turn
+            # This represents what happens after any normal interaction
+            mgr.add_session_turn("open chrome", "Opening Chrome now.")
+            
+            # Verify recall result is NOW cleared
+            assert not mgr.has_recent_recall(), "Recall result should be cleared after session turn"
+            print("✓ Recall result cleared after session turn")
+            
+            # "use that" should fail now (too late)
+            result = handle_memory_command("use that")
+            assert result is not None
+            assert result[1].get("ok") == False, "'use that' should fail after other command"
+            assert "no_recent_recall" in str(result[1].get("error", ""))
+            print("✓ 'use that' correctly fails after other interaction")
+            
+        finally:
+            mm._memory_manager = old_manager
+    
+    print("✓ Promote invalidated by session turn: PASSED")
+
+
+def test_promote_no_stale_recall():
+    """Test that 'use that' doesn't leak across unrelated interactions."""
+    print("\n=== test_promote_no_stale_recall ===")
+    
+    from wyzer.memory.command_detector import handle_memory_command
+    from wyzer.memory.memory_manager import MemoryManager
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        from wyzer.memory import memory_manager as mm
+        old_manager = mm._memory_manager
+        
+        mgr = MemoryManager()
+        mgr._memory_file = Path(tmpdir) / "test_memory.json"
+        mm._memory_manager = mgr
+        
+        try:
+            # Setup: add two different memories
+            mgr.remember("my name is Levi")
+            mgr.remember("my favorite color is blue")
+            
+            # Recall first memory
+            result1 = handle_memory_command("do you remember my name")
+            assert result1 is not None
+            assert "levi" in result1[0].lower()
+            print("✓ Recalled 'name' memory")
+            
+            # Simulate some other interaction (tool run, etc.)
+            mgr.add_session_turn("what time is it", "It's 3:00 PM.")
+            
+            # Now try to promote - should fail because the recall is stale
+            result2 = handle_memory_command("use that")
+            assert result2 is not None
+            assert result2[1].get("ok") == False
+            print("✓ 'use that' correctly rejected stale recall")
+            
+            # Fresh recall should work
+            result3 = handle_memory_command("do you remember my color")
+            assert result3 is not None
+            assert "blue" in result3[0].lower()
+            print("✓ Fresh recall succeeded")
+            
+            # Now promote should work
+            result4 = handle_memory_command("use that")
+            assert result4 is not None
+            assert result4[1].get("ok") == True
+            print("✓ 'use that' works immediately after fresh recall")
+            
+        finally:
+            mm._memory_manager = old_manager
+    
+    print("✓ Promote no stale recall: PASSED")
+
+
+def test_forget_clears_promoted():
+    """Test that FORGET clears promoted memory (Phase 9 polish)."""
+    print("\n=== test_forget_clears_promoted ===")
+    
+    from wyzer.memory.command_detector import handle_memory_command
+    from wyzer.memory.memory_manager import MemoryManager
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        from wyzer.memory import memory_manager as mm
+        old_manager = mm._memory_manager
+        
+        mgr = MemoryManager()
+        mgr._memory_file = Path(tmpdir) / "test_memory.json"
+        mm._memory_manager = mgr
+        
+        try:
+            # Setup: remember, recall, and promote
+            handle_memory_command("remember my name is Levi")
+            handle_memory_command("do you remember my name")
+            handle_memory_command("use that")
+            
+            assert mgr.get_promoted_count() == 1
+            print("✓ Setup: promoted 1 memory")
+            
+            # Now forget_last - should also clear promoted
+            result = handle_memory_command("forget that")
+            assert result is not None
+            assert result[1].get("ok") == True
+            print("✓ forget_last succeeded")
+            
+            # Promoted should now be empty
+            assert mgr.get_promoted_count() == 0
+            print("✓ Promoted memory cleared after forget_last")
+            
+            # Setup again for forget (with query)
+            handle_memory_command("remember my wifi password is BlueHouse")
+            handle_memory_command("do you remember my wifi")
+            handle_memory_command("use that")
+            
+            assert mgr.get_promoted_count() == 1
+            print("✓ Setup: promoted another memory")
+            
+            # Now forget with query - should also clear promoted
+            result2 = handle_memory_command("forget wifi")
+            assert result2 is not None
+            assert result2[1].get("ok") == True
+            assert result2[1].get("removed_count", 0) >= 1
+            print("✓ forget (query) succeeded")
+            
+            # Promoted should now be empty
+            assert mgr.get_promoted_count() == 0
+            print("✓ Promoted memory cleared after forget (query)")
+            
+        finally:
+            mm._memory_manager = old_manager
+    
+    print("✓ Forget clears promoted: PASSED")
+
+
+def test_forget_adds_redaction():
+    """Test that FORGET adds to redaction block (Phase 9 polish)."""
+    print("\n=== test_forget_adds_redaction ===")
+    
+    from wyzer.memory.command_detector import handle_memory_command
+    from wyzer.memory.memory_manager import MemoryManager
+    from wyzer.brain.prompt import get_redaction_block
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        from wyzer.memory import memory_manager as mm
+        old_manager = mm._memory_manager
+        
+        mgr = MemoryManager()
+        mgr._memory_file = Path(tmpdir) / "test_memory.json"
+        mm._memory_manager = mgr
+        
+        try:
+            # Initially no redactions
+            assert mgr.get_redaction_block() == ""
+            print("✓ Initially no redactions")
+            
+            # Remember and then forget
+            handle_memory_command("remember my name is Levi")
+            handle_memory_command("forget that")
+            
+            # Redaction block should now contain the forgotten fact
+            redaction_block = mgr.get_redaction_block()
+            assert "your name is levi" in redaction_block.lower()
+            print(f"✓ Redaction block contains forgotten fact: {redaction_block.strip()[:50]}...")
+            
+            # get_redaction_block() helper should also work
+            redaction_from_helper = get_redaction_block()
+            assert "your name is levi" in redaction_from_helper.lower()
+            print("✓ get_redaction_block() helper works")
+            
+            # Remember and forget another with query
+            handle_memory_command("remember my wifi is BlueHouse")
+            handle_memory_command("forget wifi")
+            
+            # Both should be in redaction block
+            redaction_block = mgr.get_redaction_block()
+            assert "your name is levi" in redaction_block.lower()
+            assert "your wifi is bluehouse" in redaction_block.lower()
+            print("✓ Multiple forgotten facts tracked")
+            
+            # Clear and verify
+            mgr.clear_redactions()
+            assert mgr.get_redaction_block() == ""
+            print("✓ clear_redactions() works")
+            
+        finally:
+            mm._memory_manager = old_manager
+    
+    print("✓ Forget adds redaction: PASSED")
+
+
+def test_forget_no_unexpected_disk_write():
+    """Test that recall/promote don't write to disk (only remember/forget do)."""
+    print("\n=== test_forget_no_unexpected_disk_write ===")
+    
+    from wyzer.memory.command_detector import handle_memory_command
+    from wyzer.memory.memory_manager import MemoryManager
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        from wyzer.memory import memory_manager as mm
+        old_manager = mm._memory_manager
+        
+        mgr = MemoryManager()
+        mgr._memory_file = Path(tmpdir) / "test_memory.json"
+        mm._memory_manager = mgr
+        
+        try:
+            # Remember writes to disk
+            handle_memory_command("remember my name is Levi")
+            assert mgr._memory_file.exists()
+            mtime_after_remember = mgr._memory_file.stat().st_mtime
+            print("✓ remember() writes to disk")
+            
+            # Small delay to ensure mtime would differ
+            import time
+            time.sleep(0.05)
+            
+            # Recall should NOT write to disk
+            handle_memory_command("do you remember my name")
+            mtime_after_recall = mgr._memory_file.stat().st_mtime
+            assert mtime_after_recall == mtime_after_remember
+            print("✓ recall() does NOT write to disk")
+            
+            time.sleep(0.05)
+            
+            # Promote should NOT write to disk
+            handle_memory_command("use that")
+            mtime_after_promote = mgr._memory_file.stat().st_mtime
+            assert mtime_after_promote == mtime_after_remember
+            print("✓ promote() does NOT write to disk")
+            
+            time.sleep(0.05)
+            
+            # Clear promoted should NOT write to disk
+            handle_memory_command("stop using that")
+            mtime_after_clear = mgr._memory_file.stat().st_mtime
+            assert mtime_after_clear == mtime_after_remember
+            print("✓ clear_promoted() does NOT write to disk")
+            
+            time.sleep(0.05)
+            
+            # Forget DOES write to disk
+            handle_memory_command("forget that")
+            mtime_after_forget = mgr._memory_file.stat().st_mtime
+            assert mtime_after_forget > mtime_after_remember
+            print("✓ forget() DOES write to disk")
+            
+        finally:
+            mm._memory_manager = old_manager
+    
+    print("✓ Forget no unexpected disk write: PASSED")
+
+
 def run_all_tests():
     """Run all memory tests."""
     print("=" * 60)
-    print("PHASE 7 & 8 MEMORY SYSTEM - TEST SUITE")
+    print("PHASE 7, 8 & 9 MEMORY SYSTEM - TEST SUITE")
     print("=" * 60)
     
     tests = [
@@ -1161,6 +1829,23 @@ def run_all_tests():
         test_recall_prompts_no_memory_injection,
         # Pronoun-safe regression test
         test_pronoun_safe_responses,
+        # Phase 9 tests (Promote - Temporary Use)
+        test_promote_basic,
+        test_promote_requires_recent_recall,
+        test_promote_injects_into_context,
+        test_promote_clears_correctly,
+        test_promote_no_disk_write,
+        test_promote_multi_intent_safety,
+        test_promote_command_detection,
+        test_promote_session_scoped,
+        # Phase 9 hardening tests
+        test_promote_clears_after_successful_promote,
+        test_promote_invalidated_by_session_turn,
+        test_promote_no_stale_recall,
+        # Phase 9 polish: FORGET clears promoted & adds redaction
+        test_forget_clears_promoted,
+        test_forget_adds_redaction,
+        test_forget_no_unexpected_disk_write,
     ]
     
     passed = 0
