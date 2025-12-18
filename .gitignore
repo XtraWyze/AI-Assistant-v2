@@ -10,3 +10,4 @@
 /__pycache__
 /wyzer/audio/__pycache__
 /wyzer/core/__pycache__
+*.json
