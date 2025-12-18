@@ -280,6 +280,18 @@ _MINIMIZE_RE = re.compile(r"^(minimize|shrink)\s+(.+)$", re.IGNORECASE)
 # Anchored maximize/fullscreen/expand.
 _MAXIMIZE_RE = re.compile(r"^(maximize|fullscreen|expand|full\s+screen)\s+(.+)$", re.IGNORECASE)
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Google search patterns: "google this cats", "google cats", "search google for cats"
+# ═══════════════════════════════════════════════════════════════════════════
+_GOOGLE_SEARCH_RE = re.compile(
+    r"^google\s+(?:this:?\s*)?(?P<q>.+)$",
+    re.IGNORECASE,
+)
+_SEARCH_GOOGLE_RE = re.compile(
+    r"^search\s+google\s+for\s+(?P<q>.+)$",
+    re.IGNORECASE,
+)
+
 # Anchored audio device switching: "switch/set/change/swap audio [output] [device] to <device>"
 _AUDIO_DEVICE_SWITCH_RE = re.compile(
     r"^(?:(?:switch|set|change|swap)\s+(?:audio(?:\s+output)?|sound|output)(?:\s+device)?\s+to)\s+(.+)$",
@@ -474,6 +486,39 @@ def _decide_single_clause(text: str) -> HybridDecision:
             reply="",
             confidence=0.95,
         )
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Google search queries: "google this cats", "google cats", "search google for cats"
+    # ═══════════════════════════════════════════════════════════════════════
+    m = _GOOGLE_SEARCH_RE.match(clause)
+    if m:
+        query = (m.group("q") or "").strip()
+        if query:
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{
+                    "tool": "google_search_open",
+                    "args": {"query": query},
+                    "continue_on_error": False
+                }],
+                reply=f"Opening Google for: {query}.",
+                confidence=0.95,
+            )
+    
+    m = _SEARCH_GOOGLE_RE.match(clause)
+    if m:
+        query = (m.group("q") or "").strip()
+        if query:
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{
+                    "tool": "google_search_open",
+                    "args": {"query": query},
+                    "continue_on_error": False
+                }],
+                reply=f"Opening Google for: {query}.",
+                confidence=0.95,
+            )
 
     # ═══════════════════════════════════════════════════════════════════════
     # Timer queries: start, cancel, or check status

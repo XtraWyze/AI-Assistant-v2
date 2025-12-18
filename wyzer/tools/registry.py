@@ -114,6 +114,9 @@ def build_default_registry() -> ToolRegistry:
     # Timer tool
     from wyzer.tools.timer_tool import TimerTool
     
+    # Google search tool
+    from wyzer.tools.google_search_open import GoogleSearchOpenTool
+    
     registry = ToolRegistry()
     
     # Register default tools
@@ -164,5 +167,8 @@ def build_default_registry() -> ToolRegistry:
     
     # Register timer tool
     registry.register(TimerTool())
+    
+    # Register Google search tool
+    registry.register(GoogleSearchOpenTool())
     
     return registry
