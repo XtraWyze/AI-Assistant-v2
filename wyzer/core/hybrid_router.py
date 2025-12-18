@@ -353,8 +353,20 @@ _WORD_TO_NUMBER = {
 
 # Timer start: "set a timer for X minutes/seconds", "start a timer for X minutes"
 # Matches both digits (10) and word numbers (ten, three)
+# Also supports compound durations like "4 minutes and 20 seconds"
+_TIMER_NUMBER_PATTERN = r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|a|an)"
+_TIMER_UNIT_PATTERN = r"(seconds?|secs?|minutes?|mins?|hours?|hrs?)"
+
+# Simple single-unit timer: "set a timer for 5 minutes"
 _TIMER_START_RE = re.compile(
-    r"^(?:set|start|create)\s+(?:a\s+)?timer\s+(?:for\s+)?(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|a|an)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)(?:\s+timer)?[.?!]?$",
+    rf"^(?:set|start|create)\s+(?:a\s+)?timer\s+(?:for\s+)?{_TIMER_NUMBER_PATTERN}\s*{_TIMER_UNIT_PATTERN}(?:\s+timer)?[.?!]?$",
+    re.IGNORECASE,
+)
+
+# Compound duration timer: "set a timer for 4 minutes and 20 seconds"
+# Supports: "X hours Y minutes Z seconds", "X minutes and Y seconds", etc.
+_TIMER_COMPOUND_RE = re.compile(
+    rf"^(?:set|start|create)\s+(?:a\s+)?timer\s+(?:for\s+)?{_TIMER_NUMBER_PATTERN}\s*{_TIMER_UNIT_PATTERN}(?:\s+(?:and\s+)?{_TIMER_NUMBER_PATTERN}\s*{_TIMER_UNIT_PATTERN})?(?:\s+(?:and\s+)?{_TIMER_NUMBER_PATTERN}\s*{_TIMER_UNIT_PATTERN})?(?:\s+timer)?[.?!]?$",
     re.IGNORECASE,
 )
 
@@ -399,6 +411,33 @@ def _parse_timer_duration_seconds(value: int, unit: str) -> int:
     return value  # default to seconds
 
 
+def _parse_compound_timer_duration(text: str) -> int:
+    """
+    Parse compound timer durations like "4 minutes and 20 seconds" into total seconds.
+    
+    Supports:
+    - "4 minutes and 20 seconds" -> 260
+    - "1 hour 30 minutes" -> 5400
+    - "2 hours and 15 minutes and 30 seconds" -> 8130
+    - "5 minutes" -> 300 (single unit still works)
+    """
+    text_lower = text.lower()
+    total_seconds = 0
+    
+    # Pattern to find all number+unit pairs
+    pattern = re.compile(
+        r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|a|an)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)",
+        re.IGNORECASE
+    )
+    
+    for match in pattern.finditer(text_lower):
+        value = _parse_timer_value(match.group(1))
+        unit = match.group(2)
+        total_seconds += _parse_timer_duration_seconds(value, unit)
+    
+    return total_seconds
+
+
 def _looks_like_url_or_domain(text: str) -> bool:
     tl = (text or "").strip().lower()
     if not tl:
@@ -436,14 +475,13 @@ def _decide_single_clause(text: str) -> HybridDecision:
     # Timer queries: start, cancel, or check status
     # ═══════════════════════════════════════════════════════════════════════
     
-    # Timer start: "set a timer for 5 minutes"
-    m = _TIMER_START_RE.match(clause)
+    # Timer start: "set a timer for 5 minutes" or "set a timer for 4 minutes and 20 seconds"
+    # Try compound pattern first (it handles both compound and simple cases)
+    m = _TIMER_COMPOUND_RE.match(clause)
     if m:
-        value = _parse_timer_value(m.group(1))
-        if value < 1:
-            value = 1  # Minimum 1 second
-        unit = m.group(2)
-        duration_seconds = _parse_timer_duration_seconds(value, unit)
+        duration_seconds = _parse_compound_timer_duration(clause)
+        if duration_seconds < 1:
+            duration_seconds = 1  # Minimum 1 second
         return HybridDecision(
             mode="tool_plan",
             intents=[{
