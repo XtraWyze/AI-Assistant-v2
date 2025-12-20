@@ -141,6 +141,10 @@ class _TTSController:
     def clear_stop(self) -> None:
         with self._lock:
             self._stop_event.clear()
+    
+    def is_cancelled(self) -> bool:
+        """Check if stop was requested (for streaming cancellation)."""
+        return self._stop_event.is_set()
 
     def shutdown(self) -> None:
         self._running = False
@@ -530,9 +534,33 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             # Always call orchestrator - it handles NO_OLLAMA mode internally
             # and the hybrid router can handle deterministic commands without LLM
             llm_start = now_ms()
-            from wyzer.core.orchestrator import handle_user_text
+            from wyzer.core.orchestrator import handle_user_text, should_use_streaming_tts, handle_user_text_streaming
 
-            result_dict = handle_user_text(user_text)
+            # Check if we should use streaming TTS for this request
+            # Streaming is ONLY for conversational/reply-only queries, NOT for tool commands
+            use_streaming_tts = should_use_streaming_tts(user_text)
+            result_streamed = False
+            
+            if use_streaming_tts:
+                # Use streaming path: tokens flow to TTS as they arrive
+                # The on_segment callback enqueues each segment for TTS
+                tts_controller.clear_stop()  # Ensure stop flag is cleared
+                
+                def on_tts_segment(segment: str) -> None:
+                    """Callback for streaming TTS segments."""
+                    if segment and not tts_controller.is_cancelled():
+                        tts_controller.enqueue(segment, meta={"_streaming": True})
+                
+                result_dict = handle_user_text_streaming(
+                    user_text,
+                    on_segment=on_tts_segment,
+                    cancel_check=tts_controller.is_cancelled
+                )
+                result_streamed = (result_dict or {}).get("meta", {}).get("streamed", False)
+            else:
+                # Non-streaming path (tools, hybrid router, etc.)
+                result_dict = handle_user_text(user_text)
+            
             llm_ms = now_ms() - llm_start
 
             reply = (result_dict or {}).get("reply", "")
@@ -573,6 +601,9 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                 tts_text = None
                 tts_interrupted = True
             elif not tts_enabled or not tts_router:
+                tts_text = None
+            elif result_streamed:
+                # Already enqueued TTS segments during streaming - don't enqueue again
                 tts_text = None
 
             # Enqueue speech (non-blocking)

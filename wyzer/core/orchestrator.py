@@ -13,7 +13,7 @@ import shlex
 import uuid
 import random
 from urllib.parse import urlparse
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Callable
 from wyzer.core.config import Config
 from wyzer.core.logger import get_logger
 from wyzer.core import hybrid_router
@@ -930,6 +930,201 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 "hybrid_confidence": 0.0,
             },
         }
+
+
+def should_use_streaming_tts(text: str) -> bool:
+    """
+    Determine if streaming TTS should be used for this request.
+    
+    Streaming TTS is ONLY for normal LLM chat responses, NOT for:
+    - Tool/action commands (deterministic routing)
+    - Hybrid router tool plans
+    
+    This is a PRE-CHECK before calling handle_user_text_streaming.
+    
+    Args:
+        text: User's input text
+        
+    Returns:
+        True if streaming TTS should be used, False otherwise
+    """
+    # Check global config flag first
+    if not getattr(Config, "OLLAMA_STREAM_TTS", False):
+        return False
+    
+    # Check if Ollama is disabled
+    if getattr(Config, "NO_OLLAMA", False):
+        return False
+    
+    # Check hybrid router - if it returns a tool_plan, don't stream
+    hybrid_decision = hybrid_router.decide(text)
+    if hybrid_decision.mode == "tool_plan" and hybrid_decision.intents:
+        return False
+    
+    # Check if this is a continuation/informational query (reply-only mode)
+    is_continuation = is_continuation_phrase(text)
+    explicit_topic = is_explicit_continuation(text)
+    is_info_query = is_informational_query(text)
+    
+    # Only stream for reply-only queries (conversational)
+    if is_continuation or explicit_topic or is_info_query:
+        return True
+    
+    # For other queries that might involve tools, don't stream
+    return False
+
+
+def handle_user_text_streaming(
+    text: str,
+    on_segment: "Callable[[str], None]",
+    cancel_check: "Optional[Callable[[], bool]]" = None
+) -> Dict[str, Any]:
+    """
+    Handle user text with streaming TTS output.
+    
+    This is an alternative to handle_user_text() that streams LLM tokens
+    to TTS as they arrive. ONLY use this for reply-only/conversational
+    queries - check should_use_streaming_tts() first.
+    
+    If streaming fails, falls back to non-streaming.
+    
+    WARNING: This function should ONLY be used for conversational queries.
+    Tool commands must use handle_user_text() to ensure proper routing.
+    
+    Args:
+        text: User's input text
+        on_segment: Callback to receive TTS segments as they're ready
+        cancel_check: Optional callable returning True to cancel streaming
+        
+    Returns:
+        Dict with "reply", "latency_ms", and "meta" keys
+    """
+    from wyzer.brain.stream_tts import accumulate_full_reply
+    from wyzer.brain.ollama_client import OllamaClient
+    
+    start_time = time.perf_counter()
+    logger = get_logger_instance()
+    
+    # Double-check we should actually stream
+    if not should_use_streaming_tts(text):
+        logger.debug("[STREAM_TTS] Streaming not appropriate, using non-streaming path")
+        result = handle_user_text(text)
+        # Emit full reply as single TTS segment
+        if result.get("reply") and on_segment:
+            try:
+                on_segment(result["reply"])
+            except Exception as e:
+                logger.error(f"[STREAM_TTS] TTS callback error: {e}")
+        return result
+    
+    logger.info("[STREAM_TTS] Using streaming TTS path")
+    
+    try:
+        # Build the same prompt as _call_llm_reply_only
+        session_context = ""
+        try:
+            from wyzer.brain.prompt import get_session_context_block
+            session_context = get_session_context_block()
+        except Exception:
+            pass
+        
+        promoted_context = ""
+        try:
+            from wyzer.brain.prompt import get_promoted_memory_block
+            promoted_context = get_promoted_memory_block()
+        except Exception:
+            pass
+        
+        redaction_context = ""
+        try:
+            from wyzer.brain.prompt import get_redaction_block
+            redaction_context = get_redaction_block()
+        except Exception:
+            pass
+        
+        all_memories_context = ""
+        try:
+            from wyzer.brain.prompt import get_all_memories_block
+            all_memories_context = get_all_memories_block()
+        except Exception:
+            pass
+        
+        prompt = f"""You are Wyzer, a local voice assistant.
+
+No tools are available for this request.
+Write a natural response to the user.
+{session_context}{promoted_context}{redaction_context}{all_memories_context}
+
+CONVERSATIONAL CONTEXT:
+- If the user says something vague like "tell me more", "can you elaborate", "go on", "what else", or "continue", check the recent conversation context above.
+- When a follow-up references a previous topic, continue discussing THAT topic in detail. Do NOT ask "what would you like to know?" - instead, provide more information about the last discussed subject.
+- Use the session context to maintain topic continuity across turns.
+
+User: {text}
+
+Wyzer:"""
+        
+        # Create Ollama client and stream
+        base_url = Config.OLLAMA_BASE_URL.rstrip("/")
+        client = OllamaClient(base_url=base_url, timeout=Config.LLM_TIMEOUT)
+        
+        options = {
+            "temperature": 0.4,
+            "top_p": 0.9,
+            "num_ctx": 4096,
+            "num_predict": 150
+        }
+        
+        logger.debug("[STREAM_TTS] LLM stream started")
+        
+        # Get streaming generator
+        token_stream = client.generate_stream(
+            prompt=prompt,
+            model=Config.OLLAMA_MODEL,
+            options=options
+        )
+        
+        # Process stream: emit TTS segments, accumulate full reply
+        min_chars = getattr(Config, 'STREAM_TTS_BUFFER_CHARS', 150)
+        reply = accumulate_full_reply(
+            token_stream=token_stream,
+            on_segment=on_segment,
+            min_chars=min_chars,
+            cancel_check=cancel_check
+        )
+        
+        reply = reply.strip()
+        
+        end_time = time.perf_counter()
+        latency_ms = int((end_time - start_time) * 1000)
+        
+        logger.debug(f"[STREAM_TTS] LLM stream ended")
+        
+        return {
+            "reply": reply or "I'm not sure how to respond to that.",
+            "latency_ms": latency_ms,
+            "meta": {
+                "reply_only": True,
+                "streamed": True,
+            },
+        }
+        
+    except Exception as e:
+        # Streaming failed - fall back to non-streaming
+        logger.warning(f"[STREAM_TTS] Streaming failed, falling back: {e}")
+        
+        result = handle_user_text(text)
+        result.setdefault("meta", {})["streamed"] = False
+        result["meta"]["stream_fallback"] = True
+        
+        # Emit full reply as single TTS segment
+        if result.get("reply") and on_segment:
+            try:
+                on_segment(result["reply"])
+            except Exception as tts_err:
+                logger.error(f"[STREAM_TTS] TTS callback error: {tts_err}")
+        
+        return result
 
 
 def _hybrid_tool_plan_is_registered(intents: List[Dict[str, Any]], registry) -> bool:

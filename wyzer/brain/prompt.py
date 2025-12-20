@@ -158,3 +158,128 @@ def format_prompt(user_input: str, include_session_context: bool = True) -> str:
         session_block = get_session_context_block()
     
     return f"{SYSTEM_PROMPT}{session_block}\n\nUser: {user_input}\n\nWyzer:"
+
+
+# -----------------------------------------------------------------------------
+# Message-based prompt building (internal representation)
+# -----------------------------------------------------------------------------
+# NOTE: messages[] is internal only; transport to Ollama remains a prompt string.
+# This enables future streaming-to-TTS without changing routing - we can stream
+# only the assistant response while keeping system context fixed.
+
+def build_prompt_messages(
+    user_input: str,
+    include_session_context: bool = True,
+    include_promoted_memory: bool = True,
+    include_redaction: bool = True,
+    include_all_memories: bool = True
+) -> "list":
+    """
+    Build a list of Message objects for the LLM prompt.
+    
+    This is the message-based equivalent of format_prompt(), producing an
+    internal messages[] representation that can be flattened for Ollama.
+    
+    Args:
+        user_input: User's transcribed speech
+        include_session_context: Whether to include session memory context
+        include_promoted_memory: Whether to include promoted memory context
+        include_redaction: Whether to include redaction block
+        include_all_memories: Whether to include all memories block
+        
+    Returns:
+        List of Message dicts ready for flatten_messages()
+    """
+    from wyzer.brain.messages import MessageBuilder
+    
+    builder = MessageBuilder()
+    
+    # 1. Core system prompt (always included)
+    builder.system(SYSTEM_PROMPT)
+    
+    # 2. Session context (conversation history from RAM)
+    if include_session_context:
+        session_block = get_session_context_block()
+        if session_block:
+            builder.system(session_block)
+    
+    # 3. Promoted memory context (user-approved long-term memory)
+    if include_promoted_memory:
+        promoted_block = get_promoted_memory_block()
+        if promoted_block:
+            builder.system(promoted_block)
+    
+    # 4. Redaction block (forgotten facts LLM should not use)
+    if include_redaction:
+        redaction_block = get_redaction_block()
+        if redaction_block:
+            builder.system(redaction_block)
+    
+    # 5. All memories block (when use_memories flag is enabled)
+    if include_all_memories:
+        all_memories_block = get_all_memories_block()
+        if all_memories_block:
+            builder.system(all_memories_block)
+    
+    # 6. User message (the actual user input)
+    builder.user(user_input)
+    
+    return builder.build()
+
+
+def format_prompt_from_messages(
+    user_input: str,
+    include_session_context: bool = True,
+    include_promoted_memory: bool = True,
+    include_redaction: bool = True,
+    include_all_memories: bool = True
+) -> str:
+    """
+    Build and flatten messages into a prompt string.
+    
+    This produces output equivalent to the existing format_prompt() function
+    but uses the internal messages[] representation.
+    
+    The flattened output matches the existing format:
+    - System prompt first
+    - Context blocks appended
+    - "User: <input>" and "Wyzer:" markers preserved
+    
+    Args:
+        user_input: User's transcribed speech
+        include_session_context: Whether to include session memory context
+        include_promoted_memory: Whether to include promoted memory context
+        include_redaction: Whether to include redaction block
+        include_all_memories: Whether to include all memories block
+        
+    Returns:
+        Full prompt string for LLM (same format as before)
+    """
+    from wyzer.brain.messages import flatten_messages
+    
+    messages = build_prompt_messages(
+        user_input=user_input,
+        include_session_context=include_session_context,
+        include_promoted_memory=include_promoted_memory,
+        include_redaction=include_redaction,
+        include_all_memories=include_all_memories
+    )
+    
+    # Flatten without role headers (matches existing format)
+    # But we need to add "User:" and "Wyzer:" markers to match existing output
+    if not messages:
+        return f"User: {user_input}\n\nWyzer:"
+    
+    # Separate system messages from user message
+    system_parts = []
+    user_text = user_input
+    
+    for msg in messages:
+        if msg["role"] == "system":
+            system_parts.append(msg["content"])
+        elif msg["role"] == "user":
+            user_text = msg["content"]
+    
+    # Build prompt matching existing format exactly
+    system_block = "\n".join(system_parts)
+    return f"{system_block}\n\nUser: {user_text}\n\nWyzer:"
