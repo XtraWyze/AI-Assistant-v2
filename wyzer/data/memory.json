@@ -15,9 +15,23 @@
   },
   {
     "id": "c53afb6c-4635-4306-b5ec-50d059be3df3",
+    "type": "preference",
+    "key": "likes_one_piece",
+    "value": "I like one piece.",
+    "tags": [],
+    "pinned": true,
+    "aliases": [],
     "created_at": "2025-12-20T22:03:13.069412Z",
+    "updated_at": null,
+    "source": "explicit_user",
     "text": "I like one piece.",
-    "index_text": "i like one piece",
+    "index_text": "i like one piece"
+  },
+  {
+    "id": "3719c5ac-069b-4709-9dff-d0df42bba43c",
+    "created_at": "2025-12-20T22:22:01.965218Z",
+    "text": "my dog's name is kush",
+    "index_text": "my dog's name is kush",
     "tags": [],
     "pinned": true,
     "aliases": []

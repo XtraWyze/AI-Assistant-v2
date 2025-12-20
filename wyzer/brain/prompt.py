@@ -174,6 +174,7 @@ def get_smart_memories_block(user_text: str) -> str:
             # Count lines (memories) injected
             lines = [l for l in memory_block.split('\n') if l.startswith('- (')]
             get_logger().info(f"[MEMORY] Sending {len(lines)} memories to LLM")
+            get_logger().debug(f"[MEMORY] Block preview: {memory_block[:200]}...")
             return f"\n{memory_block}\n"
     except Exception:
         pass

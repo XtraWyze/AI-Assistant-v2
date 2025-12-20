@@ -2629,10 +2629,14 @@ def _call_llm(user_text: str, registry) -> Dict[str, Any]:
     """
     Call LLM for initial intent interpretation.
     
+    Uses PromptBuilder for token-budgeted prompt construction.
+    
     Returns:
         Dict with either {"reply": "..."} or {"intents": [...]} or legacy formats
     """
-    # Include session context for conversational continuity (Phase 7)
+    from wyzer.brain.prompt_builder import build_llm_prompt
+    
+    # Gather context blocks
     session_context = ""
     try:
         from wyzer.brain.prompt import get_session_context_block
@@ -2640,7 +2644,6 @@ def _call_llm(user_text: str, registry) -> Dict[str, Any]:
     except Exception:
         pass
     
-    # Include promoted memory context (Phase 9) - user-approved memory for this session
     promoted_context = ""
     try:
         from wyzer.brain.prompt import get_promoted_memory_block
@@ -2648,7 +2651,6 @@ def _call_llm(user_text: str, registry) -> Dict[str, Any]:
     except Exception:
         pass
     
-    # Include redaction block (Phase 9 polish) - forgotten facts LLM should not use
     redaction_context = ""
     try:
         from wyzer.brain.prompt import get_redaction_block
@@ -2656,128 +2658,23 @@ def _call_llm(user_text: str, registry) -> Dict[str, Any]:
     except Exception:
         pass
     
-    # Include all memories block (use_memories flag) - all long-term memories if enabled
-    all_memories_context = ""
+    # Get smart memories (relevance-gated inside PromptBuilder)
+    memories_context = ""
     try:
-        from wyzer.brain.prompt import get_all_memories_block
-        all_memories_context = get_all_memories_block()
+        from wyzer.brain.prompt import get_smart_memories_block
+        memories_context = get_smart_memories_block(user_text)
     except Exception:
         pass
     
-    # Build tool list for prompt
-    tools_list = registry.list_tools()
-    tools_desc = "\n".join([f"- {t['name']}: {t['description']}" for t in tools_list])
-    tool_names = ", ".join([t['name'] for t in tools_list])
+    # Build token-budgeted prompt
+    prompt, mode = build_llm_prompt(
+        user_text=user_text,
+        session_context=session_context,
+        promoted_context=promoted_context,
+        redaction_context=redaction_context,
+        memories_context=memories_context,
+    )
     
-    prompt = f"""You are Wyzer, a local voice assistant. You can use tools to help users.
-{session_context}{promoted_context}{redaction_context}{all_memories_context}
-
-CONVERSATIONAL CONTEXT:
-- If the user says something vague like "tell me more", "can you elaborate", "go on", "what else", or "continue", check the recent conversation context above.
-- When a follow-up references a previous topic, continue discussing THAT topic in detail. Do NOT ask "what would you like to know?" - instead, provide more information about the last discussed subject.
-- Use the session context to maintain topic continuity across turns.
-
-CRITICAL - TOOL USAGE RULES:
-- You may ONLY use tools from the list below. Do NOT invent or hallucinate tool names.
-- Valid tool names are: {tool_names}
-- If the user asks a general knowledge question (e.g., recommendations, explanations, opinions, facts), respond with {{"reply": "..."}} ONLY - no tools.
-- Tools are for ACTIONS on the user's computer (open apps, control media, check system info, etc.), NOT for answering questions.
-
-Available tools:
-{tools_desc}
-
-TOOL USAGE GUIDANCE:
-- For "open X" requests:
-    - If X is an installed app/game/folder/file name, use open_target with query=X.
-    - Use open_website ONLY when the user explicitly requests a website/URL (e.g., says "website", provides a domain like "example.com", or says "go to ...").
-    - Do NOT invent URLs for non-web apps/games. (Example: "open Rocket League" is a game -> open_target, not open_website.)
-- For window control: use focus_window, minimize_window, maximize_window, close_window, or move_window_to_monitor
-  - move_window_to_monitor: Use monitor="primary" for primary monitor, or monitor=0/1/2 for specific monitor index
-- For media control: use media_play_pause, media_next, media_previous for playback
-- For volume control: prefer volume_control (supports get/set/change + mute/unmute + per-app volume by process)
-        - Master volume example: {{"tool": "volume_control", "args": {{"scope": "master", "action": "set", "level": 35}}}}
-        - Per-app volume example: {{"tool": "volume_control", "args": {{"scope": "app", "process": "spotify", "action": "change", "delta": -10}}}}
-        - Legacy volume tools volume_up/volume_down/volume_mute_toggle exist but volume_control is preferred
-- For switching the default audio output device (speakers/headset): use set_audio_output_device with device="name" (fuzzy match allowed)
-- For monitor info: use monitor_info to check available monitors
-- For checking which monitor an app is on: use get_window_monitor with process="appname" (e.g., "spotify", "chrome") to find which monitor displays that window
-- For library management: use local_library_refresh to rebuild the index ONLY when the user explicitly asks to refresh/rebuild/rescan/update the local library/index
-- For storage/drives (IMPORTANT - pick only ONE tool):
-    - system_storage_scan: Full system scan of ALL drives - use ONLY when user says "system scan", "scan my drives", or "scan disk" (no specific drive mentioned)
-    - system_storage_list: Check specific drive OR all drives - use for "scan drive E", "space on D", "what's on E", "check drive C", "how much storage" - Args: {{"drive": "E"}} if user specifies drive, empty dict if not
-    - system_storage_open: Open a drive in file manager - use for "open drive D", "open E", "show drive C" - Args: {{"drive": "D"}}
-    - RULE: If user mentions a specific drive (C, D, E, etc), NEVER use system_storage_scan. Always use system_storage_list or system_storage_open instead.
-- For creative or conversational requests (e.g., "tell me a story", jokes, roleplay, general chat): do NOT call any tools; respond directly with {{"reply": "..."}}
-- For location: use get_location (approximate IP-based)
-- For weather/forecast: use get_weather_forecast (optionally pass location; otherwise it uses IP-based location)
-    - If user asks for Fahrenheit, pass units="fahrenheit" (or units="imperial")
-
-MULTI-INTENT SUPPORT (NEW):
-- You can now execute MULTIPLE tools in sequence for complex requests
-- Use "intents" array to specify multiple actions in order
-- Each intent has: {{"tool": "tool_name", "args": {{...}}, "continue_on_error": false}}
-- Keep intents under 5 per request
-- Preserve order - they execute sequentially
-
-EXAMPLES:
-User: "open downloads"
-Response: {{"intents": [{{"tool": "open_target", "args": {{"query": "downloads"}}}}], "reply": "Opening downloads"}}
-
-User: "launch chrome and open youtube"
-Response: {{"intents": [{{"tool": "open_target", "args": {{"query": "chrome"}}}}, {{"tool": "open_website", "args": {{"url": "youtube"}}}}], "reply": "Launching Chrome and opening YouTube"}}
-
-User: "open Rocket League"
-Response: {{"intents": [{{"tool": "open_target", "args": {{"query": "Rocket League"}}}}], "reply": "Opening Rocket League"}}
-
-User: "open rocketleague.com"
-Response: {{"intents": [{{"tool": "open_website", "args": {{"url": "rocketleague.com"}}}}], "reply": "Opening rocketleague.com"}}
-
-User: "pause music and mute volume"
-Response: {{"intents": [{{"tool": "media_play_pause", "args": {{}}}}, {{"tool": "volume_mute_toggle", "args": {{}}}}], "reply": "Pausing and muting"}}
-
-User: "move chrome to primary monitor"
-Response: {{"intents": [{{"tool": "move_window_to_monitor", "args": {{"process": "chrome", "monitor": "primary"}}}}], "reply": "Moving Chrome to your primary monitor"}}
-
-User: "what time is it"
-Response: {{"intents": [{{"tool": "get_time", "args": {{}}}}], "reply": ""}}
-
-User: "hello"
-Response: {{"reply": "Hello! How can I help you?"}}
-
-User: "what's an anime like One Piece"
-Response: {{"reply": "If you enjoy One Piece, you might like Naruto, Fairy Tail, or Hunter x Hunter - they all have long adventure arcs with strong themes of friendship and growth."}}
-
-User: "recommend me a good movie"
-Response: {{"reply": "It depends on your mood! For action, try John Wick. For something emotional, The Shawshank Redemption is a classic. For sci-fi, Inception is fantastic."}}
-
-User: "what is the capital of France"
-Response: {{"reply": "The capital of France is Paris."}}
-
-User: "explain how photosynthesis works"
-Response: {{"reply": "Photosynthesis is how plants convert sunlight, water, and carbon dioxide into glucose and oxygen. They capture light energy with chlorophyll and use it to power this chemical transformation."}}
-
-RESPONSE FORMAT: You must respond with valid JSON only (no markdown, no code blocks).
-Option 1 - Direct reply (no tool needed):
-{{"reply": "your response here"}}
-
-Option 2 - Single tool:
-{{"intents": [{{"tool": "tool_name", "args": {{"key": "value"}}}}], "reply": "brief message"}}
-
-Option 3 - Multiple tools (for multi-step requests):
-{{"intents": [{{"tool": "tool1", "args": {{}}}}, {{"tool": "tool2", "args": {{}}}}], "reply": "brief message"}}
-
-Rules:
-- Default to 1-2 sentences.
-- If the user explicitly asks for a long story, an in-depth explanation, step-by-step details, or to "go into detail", you may write a longer response.
-- Be direct and helpful
-- Use intents when appropriate to answer the user's question
-- Preserve order for multi-step actions
-- If using tools, I will run them and ask you again for the final reply
-
-User: {user_text}
-
-Your response (JSON only):"""
-
     return _ollama_request(prompt)
 
 
@@ -2825,60 +2722,82 @@ Your response (JSON only):"""
     return _ollama_request(prompt)
 
 
+def _gather_context_blocks(user_text: str, max_session_turns: int = 2) -> Dict[str, str]:
+    """
+    Gather context blocks for LLM prompts with size limits.
+    
+    Args:
+        user_text: User input (for memory relevance check)
+        max_session_turns: Max session turns to include
+        
+    Returns:
+        Dict with session_context, promoted_context, redaction_context, memories_context
+    """
+    from wyzer.brain.prompt_builder import should_inject_memories
+    
+    session_context = ""
+    try:
+        from wyzer.memory.memory_manager import get_memory_manager
+        mem_mgr = get_memory_manager()
+        context = mem_mgr.get_session_context(max_turns=max_session_turns)
+        if context:
+            session_context = f"\n--- Recent ---\n{context}\n---\n"
+    except Exception:
+        pass
+    
+    promoted_context = ""
+    try:
+        from wyzer.brain.prompt import get_promoted_memory_block
+        promoted_context = get_promoted_memory_block()
+        if promoted_context:
+            promoted_context = promoted_context[:300]  # Cap size
+    except Exception:
+        pass
+    
+    redaction_context = ""
+    try:
+        from wyzer.brain.prompt import get_redaction_block
+        redaction_context = get_redaction_block()
+        if redaction_context:
+            redaction_context = redaction_context[:200]  # Cap size
+    except Exception:
+        pass
+    
+    memories_context = ""
+    # Only inject memories for relevant queries
+    if should_inject_memories(user_text):
+        try:
+            from wyzer.brain.prompt import get_smart_memories_block
+            memories_context = get_smart_memories_block(user_text)
+            if memories_context:
+                memories_context = memories_context[:400]  # Cap size
+        except Exception:
+            pass
+    
+    return {
+        "session": session_context,
+        "promoted": promoted_context,
+        "redaction": redaction_context,
+        "memories": memories_context,
+    }
+
+
 def _call_llm_reply_only(user_text: str) -> Dict[str, Any]:
     """Force a direct reply with no tool calls.
 
     Used as a fallback when the LLM returns spurious tool intents.
     """
-    # Include session context for better conversational continuity (Phase 7)
-    session_context = ""
-    try:
-        from wyzer.brain.prompt import get_session_context_block
-        session_context = get_session_context_block()
-    except Exception:
-        pass
-    
-    # Include promoted memory context (Phase 9) - user-approved memory for this session
-    promoted_context = ""
-    try:
-        from wyzer.brain.prompt import get_promoted_memory_block
-        promoted_context = get_promoted_memory_block()
-    except Exception:
-        pass
-    
-    # Include redaction block (Phase 9 polish) - forgotten facts LLM should not use
-    redaction_context = ""
-    try:
-        from wyzer.brain.prompt import get_redaction_block
-        redaction_context = get_redaction_block()
-    except Exception:
-        pass
-    
-    # Include all memories block (use_memories flag) - all long-term memories if enabled
-    all_memories_context = ""
-    try:
-        from wyzer.brain.prompt import get_all_memories_block
-        all_memories_context = get_all_memories_block()
-    except Exception:
-        pass
+    ctx = _gather_context_blocks(user_text, max_session_turns=2)
     
     prompt = f"""You are Wyzer, a local voice assistant.
+{ctx['session']}{ctx['promoted']}{ctx['redaction']}{ctx['memories']}
+Reply naturally in 1-2 sentences. Be direct.
 
-No tools are available for this request.
-Write a natural response to the user.
-{session_context}{promoted_context}{redaction_context}{all_memories_context}
-
-CONVERSATIONAL CONTEXT:
-- If the user says something vague like "tell me more", "can you elaborate", "go on", "what else", or "continue", check the recent conversation context above.
-- When a follow-up references a previous topic, continue discussing THAT topic in detail. Do NOT ask "what would you like to know?" - instead, provide more information about the last discussed subject.
-- Use the session context to maintain topic continuity across turns.
-
-RESPONSE FORMAT: JSON only (no markdown):
-{{"reply": "your response"}}
+JSON format: {{"reply": "your response"}}
 
 User: {user_text}
 
-Your response (JSON only):"""
+JSON:"""
     return _ollama_request(prompt)
 
 
@@ -2898,73 +2817,39 @@ def _call_llm_with_execution_summary(
     Returns:
         Dict with {"reply": "..."}
     """
-    # Include session context for conversational continuity (Phase 7)
-    session_context = ""
-    try:
-        from wyzer.brain.prompt import get_session_context_block
-        session_context = get_session_context_block()
-    except Exception:
-        pass
+    ctx = _gather_context_blocks(user_text, max_session_turns=2)
     
-    # Include promoted memory context (Phase 9) - user-approved memory for this session
-    promoted_context = ""
-    try:
-        from wyzer.brain.prompt import get_promoted_memory_block
-        promoted_context = get_promoted_memory_block()
-    except Exception:
-        pass
-    
-    # Include redaction block (Phase 9 polish) - forgotten facts LLM should not use
-    redaction_context = ""
-    try:
-        from wyzer.brain.prompt import get_redaction_block
-        redaction_context = get_redaction_block()
-    except Exception:
-        pass
-    
-    # Include all memories block (use_memories flag) - all long-term memories if enabled
-    all_memories_context = ""
-    try:
-        from wyzer.brain.prompt import get_all_memories_block
-        all_memories_context = get_all_memories_block()
-    except Exception:
-        pass
-    
-    # Build a summary of what was executed
+    # Build a concise summary of what was executed
     summary_parts = []
     for result in execution_summary.ran:
         if result.ok:
-            summary_parts.append(
-                f"- Executed '{result.tool}' successfully. Result: {json.dumps(result.result)}"
-            )
+            # Truncate long results
+            result_str = json.dumps(result.result)
+            if len(result_str) > 200:
+                result_str = result_str[:200] + "..."
+            summary_parts.append(f"- {result.tool}: OK - {result_str}")
         else:
-            summary_parts.append(
-                f"- Failed to execute '{result.tool}'. Error: {result.error}"
-            )
+            summary_parts.append(f"- {result.tool}: FAILED - {result.error}")
     
     if execution_summary.stopped_early:
-        summary_parts.append("- Execution stopped early due to error")
+        summary_parts.append("- Stopped early")
     
     summary_text = "\n".join(summary_parts)
     
     prompt = f"""You are Wyzer, a local voice assistant.
-{session_context}{promoted_context}{redaction_context}{all_memories_context}
-The user asked: {user_text}
+{ctx['session']}{ctx['promoted']}{ctx['redaction']}{ctx['memories']}
+User asked: {user_text}
 
-I executed the following actions:
+Results:
 {summary_text}
 
-Now provide a natural reply to the user based on these results.
-- Default to 1-2 sentences.
-- If the user's original request asked for detail/step-by-step/a long explanation or a story, provide a longer, more in-depth reply.
+Reply naturally in 1-2 sentences based on results.
 
-RESPONSE FORMAT: JSON only (no markdown):
-{{"reply": "your natural response to the user"}}
+JSON: {{"reply": "your response"}}
 
-Your response (JSON only):"""
+JSON:"""
 
-    response = _ollama_request(prompt)
-    return response
+    return _ollama_request(prompt)
 
 
 def _call_llm_with_tool_result(
@@ -2980,57 +2865,31 @@ def _call_llm_with_tool_result(
     Returns:
         Dict with {"reply": "..."}
     """
-    # Include session context for conversational continuity (Phase 7)
-    session_context = ""
-    try:
-        from wyzer.brain.prompt import get_session_context_block
-        session_context = get_session_context_block()
-    except Exception:
-        pass
+    ctx = _gather_context_blocks(user_text, max_session_turns=2)
     
-    # Include promoted memory context (Phase 9) - user-approved memory for this session
-    promoted_context = ""
-    try:
-        from wyzer.brain.prompt import get_promoted_memory_block
-        promoted_context = get_promoted_memory_block()
-    except Exception:
-        pass
+    # Truncate tool result if too long
+    result_str = json.dumps(tool_result)
+    if len(result_str) > 300:
+        result_str = result_str[:300] + "..."
     
-    # Include redaction block (Phase 9 polish) - forgotten facts LLM should not use
-    redaction_context = ""
-    try:
-        from wyzer.brain.prompt import get_redaction_block
-        redaction_context = get_redaction_block()
-    except Exception:
-        pass
-    
-    # Include all memories block (use_memories flag) - all long-term memories if enabled
-    all_memories_context = ""
-    try:
-        from wyzer.brain.prompt import get_all_memories_block
-        all_memories_context = get_all_memories_block()
-    except Exception:
-        pass
+    args_str = json.dumps(tool_args)
+    if len(args_str) > 100:
+        args_str = args_str[:100] + "..."
     
     prompt = f"""You are Wyzer, a local voice assistant.
-{session_context}{promoted_context}{redaction_context}{all_memories_context}
-The user asked: {user_text}
+{ctx['session']}{ctx['promoted']}{ctx['redaction']}{ctx['memories']}
+User asked: {user_text}
 
-I executed the tool '{tool_name}' with arguments: {json.dumps(tool_args)}
+Tool: {tool_name}({args_str})
+Result: {result_str}
 
-Tool result: {json.dumps(tool_result)}
+Reply naturally in 1-2 sentences.
 
-Now provide a natural reply to the user based on this result.
-- Default to 1-2 sentences.
-- If the user's original request asked for detail/step-by-step/a long explanation or a story, provide a longer, more in-depth reply.
+JSON: {{"reply": "your response"}}
 
-RESPONSE FORMAT: JSON only (no markdown):
-{{"reply": "your natural response to the user"}}
+JSON:"""
 
-Your response (JSON only):"""
-
-    response = _ollama_request(prompt)
-    return response
+    return _ollama_request(prompt)
 
 
 def _ollama_request(prompt: str) -> Dict[str, Any]:
@@ -3048,6 +2907,13 @@ def _ollama_request(prompt: str) -> Dict[str, Any]:
         return {
             "reply": _get_no_ollama_reply()
         }
+    
+    # Estimate tokens before sending (for comparison/debugging)
+    try:
+        from wyzer.brain.prompt_builder import estimate_tokens
+        est_tokens = estimate_tokens(prompt)
+    except Exception:
+        est_tokens = len(prompt) // 4
     
     try:
         # Use existing config
@@ -3077,6 +2943,11 @@ def _ollama_request(prompt: str) -> Dict[str, Any]:
         
         with urllib.request.urlopen(req, timeout=timeout) as response:
             response_data = json.loads(response.read().decode('utf-8'))
+        
+        # Log token counts from Ollama
+        prompt_tokens = response_data.get("prompt_eval_count", 0)
+        eval_tokens = response_data.get("eval_count", 0)
+        logger.debug(f"[OLLAMA] est_tokens={est_tokens}, prompt_tokens={prompt_tokens}, eval_tokens={eval_tokens}")
         
         # Parse response
         reply_text = response_data.get("response", "").strip()

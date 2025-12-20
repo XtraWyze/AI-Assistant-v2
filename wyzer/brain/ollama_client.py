@@ -119,7 +119,9 @@ class OllamaClient:
                     response_data = json.loads(response.read().decode('utf-8'))
                 
                 elapsed_ms = int((time.time() - start_time) * 1000)
-                self.logger.debug(f"Generation completed in {elapsed_ms}ms")
+                prompt_tokens = response_data.get("prompt_eval_count", 0)
+                eval_tokens = response_data.get("eval_count", 0)
+                self.logger.debug(f"Generation completed in {elapsed_ms}ms (prompt_tokens={prompt_tokens}, eval_tokens={eval_tokens})")
                 
                 return response_data.get("response", "").strip()
         
@@ -225,7 +227,9 @@ class OllamaClient:
                     # Check if done
                     if data.get("done", False):
                         elapsed_ms = int((time.time() - start_time) * 1000)
-                        self.logger.debug(f"Stream completed in {elapsed_ms}ms")
+                        prompt_tokens = data.get("prompt_eval_count", 0)
+                        eval_tokens = data.get("eval_count", 0)
+                        self.logger.debug(f"Stream completed in {elapsed_ms}ms (prompt_tokens={prompt_tokens}, eval_tokens={eval_tokens})")
                         break
         
         except urllib.error.HTTPError as e:

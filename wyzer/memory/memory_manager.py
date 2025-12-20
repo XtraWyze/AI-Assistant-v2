@@ -1272,6 +1272,7 @@ class MemoryManager:
             if selected:
                 pinned_keys = [r.get("key") or r.get("text", "")[:30] for _, r in selected]
                 logger.info(f"[MEMORY] Injecting {len(selected)} pinned: {pinned_keys}")
+                logger.debug(f"[MEMORY] Pinned details: {[r.get('text', '')[:50] for _, r in selected]}")
             
             # 2. MENTION-TRIGGERED memories
             mention_count = 0
