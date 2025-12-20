@@ -1,9 +1,23 @@
 """
-Memory Manager for Wyzer AI Assistant - Phase 7
+Memory Manager for Wyzer AI Assistant - Phase 11
 
 Provides:
 1. Session Memory: In-memory conversation context (last N turns)
-2. Long-Term Memory: Explicit disk storage via user commands
+2. Long-Term Memory: Structured records with explicit disk storage via user commands
+
+Phase 11 Structured Memory Model:
+Each memory record contains:
+- id: unique identifier (UUID)
+- type: one of ["fact", "preference", "skill", "history_marker"] (default "fact")
+- key: short normalized key (optional, derived when possible)
+- value: human readable string
+- tags: list[str] (optional)
+- created_at: ISO timestamp
+- updated_at: ISO timestamp (optional)
+- source: "explicit_user" (constant for now)
+
+Backward Compatibility:
+- Old list[str] or list[dict without type/value] formats are migrated on load
 
 IMPORTANT: All disk writes are explicit and user-initiated.
 Session memory is RAM-only and cleared on restart.
@@ -21,6 +35,176 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from wyzer.core.config import Config
 from wyzer.core.logger import get_logger
+
+
+# Phase 11: Memory record types
+MEMORY_RECORD_TYPES = ["fact", "preference", "skill", "history_marker"]
+DEFAULT_RECORD_TYPE = "fact"
+DEFAULT_SOURCE = "explicit_user"
+
+
+def _derive_key(value: str) -> Optional[str]:
+    """
+    Derive a short normalized key from a memory value.
+    
+    Heuristics:
+    - "my name is X" -> "name"
+    - "my birthday is X" -> "birthday"
+    - "my favorite X is Y" -> "favorite_X"
+    - "I like X" -> "likes_X"
+    
+    Args:
+        value: The memory value text
+        
+    Returns:
+        Derived key or None if no confident derivation
+    """
+    if not value:
+        return None
+    
+    text = value.lower().strip()
+    
+    # Pattern: "my name is X" or "my name's X"
+    if re.match(r"^my\s+name(?:'s|\s+is)\s+", text):
+        return "name"
+    
+    # Pattern: "my birthday is X"
+    if re.match(r"^my\s+birthday\s+is\s+", text):
+        return "birthday"
+    
+    # Pattern: "my age is X" or "I am X years old"
+    if re.match(r"^my\s+age\s+is\s+", text) or re.match(r"^i(?:'m|\s+am)\s+\d+\s+years?\s+old", text):
+        return "age"
+    
+    # Pattern: "my favorite X is Y"
+    match = re.match(r"^my\s+fav(?:ou?rite)?\s+(\w+)\s+is\s+", text)
+    if match:
+        topic = match.group(1).strip()
+        return f"favorite_{topic}"
+    
+    # Pattern: "I like X" / "I love X"
+    match = re.match(r"^i\s+(?:like|love)\s+(.+?)(?:\.|$)", text)
+    if match:
+        topic = match.group(1).strip()[:20]  # Limit length
+        topic_key = re.sub(r"\s+", "_", topic.lower())
+        return f"likes_{topic_key}"
+    
+    # Pattern: "my X is Y" (generic possessive)
+    match = re.match(r"^my\s+(\w+(?:\s+\w+)?)\s+is\s+", text)
+    if match:
+        what = match.group(1).strip()
+        what_key = re.sub(r"\s+", "_", what.lower())
+        return what_key[:30]  # Limit length
+    
+    return None
+
+
+def _derive_type(value: str) -> str:
+    """
+    Derive the memory type from the value content.
+    
+    Heuristics:
+    - "I like X" / "my favorite X" -> "preference"
+    - "I can X" / "I know how to X" -> "skill"
+    - Default -> "fact"
+    
+    Args:
+        value: The memory value text
+        
+    Returns:
+        One of MEMORY_RECORD_TYPES
+    """
+    if not value:
+        return DEFAULT_RECORD_TYPE
+    
+    text = value.lower().strip()
+    
+    # Preference patterns
+    if re.match(r"^(?:i\s+(?:like|love|prefer|enjoy|hate|dislike)|my\s+fav(?:ou?rite)?)", text):
+        return "preference"
+    
+    # Skill patterns
+    if re.match(r"^i\s+(?:can|know\s+how\s+to|am\s+able\s+to)", text):
+        return "skill"
+    
+    return DEFAULT_RECORD_TYPE
+
+
+def _migrate_legacy_entry(entry: Any) -> Dict[str, Any]:
+    """
+    Migrate a legacy memory entry to Phase 11+ structured format.
+    
+    Handles:
+    - Plain strings: convert to {type, value, pinned, aliases, ...}
+    - Old dict format with 'text' but no 'value': migrate
+    - Already structured: ensure pinned/aliases exist
+    
+    Args:
+        entry: Legacy entry (str or dict)
+        
+    Returns:
+        Phase 11+ structured record with pinned and aliases fields
+    """
+    now = datetime.utcnow().isoformat() + "Z"
+    
+    # Plain string (very old format)
+    if isinstance(entry, str):
+        value = entry.strip()
+        return {
+            "id": str(uuid.uuid4()),
+            "type": _derive_type(value),
+            "key": _derive_key(value),
+            "value": value,
+            "tags": [],
+            "pinned": False,
+            "aliases": [],
+            "created_at": now,
+            "updated_at": None,
+            "source": DEFAULT_SOURCE,
+            # Keep for backward compat
+            "text": value,
+            "index_text": _normalize_for_matching(value),
+        }
+    
+    # Dict format
+    if isinstance(entry, dict):
+        # Get value from 'value' or 'text'
+        text = entry.get("value") or entry.get("text", "")
+        text = text.strip() if text else ""
+        
+        # Build record ensuring all fields exist
+        return {
+            "id": entry.get("id", str(uuid.uuid4())),
+            "type": entry.get("type", _derive_type(text)),
+            "key": entry.get("key", _derive_key(text)),
+            "value": text,
+            "tags": entry.get("tags", []),
+            "pinned": entry.get("pinned", False),
+            "aliases": entry.get("aliases", []),
+            "created_at": entry.get("created_at", now),
+            "updated_at": entry.get("updated_at"),
+            "source": entry.get("source", DEFAULT_SOURCE),
+            # Keep for backward compat
+            "text": text,
+            "index_text": entry.get("index_text", _normalize_for_matching(text)),
+        }
+    
+    # Unknown format - wrap as string
+    value = str(entry)
+    return {
+        "id": str(uuid.uuid4()),
+        "type": DEFAULT_RECORD_TYPE,
+        "key": None,
+        "value": value,
+        "tags": [],
+        "pinned": False,
+        "aliases": [],
+        "created_at": now,
+        "updated_at": None,
+        "source": DEFAULT_SOURCE,
+        "text": value,
+        "index_text": _normalize_for_matching(value),
+    }
 
 
 def _get_memory_file_path() -> Path:
@@ -184,13 +368,24 @@ class MemoryManager:
     # Long-Term Memory (disk, explicit only)
     # =========================================================================
     
-    def _load_memories(self) -> List[Dict[str, Any]]:
-        """Load memories from disk. Returns empty list if file doesn't exist."""
+    def _load_memories(self, migrate: bool = True) -> List[Dict[str, Any]]:
+        """
+        Load memories from disk with optional Phase 11 migration.
+        
+        Args:
+            migrate: If True, migrate legacy entries to Phase 11 format
+        
+        Returns:
+            List of memory records (empty list if file doesn't exist)
+        """
         try:
             if self._memory_file.exists():
                 with open(self._memory_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     if isinstance(data, list):
+                        if migrate:
+                            # Apply Phase 11 migration to each entry
+                            return [_migrate_legacy_entry(entry) for entry in data]
                         return data
         except (json.JSONDecodeError, IOError, OSError) as e:
             logger = get_logger()
@@ -265,12 +460,15 @@ class MemoryManager:
             new_index_text = _normalize_for_matching(text)
             
             # Create new entry with normalized index_text for matching
+            # All explicitly remembered memories are pinned by default (always injected)
             entry = {
                 "id": str(uuid.uuid4()),
                 "created_at": datetime.utcnow().isoformat() + "Z",
                 "text": text,  # Original text for display
                 "index_text": new_index_text,  # Normalized for matching
-                "tags": tags or []
+                "tags": tags or [],
+                "pinned": True,  # Always inject by default
+                "aliases": []
             }
             
             # Load existing memories
@@ -409,9 +607,751 @@ class MemoryManager:
             return len(self._load_memories()) > 0
 
     # =========================================================================
-    # Session Flag: use_memories (ALL long-term memories → LLM prompts)
+    # Phase 11: Structured Memory API
     # =========================================================================
     
+    def list_all(self) -> List[Dict[str, Any]]:
+        """
+        List all memory records (Phase 11 structured format).
+        
+        Returns:
+            List of all memory records with full structured data
+        """
+        logger = get_logger()
+        with self._lock:
+            memories = self._load_memories()
+            logger.info(f"[MEMORY] list_all: {len(memories)} records")
+            return memories
+    
+    def search(self, query: str) -> List[Dict[str, Any]]:
+        """
+        Search memories by query (Phase 11).
+        
+        Simple case-insensitive substring match on value, key, and tags.
+        
+        Args:
+            query: Search query text
+            
+        Returns:
+            List of matching memory records
+        """
+        logger = get_logger()
+        
+        with self._lock:
+            query_lower = query.lower().strip()
+            if not query_lower:
+                return []
+            
+            memories = self._load_memories()
+            matches = []
+            
+            for mem in memories:
+                # Search in value
+                value = (mem.get("value") or mem.get("text") or "").lower()
+                if query_lower in value:
+                    matches.append(mem)
+                    continue
+                
+                # Search in key
+                key = (mem.get("key") or "").lower()
+                if key and query_lower in key:
+                    matches.append(mem)
+                    continue
+                
+                # Search in tags
+                tags = mem.get("tags", [])
+                if any(query_lower in tag.lower() for tag in tags):
+                    matches.append(mem)
+                    continue
+            
+            logger.debug(f"[MEMORY] search '{query}': {len(matches)} matches")
+            return matches
+    
+    def add_explicit(
+        self,
+        value: str,
+        record_type: str = DEFAULT_RECORD_TYPE,
+        key: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        pinned: bool = False,
+        aliases: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Add a new memory record explicitly (Phase 11+).
+        
+        This is the structured API for adding memories with pinned/aliases support.
+        Deduplicates by normalized value.
+        
+        Args:
+            value: The memory content
+            record_type: One of MEMORY_RECORD_TYPES (default "fact")
+            key: Optional key (derived if not provided)
+            tags: Optional list of tags
+            pinned: If True, this memory is always injected when enabled (static)
+            aliases: Optional list of alias strings for mention-triggered matching
+            
+        Returns:
+            Dict with ok=True and the new record, or ok=False and error
+        """
+        logger = get_logger()
+        
+        with self._lock:
+            value = value.strip()
+            if not value:
+                return {"ok": False, "error": "Nothing to remember"}
+            
+            # Validate type
+            if record_type not in MEMORY_RECORD_TYPES:
+                record_type = DEFAULT_RECORD_TYPE
+            
+            # Validate aliases
+            validated_aliases = []
+            if aliases:
+                for alias in aliases[:8]:  # Max 8 aliases per record
+                    alias = alias.strip()
+                    if len(alias) >= 3:  # Min 3 chars for alias
+                        validated_aliases.append(alias.lower())
+            
+            now = datetime.utcnow().isoformat() + "Z"
+            normalized = _normalize_for_matching(value)
+            
+            # Create new record
+            record = {
+                "id": str(uuid.uuid4()),
+                "type": record_type,
+                "key": key or _derive_key(value),
+                "value": value,
+                "tags": tags or [],
+                "pinned": pinned,
+                "aliases": validated_aliases,
+                "created_at": now,
+                "updated_at": None,
+                "source": DEFAULT_SOURCE,
+                # Backward compat fields
+                "text": value,
+                "index_text": normalized,
+            }
+            
+            # Load and deduplicate
+            memories = self._load_memories()
+            remaining = []
+            replaced = False
+            
+            for mem in memories:
+                existing_norm = mem.get("index_text") or _normalize_for_matching(
+                    mem.get("value") or mem.get("text") or ""
+                )
+                if existing_norm == normalized:
+                    replaced = True
+                else:
+                    remaining.append(mem)
+            
+            remaining.append(record)
+            
+            if self._save_memories(remaining):
+                action = "updated" if replaced else "added"
+                logger.info(f"[MEMORY] add_explicit ({action}): {value[:50]}...")
+                return {"ok": True, "record": record, "replaced": replaced}
+            else:
+                return {"ok": False, "error": "Failed to save memory"}
+    
+    def delete_by_query(self, query: str) -> int:
+        """
+        Delete all memories matching the query (Phase 11).
+        
+        Uses the same search logic as search().
+        
+        Args:
+            query: Search query for memories to delete
+            
+        Returns:
+            Number of records deleted
+        """
+        logger = get_logger()
+        
+        with self._lock:
+            query_lower = query.lower().strip()
+            if not query_lower:
+                return 0
+            
+            memories = self._load_memories()
+            remaining = []
+            deleted = []
+            
+            for mem in memories:
+                matched = False
+                
+                # Check value
+                value = (mem.get("value") or mem.get("text") or "").lower()
+                if query_lower in value:
+                    matched = True
+                
+                # Check key
+                if not matched:
+                    key = (mem.get("key") or "").lower()
+                    if key and query_lower in key:
+                        matched = True
+                
+                # Check tags
+                if not matched:
+                    tags = mem.get("tags", [])
+                    if any(query_lower in tag.lower() for tag in tags):
+                        matched = True
+                
+                if matched:
+                    deleted.append(mem)
+                    # Track for redaction
+                    text = mem.get("value") or mem.get("text") or ""
+                    if text:
+                        transformed = _transform_first_to_second_person(text)
+                        self._recently_forgotten.add(transformed if transformed else text)
+                else:
+                    remaining.append(mem)
+            
+            if deleted:
+                if self._save_memories(remaining):
+                    logger.info(f"[MEMORY] delete_by_query '{query}': deleted {len(deleted)} records")
+                    self.clear_promoted()
+                    return len(deleted)
+                else:
+                    logger.error(f"[MEMORY] delete_by_query: failed to save after deleting {len(deleted)} records")
+                    return 0
+            
+            logger.debug(f"[MEMORY] delete_by_query '{query}': no matches")
+            return 0
+    
+    def export_to(self, path: Optional[str] = None) -> str:
+        """
+        Export all memories to a JSON file (Phase 11).
+        
+        Args:
+            path: Optional export path. If None, uses wyzer/data/memory_export_<timestamp>.json
+            
+        Returns:
+            The path where the export was written
+            
+        Raises:
+            ValueError: If path is outside wyzer/data/ (safety)
+            IOError: If export fails
+        """
+        logger = get_logger()
+        
+        with self._lock:
+            # Determine export path
+            data_dir = Path(__file__).parent.parent / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            
+            if path:
+                export_path = Path(path)
+                # Safety: ensure path is inside wyzer/data/ or is an absolute path the user explicitly provided
+                try:
+                    export_path = export_path.resolve()
+                    data_dir_resolved = data_dir.resolve()
+                    # Allow if inside data dir
+                    if not str(export_path).startswith(str(data_dir_resolved)):
+                        # Also allow if in user's home or desktop (explicit user request)
+                        home = Path.home()
+                        if not (str(export_path).startswith(str(home)) or export_path.parent.exists()):
+                            raise ValueError(f"Export path must be inside {data_dir} or user home directory")
+                except Exception as e:
+                    raise ValueError(f"Invalid export path: {e}")
+            else:
+                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                export_path = data_dir / f"memory_export_{timestamp}.json"
+            
+            # Load all memories
+            memories = self._load_memories()
+            
+            # Write export
+            try:
+                export_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(export_path, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        "version": "phase11",
+                        "exported_at": datetime.utcnow().isoformat() + "Z",
+                        "count": len(memories),
+                        "memories": memories
+                    }, f, indent=2, ensure_ascii=False)
+                
+                logger.info(f"[MEMORY] export_to: wrote {len(memories)} records to {export_path}")
+                return str(export_path)
+            except (IOError, OSError) as e:
+                logger.error(f"[MEMORY] export_to failed: {e}")
+                raise IOError(f"Failed to export memories: {e}")
+    
+    def import_from(self, path: str) -> int:
+        """
+        Import memories from a JSON file (Phase 11).
+        
+        IMPORTANT: Only called by explicit user command.
+        Merges imported memories with existing, deduplicating by normalized value.
+        
+        Args:
+            path: Path to the import file
+            
+        Returns:
+            Number of new memories imported
+            
+        Raises:
+            FileNotFoundError: If file doesn't exist
+            ValueError: If file format is invalid
+        """
+        logger = get_logger()
+        
+        with self._lock:
+            import_path = Path(path)
+            if not import_path.exists():
+                raise FileNotFoundError(f"Import file not found: {path}")
+            
+            # Load import file
+            try:
+                with open(import_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON in import file: {e}")
+            
+            # Handle different export formats
+            if isinstance(data, dict) and "memories" in data:
+                # Phase 11 export format
+                import_memories = data["memories"]
+            elif isinstance(data, list):
+                # Direct list format
+                import_memories = data
+            else:
+                raise ValueError("Invalid import file format: expected list or {memories: [...]}")
+            
+            if not isinstance(import_memories, list):
+                raise ValueError("Invalid import file format: memories must be a list")
+            
+            # Load existing memories
+            existing = self._load_memories()
+            existing_normalized = {
+                _normalize_for_matching(m.get("value") or m.get("text") or "")
+                for m in existing
+            }
+            
+            # Import new memories (deduplicate)
+            imported_count = 0
+            for entry in import_memories:
+                migrated = _migrate_legacy_entry(entry)
+                normalized = _normalize_for_matching(migrated.get("value") or "")
+                
+                if normalized and normalized not in existing_normalized:
+                    existing.append(migrated)
+                    existing_normalized.add(normalized)
+                    imported_count += 1
+            
+            if imported_count > 0:
+                if self._save_memories(existing):
+                    logger.info(f"[MEMORY] import_from: imported {imported_count} new records from {path}")
+                else:
+                    logger.error(f"[MEMORY] import_from: failed to save after importing")
+                    return 0
+            else:
+                logger.info(f"[MEMORY] import_from: no new records to import (all duplicates)")
+            
+            return imported_count
+    
+    def get_memories_grouped_by_type(self) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get all memories grouped by type (Phase 11).
+        
+        Returns:
+            Dict mapping type -> list of records
+        """
+        with self._lock:
+            memories = self._load_memories()
+            grouped: Dict[str, List[Dict[str, Any]]] = {}
+            
+            for mem in memories:
+                mem_type = mem.get("type", DEFAULT_RECORD_TYPE)
+                if mem_type not in grouped:
+                    grouped[mem_type] = []
+                grouped[mem_type].append(mem)
+            
+            return grouped
+    
+    # =========================================================================
+    # Static/Pinned Memory Management
+    # =========================================================================
+    
+    def set_pinned_by_query(self, query: str, pinned: bool) -> Dict[str, Any]:
+        """
+        Set pinned status on the first memory matching the query.
+        
+        Args:
+            query: Search query (case-insensitive substring match on value/key)
+            pinned: True to pin, False to unpin
+            
+        Returns:
+            Dict with ok (bool), entry (dict if found), value (str)
+        """
+        logger = get_logger()
+        
+        with self._lock:
+            query_lower = query.lower().strip()
+            if not query_lower:
+                return {"ok": False, "error": "empty_query"}
+            
+            memories = self._load_memories()
+            now = datetime.utcnow().isoformat() + "Z"
+            
+            for mem in memories:
+                # Search in value and key
+                value = (mem.get("value") or mem.get("text") or "").lower()
+                key = (mem.get("key") or "").lower()
+                
+                if query_lower in value or (key and query_lower in key):
+                    # Found a match - update pinned status
+                    mem["pinned"] = pinned
+                    mem["updated_at"] = now
+                    
+                    if self._save_memories(memories):
+                        action = "pinned" if pinned else "unpinned"
+                        logger.info(f"[MEMORY] set_pinned_by_query: {action} record matching '{query}'")
+                        return {
+                            "ok": True,
+                            "entry": mem,
+                            "value": mem.get("value") or mem.get("text") or ""
+                        }
+                    else:
+                        logger.error(f"[MEMORY] set_pinned_by_query: failed to save")
+                        return {"ok": False, "error": "save_failed"}
+            
+            return {"ok": False, "error": "not_found"}
+    
+    def add_alias_by_query(self, query: str, alias: str) -> Dict[str, Any]:
+        """
+        Add an alias to the first memory matching the query.
+        
+        Args:
+            query: Search query (case-insensitive substring match)
+            alias: Alias to add (must be >= 3 chars)
+            
+        Returns:
+            Dict with ok (bool), entry (dict if found)
+        """
+        logger = get_logger()
+        
+        with self._lock:
+            query_lower = query.lower().strip()
+            alias = alias.strip().lower()
+            
+            if not query_lower:
+                return {"ok": False, "error": "empty_query"}
+            
+            if len(alias) < 2:
+                return {"ok": False, "error": "alias_too_short"}
+            
+            memories = self._load_memories()
+            now = datetime.utcnow().isoformat() + "Z"
+            
+            for mem in memories:
+                value = (mem.get("value") or mem.get("text") or "").lower()
+                key = (mem.get("key") or "").lower()
+                
+                if query_lower in value or (key and query_lower in key):
+                    # Found a match - add alias if not already present
+                    aliases = mem.get("aliases", [])
+                    if len(aliases) >= 8:
+                        logger.warning(f"[MEMORY] add_alias: max aliases reached for record")
+                        return {"ok": False, "error": "max_aliases_reached"}
+                    
+                    if alias not in aliases:
+                        aliases.append(alias)
+                        mem["aliases"] = aliases
+                        mem["updated_at"] = now
+                        
+                        if self._save_memories(memories):
+                            logger.info(f"[MEMORY] add_alias: added '{alias}' to record matching '{query}'")
+                            return {"ok": True, "entry": mem}
+                        else:
+                            return {"ok": False, "error": "save_failed"}
+                    else:
+                        # Alias already exists - still success
+                        return {"ok": True, "entry": mem, "already_exists": True}
+            
+            return {"ok": False, "error": "not_found"}
+    
+    # =========================================================================
+    # Deterministic Memory Selection for Injection
+    # =========================================================================
+    
+    # Stopwords to ignore during mention matching
+    STOPWORDS = frozenset([
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "must", "shall", "can", "need", "dare",
+        "to", "of", "in", "for", "on", "with", "at", "by", "from", "as",
+        "into", "through", "during", "before", "after", "above", "below",
+        "between", "under", "again", "further", "then", "once", "here",
+        "there", "when", "where", "why", "how", "all", "each", "few", "more",
+        "most", "other", "some", "such", "no", "nor", "not", "only", "own",
+        "same", "so", "than", "too", "very", "just", "and", "but", "if", "or",
+        "because", "until", "while", "about", "against", "what", "which",
+        "who", "whom", "this", "that", "these", "those", "am", "it", "its",
+        "me", "my", "myself", "we", "our", "ours", "you", "your", "yours",
+        "he", "him", "his", "she", "her", "hers", "they", "them", "their",
+        "i", "like", "love", "hate", "know", "think", "want", "tell", "remember",
+    ])
+    
+    def _tokenize_for_matching(self, text: str) -> set:
+        """
+        Tokenize text for mention matching.
+        
+        - Lowercase
+        - Remove punctuation
+        - Split on whitespace
+        - Remove stopwords and tokens < 3 chars
+        
+        Returns:
+            Set of meaningful tokens
+        """
+        if not text:
+            return set()
+        
+        # Lowercase and remove punctuation
+        text = text.lower()
+        text = re.sub(r'[^\w\s]', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        # Tokenize and filter
+        tokens = set()
+        for token in text.split():
+            if len(token) >= 3 and token not in self.STOPWORDS:
+                tokens.add(token)
+        
+        return tokens
+    
+    def _is_mentioned(self, record: Dict[str, Any], user_text: str, user_tokens: set) -> bool:
+        """
+        Check if a memory record is mentioned in the user text.
+        
+        Deterministic matching:
+        A) record.key token match (if key exists and appears in tokens)
+        B) any alias matches a token or appears as substring in user_text
+        C) (fallback) a meaningful token from record.value appears in user_text
+        
+        Args:
+            record: Memory record
+            user_text: Original user text (lowercased for substring matching)
+            user_tokens: Pre-tokenized user text tokens
+            
+        Returns:
+            True if mentioned, False otherwise
+        """
+        # A) Key match
+        key = record.get("key")
+        if key:
+            key_lower = key.lower().replace("_", " ")
+            key_tokens = self._tokenize_for_matching(key_lower)
+            if key_tokens & user_tokens:
+                return True
+            # Also check if key appears as substring
+            if key_lower in user_text or key.lower() in user_text:
+                return True
+        
+        # B) Alias match
+        aliases = record.get("aliases", [])
+        for alias in aliases:
+            alias_lower = alias.lower()
+            # Token match
+            if alias_lower in user_tokens:
+                return True
+            # Substring match
+            if alias_lower in user_text:
+                return True
+        
+        # C) Value token match (fallback - be more conservative)
+        value = record.get("value") or record.get("text") or ""
+        value_tokens = self._tokenize_for_matching(value)
+        # Require at least one meaningful overlap
+        overlap = value_tokens & user_tokens
+        if overlap:
+            # Filter out very common tokens that might cause false positives
+            meaningful = [t for t in overlap if len(t) >= 4]
+            if meaningful:
+                return True
+        
+        return False
+    
+    def _score_record(self, record: Dict[str, Any], user_tokens: set) -> int:
+        """
+        Compute deterministic relevance score for a record.
+        
+        Scoring:
+        - +10 if key match
+        - +6 if alias match
+        - +4 per token overlap between user tokens and record.value tokens
+        - +1 recency bump (newer = higher)
+        
+        Args:
+            record: Memory record
+            user_tokens: Pre-tokenized user text tokens
+            
+        Returns:
+            Integer score (0 if no relevance)
+        """
+        score = 0
+        
+        # Key match
+        key = record.get("key")
+        if key:
+            key_tokens = self._tokenize_for_matching(key.lower().replace("_", " "))
+            if key_tokens & user_tokens:
+                score += 10
+        
+        # Alias match
+        aliases = record.get("aliases", [])
+        for alias in aliases:
+            if alias.lower() in user_tokens:
+                score += 6
+                break  # Only count once
+        
+        # Value token overlap
+        value = record.get("value") or record.get("text") or ""
+        value_tokens = self._tokenize_for_matching(value)
+        overlap = value_tokens & user_tokens
+        meaningful_overlap = [t for t in overlap if len(t) >= 4]
+        score += 4 * len(meaningful_overlap)
+        
+        return score
+    
+    def select_for_injection(
+        self,
+        user_text: str,
+        k_total: int = 6,
+        pinned_max: int = 4,
+        mention_max: int = 4,
+        max_chars: int = 1200
+    ) -> str:
+        """
+        Select memories for injection using deterministic static + mention-triggered buckets.
+        
+        Selection order:
+        1. PINNED/STATIC memories (always included up to pinned_max)
+        2. MENTION-TRIGGERED memories (included if user mentions them, up to mention_max)
+        3. TOP-K fallback (fill remaining slots with highest-scoring records)
+        
+        Args:
+            user_text: The user's current input text
+            k_total: Maximum total memories to include (default 6)
+            pinned_max: Maximum pinned memories (default 4)
+            mention_max: Maximum mention-triggered memories (default 4)
+            max_chars: Maximum characters in output block (default 1200)
+            
+        Returns:
+            Formatted injection block string, or "" if nothing selected or disabled
+        """
+        logger = get_logger()
+        
+        with self._lock:
+            if not self._use_memories:
+                return ""
+            
+            memories = self._load_memories()
+            if not memories:
+                return ""
+            
+            # Prepare user text for matching
+            user_text_lower = user_text.lower() if user_text else ""
+            user_tokens = self._tokenize_for_matching(user_text)
+            
+            selected = []
+            selected_ids = set()
+            
+            # 1. PINNED/STATIC memories (always included when enabled)
+            pinned_records = [m for m in memories if m.get("pinned", False)]
+            # Sort by created_at descending for determinism
+            pinned_records.sort(key=lambda m: m.get("created_at", ""), reverse=True)
+            
+            for record in pinned_records[:pinned_max]:
+                selected.append(("static", record))
+                selected_ids.add(record.get("id"))
+            
+            if selected:
+                pinned_keys = [r.get("key") or r.get("text", "")[:30] for _, r in selected]
+                logger.info(f"[MEMORY] Injecting {len(selected)} pinned: {pinned_keys}")
+            
+            # 2. MENTION-TRIGGERED memories
+            mention_count = 0
+            mentioned_keys = []
+            for record in memories:
+                if record.get("id") in selected_ids:
+                    continue
+                if mention_count >= mention_max:
+                    break
+                if self._is_mentioned(record, user_text_lower, user_tokens):
+                    selected.append(("mentioned", record))
+                    selected_ids.add(record.get("id"))
+                    mentioned_keys.append(record.get("key") or record.get("text", "")[:30])
+                    mention_count += 1
+            
+            if mention_count > 0:
+                logger.info(f"[MEMORY] Injecting {mention_count} mentioned: {mentioned_keys}")
+            
+            # 3. TOP-K FALLBACK (fill remaining slots)
+            remaining_slots = k_total - len(selected)
+            if remaining_slots > 0:
+                # Score remaining records
+                scored = []
+                for record in memories:
+                    if record.get("id") in selected_ids:
+                        continue
+                    score = self._score_record(record, user_tokens)
+                    if score > 0:
+                        scored.append((score, record.get("created_at", ""), record))
+                
+                # Sort by score desc, then by created_at desc
+                scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+                
+                for score, _, record in scored[:remaining_slots]:
+                    selected.append(("topk", record))
+                    selected_ids.add(record.get("id"))
+                
+                logger.debug(f"[MEMORY] select_for_injection: {len(scored[:remaining_slots])} top-k fallback")
+            
+            if not selected:
+                return ""
+            
+            # Format output block
+            from wyzer.memory.command_detector import _transform_first_to_second_person
+            
+            header = "[LONG-TERM MEMORY — selected]\n"
+            footer = "\nUse this information when relevant to the user's question."
+            reserved = len(header) + len(footer)
+            
+            lines = []
+            total_chars = 0
+            
+            for label, record in selected:
+                value = record.get("value") or record.get("text") or ""
+                key = record.get("key")
+                
+                # Transform to second person
+                transformed = _transform_first_to_second_person(value)
+                display_value = transformed if transformed else value
+                
+                # Format line
+                if key:
+                    line = f"- ({label}) {key}: {display_value}"
+                else:
+                    line = f"- ({label}) {display_value}"
+                
+                # Check character limit
+                if total_chars + len(line) + 1 > max_chars - reserved:
+                    break
+                
+                lines.append(line)
+                total_chars += len(line) + 1
+            
+            if not lines:
+                return ""
+            
+            result = header + "\n".join(lines) + footer
+            logger.info(f"[MEMORY] Injection: {len(lines)} memories, {total_chars} chars → LLM")
+            return result
+
     def set_use_memories(self, enabled: bool, source: str = "unknown") -> bool:
         """
         Set the use_memories session flag.

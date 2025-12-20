@@ -91,6 +91,16 @@ class MemoryCommandType(Enum):
     CLEAR_PROMOTED = "clear_promoted"  # Phase 9: "stop using that" / "don't use that"
     USE_ALL_MEMORIES = "use_all_memories"  # "use memories" / "enable memories"
     DISABLE_MEMORIES = "disable_memories"  # "stop using memories" / "disable memories"
+    # Phase 11: Structured memory commands
+    LIST_ALL = "list_all"  # "what do you remember about me" - list all memories
+    SEARCH = "search"  # "what do you remember about X" - search/filter
+    DELETE = "delete"  # "forget everything about X" - delete matching
+    EXPORT = "export"  # "export my memory" / "export memory"
+    IMPORT = "import"  # "import memory from X" (optional, explicit only)
+    # Deterministic injection (pinned + mention-triggered)
+    PIN = "pin"  # "pin that memory" / "always remember X"
+    UNPIN = "unpin"  # "unpin X" / "stop always remembering X"
+    ADD_ALIAS = "add_alias"  # "add alias X to Y" / "also call Y X"
     NONE = "none"
 
 
@@ -162,6 +172,193 @@ def detect_memory_command(user_text: str) -> Optional[MemoryCommand]:
                 text="",
                 original_input=text
             )
+    
+    # === Phase 11: EXPORT command ===
+    # "export my memory" / "export memory" / "export memories"
+    export_patterns = [
+        r'^export\s+(?:my\s+)?memory\.?$',
+        r'^export\s+(?:my\s+)?memories\.?$',
+        r'^export\s+(?:all\s+)?(?:my\s+)?memories?\.?$',
+        r'^save\s+(?:my\s+)?memories?\s+(?:to\s+(?:a\s+)?file|as\s+json)\.?$',
+        r'^download\s+(?:my\s+)?memories?\.?$',
+        r'^backup\s+(?:my\s+)?memories?\.?$',
+    ]
+    for pattern in export_patterns:
+        if re.match(pattern, text_lower):
+            return MemoryCommand(
+                command_type=MemoryCommandType.EXPORT,
+                text="",
+                original_input=text
+            )
+    
+    # === Phase 11: IMPORT command (with path) ===
+    # "import memory from X" / "import memories from X"
+    import_patterns = [
+        # "import memory from X" / "import memories from X"
+        (r'^import\s+(?:my\s+)?memor(?:y|ies)\s+from\s+(.+)$', 1),
+        # "load memory/memories from X"
+        (r'^load\s+(?:my\s+)?memor(?:y|ies)\s+from\s+(.+)$', 1),
+        # "restore memory/memories from X"
+        (r'^restore\s+(?:my\s+)?memor(?:y|ies)\s+from\s+(.+)$', 1),
+    ]
+    for pattern, group_idx in import_patterns:
+        match = re.match(pattern, text_lower)
+        if match:
+            path_start = match.start(group_idx)
+            # Extract path from original text (preserve case) and clean up
+            path = text[path_start:].strip()
+            # Remove trailing punctuation but preserve path extensions like .json
+            path = re.sub(r'[.!?]+$', '', path) if not path.endswith('.json') else path.rstrip('!?')
+            if path:
+                return MemoryCommand(
+                    command_type=MemoryCommandType.IMPORT,
+                    text=path,
+                    original_input=text
+                )
+    
+    # =========================================================================
+    # Deterministic Injection: PIN / UNPIN / ADD_ALIAS
+    # These commands modify the pinned or aliases fields on memory records
+    # =========================================================================
+    
+    # === PIN command: No longer needed ===
+    # Since remember() now sets pinned=True by default, we don't need separate PIN commands.
+    # Users just say "remember X" and it's automatically always injected.
+    # The old "always remember X" patterns are removed to avoid confusion.
+    
+    # === UNPIN command: "you can forget X" / "sometimes forget X" ===
+    # Removes pinned flag from a memory (keeps it but doesn't always inject)
+    unpin_patterns = [
+        # "you can forget that" / "you can forget it"
+        (r'^you\s+can\s+forget\s+(?:that|it|this)\.?$', None, True),
+        # "sometimes forget that"
+        (r'^sometimes\s+forget\s+(?:that|it|this)\.?$', None, True),
+        # "you can forget X"
+        (r'^you\s+can\s+forget\s+(.+?)\.?$', 1, False),
+        # "sometimes forget X"
+        (r'^sometimes\s+forget\s+(.+?)\.?$', 1, False),
+        # "don't always use X" / "do not always use X"
+        (r'^(?:don\'?t|do\s+not)\s+always\s+use\s+(.+?)\.?$', 1, False),
+    ]
+    for pattern, group_idx, use_last_recall in unpin_patterns:
+        match = re.match(pattern, text_lower)
+        if match:
+            if use_last_recall:
+                # "you can forget that" - uses last recall result
+                return MemoryCommand(
+                    command_type=MemoryCommandType.UNPIN,
+                    text="",
+                    original_input=text
+                )
+            else:
+                query_start = match.start(group_idx)
+                query = text[query_start:].strip().rstrip('.!?')
+                if query:
+                    return MemoryCommand(
+                        command_type=MemoryCommandType.UNPIN,
+                        text=query,
+                        original_input=text
+                    )
+    
+    # === ADD_ALIAS command: "add alias X to Y" / "also call Y X" ===
+    # Adds an alias to a memory for better mention matching
+    alias_patterns = [
+        # "add alias X to Y" / "add alias X for Y"
+        (r'^add\s+alias\s+["\']?(.+?)["\']?\s+(?:to|for)\s+(.+?)\.?$', 1, 2),
+        # "alias X as Y" (alias the memory matching X with name Y)
+        (r'^alias\s+(.+?)\s+as\s+["\']?(.+?)["\']?\.?$', 1, 2),
+        # "also call X Y" (call the memory matching X by alias Y)
+        (r'^also\s+call\s+(.+?)\s+["\']?(.+?)["\']?\.?$', 1, 2),
+        # "give X the alias Y"
+        (r'^give\s+(.+?)\s+the\s+alias\s+["\']?(.+?)["\']?\.?$', 1, 2),
+        # "nickname X as Y" / "nickname X Y"
+        (r'^nickname\s+(.+?)\s+(?:as\s+)?["\']?(.+?)["\']?\.?$', 1, 2),
+    ]
+    for pattern, query_group, alias_group in alias_patterns:
+        match = re.match(pattern, text_lower)
+        if match:
+            # Extract query (memory to find) and alias (new name) from original text
+            query = match.group(query_group).strip().strip('"\'')
+            alias = match.group(alias_group).strip().strip('"\'')
+            if query and alias:
+                # Pack both into text as "query||alias"
+                return MemoryCommand(
+                    command_type=MemoryCommandType.ADD_ALIAS,
+                    text=f"{query}||{alias}",
+                    original_input=text
+                )
+    
+    # === Phase 11: LIST_ALL command (about me) ===
+    # "what do you remember about me" - lists ALL memories
+    list_all_patterns = [
+        r'^what\s+do\s+you\s+remember\s+about\s+me\??$',
+        r'^what\s+do\s+you\s+know\s+about\s+me\??$',
+        r'^tell\s+me\s+(?:everything\s+)?(?:you\s+)?(?:know|remember)\s+about\s+me\.?$',
+        r'^list\s+(?:all\s+)?(?:my\s+)?memories?\s+about\s+me\.?$',
+        r'^show\s+me\s+(?:all\s+)?(?:my\s+)?memories?\.?$',
+        r'^what\s+have\s+you\s+learned\s+about\s+me\??$',
+    ]
+    for pattern in list_all_patterns:
+        if re.match(pattern, text_lower):
+            return MemoryCommand(
+                command_type=MemoryCommandType.LIST_ALL,
+                text="",
+                original_input=text
+            )
+    
+    # === Phase 11: DELETE command (forget everything about X) ===
+    # "forget everything about X" / "forget all about X"
+    # IMPORTANT: Must be checked BEFORE generic forget patterns
+    delete_patterns = [
+        # "forget everything about X"
+        (r'^forget\s+everything\s+about\s+(.+?)\.?$', 1),
+        # "forget all about X"
+        (r'^forget\s+all\s+(?:about\s+)?(.+?)\.?$', 1),
+        # "delete everything about X"
+        (r'^delete\s+everything\s+(?:about\s+)?(.+?)\.?$', 1),
+        # "delete all memories about X"
+        (r'^delete\s+all\s+(?:memories?\s+)?(?:about\s+)?(.+?)\.?$', 1),
+        # "remove all memories about X"
+        (r'^remove\s+all\s+(?:memories?\s+)?(?:about\s+)?(.+?)\.?$', 1),
+        # "clear everything about X"
+        (r'^clear\s+everything\s+(?:about\s+)?(.+?)\.?$', 1),
+    ]
+    for pattern, group_idx in delete_patterns:
+        match = re.match(pattern, text_lower)
+        if match:
+            query_start = match.start(group_idx)
+            query = text[query_start:].strip().rstrip('.!?')
+            if query:
+                return MemoryCommand(
+                    command_type=MemoryCommandType.DELETE,
+                    text=query,
+                    original_input=text
+                )
+    
+    # === Phase 11: SEARCH command (what do you remember about X, where X != "me") ===
+    # This overrides the RECALL behavior for Phase 11 - search returns formatted list
+    search_patterns = [
+        # "what do you remember about X" (X != "me", handled above)
+        (r'^what\s+do\s+you\s+remember\s+about\s+(.+?)\??$', 1),
+        # "what do you know about X" (X != "me")
+        (r'^what\s+do\s+you\s+know\s+about\s+(.+?)\??$', 1),
+        # "search memories for X"
+        (r'^search\s+(?:my\s+)?memories?\s+(?:for\s+)?(.+?)\.?$', 1),
+        # "find memories about X"
+        (r'^find\s+(?:my\s+)?memories?\s+(?:about\s+)?(.+?)\.?$', 1),
+    ]
+    for pattern, group_idx in search_patterns:
+        match = re.match(pattern, text_lower)
+        if match:
+            query_start = match.start(group_idx)
+            query = text[query_start:].strip().rstrip('.!?')
+            # Skip if query is "me" (handled by LIST_ALL above)
+            if query and query.lower() != "me":
+                return MemoryCommand(
+                    command_type=MemoryCommandType.SEARCH,
+                    text=query,
+                    original_input=text
+                )
     
     # === List memories ===
     list_patterns = [
@@ -594,6 +791,261 @@ def handle_memory_command(user_text: str) -> Optional[Tuple[str, dict]]:
             return (
                 "I wasn't using your memories.",
                 {"memory_action": "disable_memories", "ok": True, "enabled": False, "already_set": True}
+            )
+    
+    # =========================================================================
+    # Phase 11: Structured Memory Commands
+    # =========================================================================
+    
+    elif cmd.command_type == MemoryCommandType.LIST_ALL:
+        # Phase 11: "What do you remember about me?" - list all memories grouped by type
+        grouped = memory_mgr.get_memories_grouped_by_type()
+        total = sum(len(mems) for mems in grouped.values())
+        
+        if total == 0:
+            return (
+                "I don't have any memories about you yet. You can say 'remember' followed by something you want me to remember.",
+                {"memory_action": "list_all", "count": 0}
+            )
+        
+        # Build a human-readable response grouped by type
+        lines = []
+        type_labels = {
+            "fact": "Facts",
+            "preference": "Preferences",
+            "skill": "Skills",
+            "history_marker": "History"
+        }
+        
+        # Collect all for full listing
+        all_memories = []
+        for mem_type in ["fact", "preference", "skill", "history_marker"]:
+            mems = grouped.get(mem_type, [])
+            if mems:
+                label = type_labels.get(mem_type, mem_type.capitalize())
+                lines.append(f"{label}:")
+                for mem in mems[:10]:  # Limit per category for speech
+                    value = mem.get("value") or mem.get("text") or ""
+                    # Transform to second person for clarity
+                    transformed = _transform_first_to_second_person(value)
+                    display = transformed if transformed else value
+                    lines.append(f"  • {display}")
+                    all_memories.append(mem)
+                if len(mems) > 10:
+                    lines.append(f"  ... and {len(mems) - 10} more")
+        
+        # Build speech response (abbreviated for TTS)
+        if total == 1:
+            mem = all_memories[0]
+            value = mem.get("value") or mem.get("text") or ""
+            transformed = _transform_first_to_second_person(value)
+            speech = f"Here's what I remember about you: {transformed if transformed else value}"
+        elif total <= 5:
+            items = []
+            for mem in all_memories[:5]:
+                value = mem.get("value") or mem.get("text") or ""
+                transformed = _transform_first_to_second_person(value)
+                items.append(transformed if transformed else value)
+            speech = "Here's what I remember about you: " + "; ".join(items)
+        else:
+            # Summarize for speech
+            speech = f"I have {total} memories about you. " + "; ".join(lines[:3])
+            if total > 5:
+                speech += f". And {total - 5} more."
+        
+        # Add helpful hint
+        speech += " You can say 'forget everything about X' or 'export my memory'."
+        
+        return (
+            speech,
+            {
+                "memory_action": "list_all",
+                "count": total,
+                "grouped": grouped,
+                "formatted": "\n".join(lines)
+            }
+        )
+    
+    elif cmd.command_type == MemoryCommandType.SEARCH:
+        # Phase 11: "What do you remember about X?" - search/filter memories
+        query = cmd.text
+        matches = memory_mgr.search(query)
+        
+        if not matches:
+            return (
+                f"I don't have any memories about '{query}'.",
+                {"memory_action": "search", "query": query, "count": 0, "matches": []}
+            )
+        elif len(matches) == 1:
+            value = matches[0].get("value") or matches[0].get("text") or ""
+            transformed = _transform_first_to_second_person(value)
+            response = f"Here's what I know about {query}: {transformed if transformed else value}"
+            return (
+                response,
+                {"memory_action": "search", "query": query, "count": 1, "matches": matches}
+            )
+        else:
+            # Multiple matches
+            items = []
+            for mem in matches[:5]:
+                value = mem.get("value") or mem.get("text") or ""
+                transformed = _transform_first_to_second_person(value)
+                items.append(transformed if transformed else value)
+            
+            response = f"Here's what I know about {query}: " + "; ".join(items)
+            if len(matches) > 5:
+                response += f". And {len(matches) - 5} more."
+            
+            return (
+                response,
+                {"memory_action": "search", "query": query, "count": len(matches), "matches": matches}
+            )
+    
+    elif cmd.command_type == MemoryCommandType.DELETE:
+        # Phase 11: "Forget everything about X" - delete matching memories
+        query = cmd.text
+        deleted_count = memory_mgr.delete_by_query(query)
+        
+        if deleted_count == 0:
+            return (
+                f"I don't have any memories about '{query}'.",
+                {"memory_action": "delete", "query": query, "deleted_count": 0}
+            )
+        elif deleted_count == 1:
+            return (
+                f"Okay — I forgot everything about {query}.",
+                {"memory_action": "delete", "query": query, "deleted_count": 1}
+            )
+        else:
+            return (
+                f"Okay — I forgot {deleted_count} memories about {query}.",
+                {"memory_action": "delete", "query": query, "deleted_count": deleted_count}
+            )
+    
+    elif cmd.command_type == MemoryCommandType.EXPORT:
+        # Phase 11: "Export my memory" - write to JSON file
+        try:
+            export_path = memory_mgr.export_to()
+            return (
+                f"Done! I exported your memories to {export_path}",
+                {"memory_action": "export", "ok": True, "path": export_path}
+            )
+        except Exception as e:
+            return (
+                f"Sorry, I couldn't export your memories: {str(e)}",
+                {"memory_action": "export", "ok": False, "error": str(e)}
+            )
+    
+    elif cmd.command_type == MemoryCommandType.IMPORT:
+        # Phase 11: "Import memory from X" - import from JSON file
+        path = cmd.text
+        try:
+            imported_count = memory_mgr.import_from(path)
+            if imported_count == 0:
+                return (
+                    "The file was read, but all memories were already saved.",
+                    {"memory_action": "import", "ok": True, "imported_count": 0, "path": path}
+                )
+            elif imported_count == 1:
+                return (
+                    "Done! I imported 1 new memory.",
+                    {"memory_action": "import", "ok": True, "imported_count": 1, "path": path}
+                )
+            else:
+                return (
+                    f"Done! I imported {imported_count} new memories.",
+                    {"memory_action": "import", "ok": True, "imported_count": imported_count, "path": path}
+                )
+        except FileNotFoundError:
+            return (
+                f"I couldn't find the file: {path}",
+                {"memory_action": "import", "ok": False, "error": "file_not_found", "path": path}
+            )
+        except ValueError as e:
+            return (
+                f"The file format is invalid: {str(e)}",
+                {"memory_action": "import", "ok": False, "error": str(e), "path": path}
+            )
+        except Exception as e:
+            return (
+                f"Sorry, I couldn't import your memories: {str(e)}",
+                {"memory_action": "import", "ok": False, "error": str(e), "path": path}
+            )
+    
+    # =========================================================================
+    # Deterministic Injection: PIN / UNPIN / ADD_ALIAS handlers
+    # =========================================================================
+    
+    elif cmd.command_type == MemoryCommandType.PIN:
+        # PIN is no longer needed - all remembered memories are auto-pinned
+        # This handler exists for backwards compatibility but shouldn't be triggered
+        # since we removed the PIN detection patterns
+        query = cmd.text or ""
+        if query:
+            # If somehow triggered, just do a remember which auto-pins
+            result = memory_mgr.remember(query)
+            if result.get("ok"):
+                return (
+                    f"I'll remember that.",
+                    {"memory_action": "remember", "ok": True, "pinned": True, "entry": result.get("entry")}
+                )
+        return (
+            "All memories are now automatically remembered. Just say 'remember X'.",
+            {"memory_action": "pin", "ok": False, "error": "deprecated"}
+        )
+    
+    elif cmd.command_type == MemoryCommandType.UNPIN:
+        # Unpin a memory (remove from always-injected)
+        query = cmd.text
+        
+        if not query:
+            # "unpin that" - use last recall result
+            last_recall = memory_mgr.get_last_recall_result()
+            if not last_recall:
+                return (
+                    "I don't have a memory to unpin. Try 'do you remember...' first.",
+                    {"memory_action": "unpin", "ok": False, "error": "no_recent_recall"}
+                )
+            query = last_recall
+        
+        # Try to unpin a matching memory
+        result = memory_mgr.set_pinned_by_query(query, pinned=False)
+        if result.get("ok"):
+            value = result.get("value", query)
+            transformed = _transform_first_to_second_person(value)
+            display = transformed if transformed else value
+            return (
+                f"Okay — I won't always include that: {display}",
+                {"memory_action": "unpin", "ok": True, "pinned": False, "query": query, "entry": result.get("entry")}
+            )
+        else:
+            return (
+                f"I don't have any memories about '{query}' to unpin.",
+                {"memory_action": "unpin", "ok": False, "error": "not_found", "query": query}
+            )
+    
+    elif cmd.command_type == MemoryCommandType.ADD_ALIAS:
+        # Add an alias to a memory
+        # text format: "query||alias"
+        parts = cmd.text.split("||", 1)
+        if len(parts) != 2:
+            return (
+                "I couldn't understand which memory to alias. Try 'add alias X to Y'.",
+                {"memory_action": "add_alias", "ok": False, "error": "invalid_format"}
+            )
+        
+        query, alias = parts[0].strip(), parts[1].strip()
+        
+        result = memory_mgr.add_alias_by_query(query, alias)
+        if result.get("ok"):
+            return (
+                f"Okay — I added '{alias}' as an alias.",
+                {"memory_action": "add_alias", "ok": True, "query": query, "alias": alias, "entry": result.get("entry")}
+            )
+        else:
+            return (
+                f"I don't have any memories about '{query}' to add an alias to.",
+                {"memory_action": "add_alias", "ok": False, "error": "not_found", "query": query}
             )
     
     return None

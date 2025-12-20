@@ -142,6 +142,44 @@ def get_all_memories_block() -> str:
     return ""
 
 
+def get_smart_memories_block(user_text: str) -> str:
+    """
+    Get smartly-selected memories for LLM prompt injection.
+    
+    Uses deterministic 3-bucket selection:
+    1. PINNED memories (always injected when pinned=True)
+    2. MENTION-TRIGGERED memories (injected when user mentions key/alias)
+    3. Top-K fallback (remaining slots filled by relevance score)
+    
+    This is the DEFAULT behavior - no "use memories" flag required.
+    
+    Defaults (from memory_manager.select_for_injection):
+    - PINNED_MAX = 4 (max pinned memories)
+    - MENTION_MAX = 4 (max mention-triggered memories)
+    - K_TOTAL = 6 (total memories to inject)
+    - MAX_CHARS = 1200 (char limit for block)
+    
+    Args:
+        user_text: User's current input (for mention detection)
+        
+    Returns:
+        Formatted memory block, or empty string if no memories selected
+    """
+    try:
+        from wyzer.memory.memory_manager import get_memory_manager
+        from wyzer.core.logger import get_logger
+        mem_mgr = get_memory_manager()
+        memory_block = mem_mgr.select_for_injection(user_text)
+        if memory_block:
+            # Count lines (memories) injected
+            lines = [l for l in memory_block.split('\n') if l.startswith('- (')]
+            get_logger().info(f"[MEMORY] Sending {len(lines)} memories to LLM")
+            return f"\n{memory_block}\n"
+    except Exception:
+        pass
+    return ""
+
+
 def format_prompt(user_input: str, include_session_context: bool = True) -> str:
     """
     Format user input with system prompt.
@@ -215,13 +253,20 @@ def build_prompt_messages(
         if redaction_block:
             builder.system(redaction_block)
     
-    # 5. All memories block (when use_memories flag is enabled)
+    # 5. Smart memories block (deterministic: pinned + mention-triggered)
+    # This is ALWAYS checked - uses user_input for mention detection
+    smart_memories_block = get_smart_memories_block(user_input)
+    if smart_memories_block:
+        builder.system(smart_memories_block)
+    
+    # 6. All memories block (when "use memories" flag is explicitly enabled)
+    # This adds ALL remaining memories on top of the smart selection
     if include_all_memories:
         all_memories_block = get_all_memories_block()
         if all_memories_block:
             builder.system(all_memories_block)
     
-    # 6. User message (the actual user input)
+    # 7. User message (the actual user input)
     builder.user(user_input)
     
     return builder.build()

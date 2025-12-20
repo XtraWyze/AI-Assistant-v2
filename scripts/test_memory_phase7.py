@@ -930,12 +930,12 @@ def test_recall_command_detection():
     assert "wifi password" in cmd2.text, f"Query should contain 'wifi password', got '{cmd2.text}'"
     print("✓ 'do you remember my X?' with question mark detected")
     
-    # "what do you remember about X" patterns
+    # "what do you remember about X" patterns - routes to SEARCH (Phase 11)
     cmd3 = detect_memory_command("what do you remember about my birthday")
     assert cmd3 is not None
-    assert cmd3.command_type == MemoryCommandType.RECALL
+    assert cmd3.command_type == MemoryCommandType.SEARCH, f"Should be SEARCH, got {cmd3.command_type}"
     assert "birthday" in cmd3.text
-    print("✓ 'what do you remember about X' detected")
+    print("✓ 'what do you remember about X' detected as SEARCH")
     
     # "do you know X" patterns
     cmd4 = detect_memory_command("do you know my name")
