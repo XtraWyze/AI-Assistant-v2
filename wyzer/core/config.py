@@ -90,9 +90,8 @@ class Config:
     OLLAMA_STREAM: bool = os.environ.get("WYZER_OLLAMA_STREAM", "true").lower() in ("true", "1", "yes")
     # Stream-to-TTS: progressively feed LLM tokens into TTS for faster perceived response
     # This is separate from OLLAMA_STREAM; when enabled, chunks are spoken as they arrive.
-    # Default ON for instant-sounding responses. Set WYZER_DISABLE_STREAM_TTS=1 to disable.
-    DISABLE_STREAM_TTS: bool = os.environ.get("WYZER_DISABLE_STREAM_TTS", "false").lower() in ("true", "1", "yes")
-    OLLAMA_STREAM_TTS: bool = not DISABLE_STREAM_TTS
+    # Default OFF. Set WYZER_STREAM_TTS=1 to enable.
+    OLLAMA_STREAM_TTS: bool = os.environ.get("WYZER_STREAM_TTS", "false").lower() in ("true", "1", "yes")
     # Minimum buffer size before emitting a TTS segment (if no sentence boundary found)
     STREAM_TTS_BUFFER_CHARS: int = int(os.environ.get("WYZER_STREAM_TTS_BUFFER_CHARS", "150"))
     OLLAMA_TEMPERATURE: float = float(os.environ.get("WYZER_OLLAMA_TEMPERATURE", "0.4"))

@@ -292,9 +292,9 @@ _SEARCH_GOOGLE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Anchored audio device switching: "switch/set/change/swap audio [output] [device] to <device>"
+# Anchored audio device switching: "switch/set/change/swap audio [out/output] [device] to <device>"
 _AUDIO_DEVICE_SWITCH_RE = re.compile(
-    r"^(?:(?:switch|set|change|swap)\s+(?:audio(?:\s+output)?|sound|output)(?:\s+device)?\s+to)\s+(.+)$",
+    r"^(?:(?:switch|set|change|swap)\s+(?:audio(?:\s+out(?:put)?)?|sound|out(?:put)?)(?:\s+device)?\s+to)\s+(.+)$",
     re.IGNORECASE,
 )
 
