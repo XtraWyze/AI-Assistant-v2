@@ -251,19 +251,24 @@ _TIME_RE = re.compile(
 )
 
 # Weather patterns: match queries about weather, temperature, forecast
+# Also includes implicit weather queries about clothing/outdoor activities
 _WEATHER_RE = re.compile(
-    r"\b(?:"
-    r"weather|"
-    r"temperature|"
-    r"temp|"
-    r"forecast|"
-    r"how\s+(?:cold|hot|warm)|"
-    r"what.{0,10}(?:weather|temperature|temp|forecast)|"
-    r"(?:weather|temperature|forecast)\s+(?:in|for|at)|"
-    r"is\s+it\s+(?:cold|hot|warm|raining|snowing)|"
-    r"will\s+it\s+(?:rain|snow)|"
-    r"what.{0,10}like\s+outside"
-    r")\b",
+    r"(?:"
+    # Explicit weather keywords
+    r"\b(?:weather|temperature|temp|forecast)\b|"
+    r"\bhow\s+(?:cold|hot|warm)\b|"
+    r"\bwhat.{0,10}(?:weather|temperature|temp|forecast)\b|"
+    r"\b(?:weather|temperature|forecast)\s+(?:in|for|at)\b|"
+    r"\bis\s+it\s+(?:cold|hot|warm|raining|snowing)\b|"
+    r"\bwill\s+it\s+(?:rain|snow)\b|"
+    r"\bwhat.{0,10}like\s+outside\b|"
+    # Implicit weather - clothing/outdoor prep questions
+    r"\b(?:need|bring|wear|grab|take)\s+(?:a\s+|an\s+|my\s+)?(?:jacket|coat|umbrella|sweater|hoodie|raincoat|sunglasses|sunscreen|hat|scarf|gloves|boots)\b|"
+    r"\bshould\s+i\s+(?:bring|wear|take|grab)\s+(?:a\s+|an\s+|my\s+)?(?:jacket|coat|umbrella|sweater|hoodie|raincoat|sunglasses|sunscreen|hat|scarf|gloves|boots)\b|"
+    r"\b(?:do\s+i\s+need|will\s+i\s+need)\s+(?:a\s+|an\s+|my\s+)?(?:jacket|coat|umbrella|sweater|hoodie|raincoat|sunglasses|sunscreen|hat|scarf|gloves)\b|"
+    r"\bdress\s+(?:warm|warmly|cool|light|lightly)\b|"
+    r"\b(?:you\s+think|think)\s+i\s+(?:need|should)\b.{0,30}\b(?:jacket|coat|umbrella|sweater|warm|cold)\b"
+    r")",
     re.IGNORECASE,
 )
 

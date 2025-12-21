@@ -157,6 +157,12 @@ Response: {{"reply": "Once upon a time, a curious robot discovered it could drea
 
 User: "Resume playing"
 Response: {{"intents": [{{"tool": "media_play_pause", "args": {{}}}}], "reply": "Resuming playback"}}
+
+User: "Do I need a jacket tomorrow?"
+Response: {{"intents": [{{"tool": "get_weather_forecast", "args": {{"days": 2}}}}], "reply": ""}}
+
+User: "Should I bring an umbrella?"
+Response: {{"intents": [{{"tool": "get_weather_forecast", "args": {{}}}}], "reply": ""}}
 """
 
 # ============================================================================
