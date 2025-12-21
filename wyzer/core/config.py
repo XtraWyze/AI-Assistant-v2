@@ -82,11 +82,25 @@ class Config:
     MIN_TRANSCRIPT_LENGTH: int = int(os.environ.get("WYZER_MIN_TRANSCRIPT_LENGTH", "2"))
     
     # LLM Brain settings (Phase 4 - enhanced Phase 7)
-    LLM_MODE: str = os.environ.get("WYZER_LLM_MODE", "ollama")  # "ollama" or "off"
+    # LLM_MODE: "llamacpp" (default), "ollama", or "off"
+    LLM_MODE: str = os.environ.get("WYZER_LLM_MODE", "llamacpp")
     NO_OLLAMA: bool = os.environ.get("WYZER_NO_OLLAMA", "false").lower() in ("true", "1", "yes")  # Run without Ollama entirely
     OLLAMA_BASE_URL: str = os.environ.get("WYZER_OLLAMA_URL", "http://127.0.0.1:11434")
     OLLAMA_MODEL: str = os.environ.get("WYZER_OLLAMA_MODEL", "llama3.1:latest")
     LLM_TIMEOUT: int = int(os.environ.get("WYZER_LLM_TIMEOUT", "30"))
+    
+    # Llama.cpp server settings (used when LLM_MODE = "llamacpp")
+    LLAMACPP_BIN_PATH: str = os.environ.get("WYZER_LLAMACPP_BIN", "./wyzer/llm_bin/llama-server.exe")
+    LLAMACPP_MODEL_PATH: str = os.environ.get("WYZER_LLAMACPP_MODEL", "./wyzer/llm_models/model.gguf")
+    LLAMACPP_PORT: int = int(os.environ.get("WYZER_LLAMACPP_PORT", "8081"))
+    LLAMACPP_CTX_SIZE: int = int(os.environ.get("WYZER_LLAMACPP_CTX", "2048"))
+    LLAMACPP_THREADS: int = int(os.environ.get("WYZER_LLAMACPP_THREADS", "0"))  # 0 = auto (recommended)
+    LLAMACPP_BASE_URL: str = ""  # Set dynamically when server starts
+    # Auto-optimization: detect GPU, set optimal threads, enable flash attention, etc.
+    LLAMACPP_AUTO_OPTIMIZE: bool = os.environ.get("WYZER_LLAMACPP_AUTO_OPTIMIZE", "true").lower() in ("true", "1", "yes")
+    LLAMACPP_GPU_LAYERS: int = int(os.environ.get("WYZER_LLAMACPP_GPU_LAYERS", "-1"))  # -1 = auto (all layers)
+    # Safe performance knobs when auto-optimize is OFF
+    LLAMACPP_BATCH_SIZE: int = int(os.environ.get("WYZER_LLAMACPP_BATCH_SIZE", "512"))
     OLLAMA_STREAM: bool = os.environ.get("WYZER_OLLAMA_STREAM", "true").lower() in ("true", "1", "yes")
     # Stream-to-TTS: progressively feed LLM tokens into TTS for faster perceived response
     # This is separate from OLLAMA_STREAM; when enabled, chunks are spoken as they arrive.
@@ -94,11 +108,22 @@ class Config:
     OLLAMA_STREAM_TTS: bool = os.environ.get("WYZER_STREAM_TTS", "false").lower() in ("true", "1", "yes")
     # Minimum buffer size before emitting a TTS segment (if no sentence boundary found)
     STREAM_TTS_BUFFER_CHARS: int = int(os.environ.get("WYZER_STREAM_TTS_BUFFER_CHARS", "150"))
+    # First-emit optimization: emit first TTS segment sooner for lower perceived latency
+    STREAM_TTS_FIRST_EMIT_CHARS: int = int(os.environ.get("WYZER_STREAM_TTS_FIRST_EMIT_CHARS", "32"))
     OLLAMA_TEMPERATURE: float = float(os.environ.get("WYZER_OLLAMA_TEMPERATURE", "0.4"))
     OLLAMA_TOP_P: float = float(os.environ.get("WYZER_OLLAMA_TOP_P", "0.9"))
     OLLAMA_NUM_CTX: int = int(os.environ.get("WYZER_OLLAMA_NUM_CTX", "4096"))
     OLLAMA_NUM_PREDICT: int = int(os.environ.get("WYZER_OLLAMA_NUM_PREDICT", "120"))
     LLM_MAX_PROMPT_CHARS: int = int(os.environ.get("WYZER_LLM_MAX_PROMPT_CHARS", "8000"))
+    
+    # Voice-fast preset: concise, snappy responses for llamacpp mode
+    # Default ON for llamacpp, OFF for ollama. Override with WYZER_VOICE_FAST=0/1
+    VOICE_FAST_ENABLED: bool = os.environ.get("WYZER_VOICE_FAST", "auto").lower() in ("true", "1", "yes", "auto")
+    VOICE_FAST_MAX_TOKENS: int = int(os.environ.get("WYZER_VOICE_FAST_MAX_TOKENS", "64"))
+    VOICE_FAST_TEMPERATURE: float = float(os.environ.get("WYZER_VOICE_FAST_TEMPERATURE", "0.2"))
+    VOICE_FAST_TOP_P: float = float(os.environ.get("WYZER_VOICE_FAST_TOP_P", "0.9"))
+    # Story/creative mode uses higher max_tokens when detected
+    VOICE_FAST_STORY_MAX_TOKENS: int = int(os.environ.get("WYZER_VOICE_FAST_STORY_MAX_TOKENS", "320"))
     
     # TTS settings (Phase 5)
     TTS_ENABLED: bool = os.environ.get("WYZER_TTS_ENABLED", "true").lower() in ("true", "1", "yes")

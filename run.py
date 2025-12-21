@@ -144,7 +144,7 @@ Examples:
         help="Device for Whisper inference (default: cpu)"
     )
     
-    # LLM Brain arguments (Phase 4)
+    # LLM Brain arguments (Phase 4, extended Phase 8 for llamacpp)
     parser.add_argument(
         "--no-ollama",
         action="store_true",
@@ -155,8 +155,8 @@ Examples:
         "--llm",
         type=str,
         default="ollama",
-        choices=["ollama", "off"],
-        help="LLM mode: ollama or off (default: ollama)"
+        choices=["ollama", "llamacpp", "off"],
+        help="LLM mode: ollama, llamacpp, or off (default: ollama)"
     )
     
     parser.add_argument(
@@ -178,6 +178,57 @@ Examples:
         type=int,
         default=30,
         help="LLM request timeout in seconds (default: 30)"
+    )
+    
+    # Llama.cpp embedded server arguments (Phase 8)
+    parser.add_argument(
+        "--llamacpp-bin",
+        type=str,
+        default="./wyzer/llm_bin/llama-server.exe",
+        help="Path to llama-server executable (default: ./wyzer/llm_bin/llama-server.exe)"
+    )
+    
+    parser.add_argument(
+        "--llamacpp-model",
+        type=str,
+        default="./wyzer/llm_models/model.gguf",
+        help="Path to GGUF model file (default: ./wyzer/llm_models/model.gguf)"
+    )
+    
+    parser.add_argument(
+        "--llamacpp-port",
+        type=int,
+        default=8081,
+        help="Port for llama.cpp server (default: 8081)"
+    )
+    
+    parser.add_argument(
+        "--llamacpp-ctx",
+        type=int,
+        default=2048,
+        help="Context window size for llama.cpp (default: 2048)"
+    )
+    
+    parser.add_argument(
+        "--llamacpp-threads",
+        type=int,
+        default=0,
+        help="Number of threads for llama.cpp (default: 0=auto, recommended)"
+    )
+    
+    parser.add_argument(
+        "--llamacpp-auto-optimize",
+        type=str,
+        default="on",
+        choices=["on", "off"],
+        help="Auto-optimize llama.cpp (GPU detection, flash attention, optimal threads) (default: on)"
+    )
+    
+    parser.add_argument(
+        "--llamacpp-gpu-layers",
+        type=int,
+        default=-1,
+        help="Number of layers to offload to GPU (-1=auto/all, 0=CPU only) (default: -1)"
     )
     
     # TTS arguments (Phase 5)
@@ -225,6 +276,12 @@ Examples:
     )
     
     parser.add_argument(
+        "--stream-tts",
+        action="store_true",
+        help="Enable streaming TTS (speak chunks as LLM generates them, default: off)"
+    )
+    
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="Enable quiet mode (hide debug info like heartbeats for cleaner output)"
@@ -266,6 +323,12 @@ def main():
         os.environ["WYZER_QUIET_MODE"] = "true"
         Config.QUIET_MODE = True
         logger.info("Running in quiet mode (debug info hidden)")
+    
+    # Handle --stream-tts flag
+    if args.stream_tts:
+        os.environ["WYZER_STREAM_TTS"] = "true"
+        Config.OLLAMA_STREAM_TTS = True
+        logger.info("Stream TTS enabled (speaking chunks as they arrive)")
     
     # Handle memory injection flags
     # Default: True (on). Override to False via --no-memories or WYZER_USE_MEMORIES=0
@@ -318,7 +381,7 @@ def main():
     
     # Print startup banner
     print("\n" + "=" * 60)
-    print("  Wyzer AI Assistant - Phase 7")
+    print("  Wyzer AI Assistant - Phase 8")
     print("=" * 60)
     print(f"  Whisper Model: {args.model}")
     print(f"  Whisper Device: {args.whisper_device}")
@@ -337,10 +400,19 @@ def main():
             print(f"  LLM Model: {args.ollama_model}")
             print(f"  LLM URL: {args.ollama_url}")
             print(f"  LLM Streaming: {Config.OLLAMA_STREAM}")
+        elif args.llm == "llamacpp":
+            print(f"  LLM Binary: {args.llamacpp_bin}")
+            print(f"  LLM Model: {args.llamacpp_model}")
+            print(f"  LLM Port: {args.llamacpp_port}")
+            print(f"  LLM Context: {args.llamacpp_ctx}")
+            print(f"  LLM Threads: {args.llamacpp_threads}" + (" (auto)" if args.llamacpp_threads == 0 else ""))
+            print(f"  LLM Auto-Optimize: {args.llamacpp_auto_optimize}")
+            print(f"  LLM GPU Layers: {args.llamacpp_gpu_layers}" + (" (auto/all)" if args.llamacpp_gpu_layers == -1 else ""))
     print(f"  TTS Enabled: {args.tts == 'on'}")
     if args.tts == "on":
         print(f"  TTS Engine: {args.tts_engine}")
         print(f"  Piper Model: {args.piper_model}")
+        print(f"  Stream TTS: {Config.OLLAMA_STREAM_TTS}")
         print(f"  Barge-in Enabled: {not args.no_speak_interrupt}")
     print(f"  Sample Rate: {Config.SAMPLE_RATE}Hz")
     print(f"  Log Level: {args.log_level}")
@@ -384,6 +456,15 @@ def main():
                 ollama_model=args.ollama_model,
                 ollama_url=args.ollama_url,
                 llm_timeout=args.llm_timeout,
+                # Llama.cpp settings (Phase 8)
+                llamacpp_bin=args.llamacpp_bin,
+                llamacpp_model=args.llamacpp_model,
+                llamacpp_port=args.llamacpp_port,
+                llamacpp_ctx=args.llamacpp_ctx,
+                llamacpp_threads=args.llamacpp_threads,
+                llamacpp_auto_optimize=(args.llamacpp_auto_optimize == "on"),
+                llamacpp_gpu_layers=args.llamacpp_gpu_layers,
+                # TTS settings
                 tts_enabled=(args.tts == "on"),
                 tts_engine=args.tts_engine,
                 piper_exe_path=args.piper_exe,

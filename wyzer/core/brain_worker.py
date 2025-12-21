@@ -42,6 +42,24 @@ def _apply_config(config_dict: Dict[str, Any]) -> None:
         Config.OLLAMA_MODEL = str(config_dict["ollama_model"])
     if "llm_timeout" in config_dict:
         Config.LLM_TIMEOUT = int(config_dict["llm_timeout"])
+    
+    # Llama.cpp settings (Phase 8)
+    if "llamacpp_bin" in config_dict:
+        Config.LLAMACPP_BIN_PATH = str(config_dict["llamacpp_bin"])
+    if "llamacpp_model" in config_dict:
+        Config.LLAMACPP_MODEL_PATH = str(config_dict["llamacpp_model"])
+    if "llamacpp_port" in config_dict:
+        Config.LLAMACPP_PORT = int(config_dict["llamacpp_port"])
+    if "llamacpp_ctx" in config_dict:
+        Config.LLAMACPP_CTX_SIZE = int(config_dict["llamacpp_ctx"])
+    if "llamacpp_threads" in config_dict:
+        Config.LLAMACPP_THREADS = int(config_dict["llamacpp_threads"])
+    if "llamacpp_auto_optimize" in config_dict:
+        Config.LLAMACPP_AUTO_OPTIMIZE = bool(config_dict["llamacpp_auto_optimize"])
+    if "llamacpp_gpu_layers" in config_dict:
+        Config.LLAMACPP_GPU_LAYERS = int(config_dict["llamacpp_gpu_layers"])
+    if "llm_mode" in config_dict:
+        Config.LLM_MODE = str(config_dict["llm_mode"])
 
     # Whisper defaults
     if "whisper_model" in config_dict:
@@ -225,8 +243,42 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
     )
 
     llm_mode = str(config_dict.get("llm_mode", Config.LLM_MODE))
-    if llm_mode != "ollama":
-        logger.info("LLM disabled in brain worker")
+    llamacpp_base_url: Optional[str] = None  # Tracks llamacpp server URL if started
+    
+    # Handle LLM mode initialization
+    if llm_mode == "llamacpp":
+        # Start embedded llama.cpp server (Phase 8)
+        logger.info("[LLAMACPP] Initializing embedded llama.cpp server...")
+        try:
+            from wyzer.brain.llama_server_manager import ensure_server_running, stop_server
+            
+            llamacpp_base_url = ensure_server_running(
+                binary_path=str(config_dict.get("llamacpp_bin", Config.LLAMACPP_BIN_PATH)),
+                model_path=str(config_dict.get("llamacpp_model", Config.LLAMACPP_MODEL_PATH)),
+                port=int(config_dict.get("llamacpp_port", Config.LLAMACPP_PORT)),
+                ctx_size=int(config_dict.get("llamacpp_ctx", Config.LLAMACPP_CTX_SIZE)),
+                n_threads=int(config_dict.get("llamacpp_threads", Config.LLAMACPP_THREADS)),
+                auto_optimize=bool(config_dict.get("llamacpp_auto_optimize", Config.LLAMACPP_AUTO_OPTIMIZE)),
+                gpu_layers=int(config_dict.get("llamacpp_gpu_layers", Config.LLAMACPP_GPU_LAYERS)),
+            )
+            
+            if llamacpp_base_url:
+                logger.info(f"[LLAMACPP] Server ready at {llamacpp_base_url}")
+                # Update config so orchestrator uses the right URL
+                Config.LLAMACPP_BASE_URL = llamacpp_base_url
+            else:
+                logger.warning("[LLAMACPP] Failed to start server - continuing in tools-only mode")
+                llm_mode = "off"  # Fallback to no-LLM mode
+                Config.LLM_MODE = "off"
+        except Exception as e:
+            logger.error(f"[LLAMACPP] Error starting server: {e}")
+            logger.warning("[LLAMACPP] Continuing in tools-only mode")
+            llm_mode = "off"
+            Config.LLM_MODE = "off"
+    elif llm_mode == "ollama":
+        logger.info(f"[LLM] Using Ollama at {Config.OLLAMA_BASE_URL}")
+    else:
+        logger.info("[LLM] LLM disabled in brain worker")
 
     tts_enabled = bool(config_dict.get("tts_enabled", True))
     tts_router: Optional[TTSRouter] = None
@@ -301,6 +353,16 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             except Exception:
                 pass
             orchestrator.shutdown_tool_pool()
+            
+            # Stop llamacpp server if we started it (Phase 8)
+            if llamacpp_base_url:
+                try:
+                    from wyzer.brain.llama_server_manager import stop_server
+                    logger.info("[LLAMACPP] Stopping embedded server...")
+                    stop_server(force=True)  # Force stop any llama-server on Wyzer shutdown
+                except Exception as e:
+                    logger.warning(f"[LLAMACPP] Error stopping server: {e}")
+            
             return
 
         if mtype == "INTERRUPT":

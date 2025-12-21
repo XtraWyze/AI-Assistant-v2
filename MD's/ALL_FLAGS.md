@@ -50,6 +50,7 @@ Complete reference for all command-line arguments and environment variable confi
 | `--piper-model` | string | `./wyzer/assets/piper/en_US-lessac-medium.onnx` | Path to Piper voice model |
 | `--tts-device` | string | `None` | Audio output device index for TTS |
 | `--no-speak-interrupt` | flag | `false` | Disable barge-in (hotword interrupt during speaking) |
+| `--stream-tts` | flag | `false` | Enable streaming TTS (speak chunks as LLM generates them) |
 
 ### Memory Injection
 
@@ -130,6 +131,7 @@ All environment variables are prefixed with `WYZER_`.
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `WYZER_TTS_ENABLED` | bool | `true` | Enable TTS |
+| `WYZER_STREAM_TTS` | bool | `false` | Enable streaming TTS (speak chunks as LLM generates them) |
 | `WYZER_TTS_ENGINE` | string | `piper` | TTS engine to use |
 | `WYZER_PIPER_EXE_PATH` | string | `./assets/piper/piper.exe` | Path to Piper executable |
 | `WYZER_PIPER_MODEL_PATH` | string | `./assets/piper/en_US-voice.onnx` | Path to Piper voice model |

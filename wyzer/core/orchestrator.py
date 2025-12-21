@@ -1,7 +1,8 @@
 """
-Orchestrator for Wyzer AI Assistant - Phase 7
+Orchestrator for Wyzer AI Assistant - Phase 7/8
 Coordinates LLM reasoning and tool execution.
 Supports multi-intent commands (Phase 6 enhancement).
+Phase 8: Added llamacpp mode support.
 """
 import json
 import time
@@ -13,7 +14,7 @@ import shlex
 import uuid
 import random
 from urllib.parse import urlparse
-from typing import Dict, Any, Optional, List, Tuple, Callable
+from typing import Dict, Any, Optional, List, Tuple, Callable, Union
 from wyzer.core.config import Config
 from wyzer.core.logger import get_logger
 from wyzer.core import hybrid_router
@@ -44,6 +45,47 @@ _NO_OLLAMA_FALLBACK_REPLIES = [
 def _get_no_ollama_reply() -> str:
     """Get a random short reply for unsupported commands in no-ollama mode."""
     return random.choice(_NO_OLLAMA_FALLBACK_REPLIES)
+
+
+def _get_llm_client() -> Optional[Union["OllamaClient", "LlamaCppClient"]]:
+    """
+    Get the appropriate LLM client based on current Config.LLM_MODE.
+    
+    Returns:
+        OllamaClient for ollama mode
+        LlamaCppClient for llamacpp mode
+        None if LLM is disabled
+    """
+    from wyzer.brain.ollama_client import OllamaClient
+    from wyzer.brain.llamacpp_client import LlamaCppClient
+    
+    llm_mode = getattr(Config, "LLM_MODE", "ollama")
+    
+    if getattr(Config, "NO_OLLAMA", False) or llm_mode == "off":
+        return None
+    
+    if llm_mode == "llamacpp":
+        base_url = getattr(Config, "LLAMACPP_BASE_URL", "") or f"http://127.0.0.1:{Config.LLAMACPP_PORT}"
+        return LlamaCppClient(base_url=base_url, timeout=Config.LLM_TIMEOUT)
+    else:
+        # Default: Ollama
+        return OllamaClient(base_url=Config.OLLAMA_BASE_URL, timeout=Config.LLM_TIMEOUT)
+
+
+def _get_llm_base_url() -> str:
+    """Get the current LLM base URL based on mode."""
+    llm_mode = getattr(Config, "LLM_MODE", "ollama")
+    if llm_mode == "llamacpp":
+        return getattr(Config, "LLAMACPP_BASE_URL", "") or f"http://127.0.0.1:{Config.LLAMACPP_PORT}"
+    return Config.OLLAMA_BASE_URL.rstrip("/")
+
+
+def _is_llm_available() -> bool:
+    """Check if any LLM is available."""
+    if getattr(Config, "NO_OLLAMA", False):
+        return False
+    llm_mode = getattr(Config, "LLM_MODE", "ollama")
+    return llm_mode in ("ollama", "llamacpp")
 
 
 # ============================================================================
@@ -94,12 +136,16 @@ _EXPLICIT_CONTINUATION_RE = re.compile(
 
 # Purely informational query patterns that should NEVER trigger tools
 # These are conversational/knowledge queries, not action requests
+# Note: what(?:'?s|\s+is) handles contractions like "what's" and STT outputs like "whats"
 _INFORMATIONAL_QUERY_RE = re.compile(
     r"^(?:"
     r"tell me about|"
-    r"what (?:is|are|was|were)|"
+    r"what(?:'?s|\s+is|\s+are|\s+was|\s+were)|"  # Handle "what's", "whats", "what is"
     r"what'?s (?:a|an|some) (?:anime|show|movie|game|book|song|album|series|film) (?:like|similar to)|"  # "what's an anime like X"
     r"who (?:is|are|was|were)|"
+    r"who'?s|"  # "who's" contraction
+    r"when(?:'?s|\s+is)|"  # "when's my birthday"
+    r"where (?:is|are|do)|"  # "where do I live"
     r"explain|"
     r"describe|"
     r"how does|"
@@ -961,6 +1007,11 @@ def should_use_streaming_tts(text: str) -> bool:
     if hybrid_decision.mode == "tool_plan" and hybrid_decision.intents:
         return False
     
+    # Stream for any LLM-routed query (conversational responses)
+    # The hybrid router already determined this should go to LLM, so stream it
+    if hybrid_decision.mode == "llm":
+        return True
+    
     # Check if this is a continuation/informational query (reply-only mode)
     is_continuation = is_continuation_phrase(text)
     explicit_topic = is_explicit_continuation(text)
@@ -1053,6 +1104,8 @@ def handle_user_text_streaming(
 
 No tools are available for this request.
 Write a natural response to the user.
+You ARE allowed to generate stories, poems, jokes, and creative content when the user asks.
+Keep creative content spoken-friendly: no markdown, no bullet lists.
 {session_context}{promoted_context}{redaction_context}{all_memories_context}
 
 CONVERSATIONAL CONTEXT:
@@ -1064,9 +1117,18 @@ User: {text}
 
 Wyzer:"""
         
-        # Create Ollama client and stream
-        base_url = Config.OLLAMA_BASE_URL.rstrip("/")
-        client = OllamaClient(base_url=base_url, timeout=Config.LLM_TIMEOUT)
+        # Get appropriate LLM client based on mode (supports Ollama and llamacpp)
+        client = _get_llm_client()
+        if client is None:
+            # LLM unavailable
+            logger.warning("[STREAM_TTS] No LLM available, falling back")
+            result = handle_user_text(text)
+            if result.get("reply") and on_segment:
+                try:
+                    on_segment(result["reply"])
+                except Exception as e:
+                    logger.error(f"[STREAM_TTS] TTS callback error: {e}")
+            return result
         
         options = {
             "temperature": 0.4,
@@ -1075,12 +1137,38 @@ Wyzer:"""
             "num_predict": 150
         }
         
+        # Apply voice-fast preset overrides (smalltalk detection, story mode, etc.)
+        try:
+            from wyzer.brain.llm_engine import get_voice_fast_options
+            llm_mode = getattr(Config, "LLM_MODE", "ollama")
+            voice_fast_opts = get_voice_fast_options(text, llm_mode)
+            if voice_fast_opts:
+                # Filter out internal keys (prefixed with _)
+                for key, value in voice_fast_opts.items():
+                    if not key.startswith("_"):
+                        options[key] = value
+                # Inject smalltalk directive into prompt if present
+                if voice_fast_opts.get("_smalltalk_directive"):
+                    prompt = f"""You are Wyzer, a local voice assistant.
+
+{voice_fast_opts["_smalltalk_directive"]}
+
+No tools are available for this request.
+Write a natural response to the user.
+{session_context}{promoted_context}{redaction_context}{all_memories_context}
+
+User: {text}
+
+Wyzer:"""
+        except Exception as e:
+            logger.debug(f"[STREAM_TTS] voice_fast_options error: {e}")
+        
         logger.debug("[STREAM_TTS] LLM stream started")
         
         # Get streaming generator
         token_stream = client.generate_stream(
             prompt=prompt,
-            model=Config.OLLAMA_MODEL,
+            model=Config.OLLAMA_MODEL,  # Model param is mainly for Ollama; llamacpp uses loaded model
             options=options
         )
         
@@ -2785,20 +2873,91 @@ def _gather_context_blocks(user_text: str, max_session_turns: int = 2) -> Dict[s
 def _call_llm_reply_only(user_text: str) -> Dict[str, Any]:
     """Force a direct reply with no tool calls.
 
-    Used as a fallback when the LLM returns spurious tool intents.
+    Used as a fallback when the LLM returns spurious tool intents,
+    and for creative content requests (stories, poems, etc.).
+    
+    When voice_fast is active and identity/smalltalk query detected,
+    uses fast-lane prompt for minimal token count.
     """
+    logger = get_logger_instance()
+    llm_mode = getattr(Config, "LLM_MODE", "ollama")
+    
+    # Check if we should use fast-lane prompt (llamacpp + identity/smalltalk)
+    use_fastlane = False
+    fastlane_reason = ""
+    if llm_mode == "llamacpp":
+        try:
+            from wyzer.brain.llm_engine import get_voice_fast_options
+            voice_opts = get_voice_fast_options(user_text, llm_mode)
+            use_fastlane = voice_opts.get("_use_fastlane_prompt", False)
+            fastlane_reason = voice_opts.get("_fastlane_reason", "unknown")
+        except Exception:
+            pass
+    
+    if use_fastlane:
+        # Use fast-lane prompt for minimal tokens
+        try:
+            from wyzer.brain.prompt_builder import build_fastlane_prompt
+            from wyzer.memory.memory_manager import get_memory_manager
+            
+            # Get ONLY the single relevant memory for fastlane (not all memories)
+            memories_context = ""
+            try:
+                mem_mgr = get_memory_manager()
+                memories_context = mem_mgr.select_for_fastlane_injection(user_text)
+            except Exception:
+                pass
+            
+            prompt, mode, stats = build_fastlane_prompt(
+                user_text=user_text,
+                memories_context=memories_context,
+            )
+            
+            # Log prompt path at INFO level
+            logger.info(
+                f'[PROMPT_PATH] used=FAST_LANE reason={fastlane_reason} '
+                f'user_text="{user_text[:50]}"'
+            )
+            
+            # Add JSON format instruction (minimal)
+            prompt += ' {"reply": "'
+            
+            return _ollama_request(prompt, user_text=user_text)
+        except Exception as e:
+            logger.debug(f"[FASTLANE] fallback to normal prompt: {e}")
+    
+    # Log normal prompt path
+    logger.info(
+        f'[PROMPT_PATH] used=NORMAL reason=reply_only '
+        f'user_text="{user_text[:50]}"'
+    )
+    
+    # Normal prompt path
     ctx = _gather_context_blocks(user_text, max_session_turns=2)
     
+    # Check for smalltalk directive
+    smalltalk_directive = ""
+    try:
+        from wyzer.brain.llm_engine import _is_smalltalk_request, SMALLTALK_SYSTEM_DIRECTIVE
+        if _is_smalltalk_request(user_text):
+            smalltalk_directive = f"\n{SMALLTALK_SYSTEM_DIRECTIVE}\n"
+    except Exception:
+        pass
+    
     prompt = f"""You are Wyzer, a local voice assistant.
-{ctx['session']}{ctx['promoted']}{ctx['redaction']}{ctx['memories']}
-Reply naturally in 1-2 sentences. Be direct.
+{ctx['session']}{ctx['promoted']}{ctx['redaction']}{ctx['memories']}{smalltalk_directive}
+Reply naturally. Be direct.
+You ARE allowed to generate stories, poems, jokes, and creative content when asked.
+Keep creative content spoken-friendly: no markdown, no bullet lists.
+
+NEVER invent or request tools. Respond directly in plain text.
 
 JSON format: {{"reply": "your response"}}
 
 User: {user_text}
 
 JSON:"""
-    return _ollama_request(prompt)
+    return _ollama_request(prompt, user_text=user_text)
 
 
 def _call_llm_with_execution_summary(
@@ -2892,18 +3051,29 @@ JSON:"""
     return _ollama_request(prompt)
 
 
-def _ollama_request(prompt: str) -> Dict[str, Any]:
+def _ollama_request(prompt: str, user_text: str = "") -> Dict[str, Any]:
     """
-    Make request to Ollama LLM.
+    Make request to LLM (Ollama or llama.cpp).
+    
+    Args:
+        prompt: The full prompt to send to the LLM
+        user_text: Original user text (for voice_fast options detection)
     
     Returns:
         Parsed JSON response or fallback dict
     """
     logger = get_logger_instance()
     
-    # Check if Ollama is disabled via NO_OLLAMA flag
+    # Check if LLM is disabled
     if getattr(Config, "NO_OLLAMA", False):
-        logger.debug("[NO_OLLAMA] Ollama disabled, returning not supported")
+        logger.debug("[LLM] LLM disabled, returning not supported")
+        return {
+            "reply": _get_no_ollama_reply()
+        }
+    
+    llm_mode = getattr(Config, "LLM_MODE", "ollama")
+    if llm_mode == "off":
+        logger.debug("[LLM] LLM mode is off, returning not supported")
         return {
             "reply": _get_no_ollama_reply()
         }
@@ -2916,41 +3086,67 @@ def _ollama_request(prompt: str) -> Dict[str, Any]:
         est_tokens = len(prompt) // 4
     
     try:
-        # Use existing config
-        base_url = Config.OLLAMA_BASE_URL.rstrip("/")
-        model = Config.OLLAMA_MODEL
         timeout = Config.LLM_TIMEOUT
         
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "stream": False,
-            "format": "json",  # Request JSON output
-            "options": {
-                "temperature": 0.3,
-                "top_p": 0.9,
-                "num_ctx": 4096,
-                "num_predict": 150
-            }
+        options = {
+            "temperature": 0.3,
+            "top_p": 0.9,
+            "num_ctx": 4096,
+            "num_predict": 150
         }
         
-        req = urllib.request.Request(
-            f"{base_url}/api/generate",
-            data=json.dumps(payload).encode('utf-8'),
-            headers={'Content-Type': 'application/json'},
-            method="POST"
-        )
+        # Apply voice-fast preset overrides if user_text provided
+        if user_text:
+            try:
+                from wyzer.brain.llm_engine import get_voice_fast_options
+                voice_fast_opts = get_voice_fast_options(user_text, llm_mode)
+                if voice_fast_opts:
+                    for key, value in voice_fast_opts.items():
+                        if not key.startswith("_"):
+                            options[key] = value
+            except Exception as e:
+                logger.debug(f"[LLM] voice_fast_options error: {e}")
         
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            response_data = json.loads(response.read().decode('utf-8'))
-        
-        # Log token counts from Ollama
-        prompt_tokens = response_data.get("prompt_eval_count", 0)
-        eval_tokens = response_data.get("eval_count", 0)
-        logger.debug(f"[OLLAMA] est_tokens={est_tokens}, prompt_tokens={prompt_tokens}, eval_tokens={eval_tokens}")
-        
-        # Parse response
-        reply_text = response_data.get("response", "").strip()
+        if llm_mode == "llamacpp":
+            # Use llama.cpp client
+            client = _get_llm_client()
+            if client is None:
+                return {"reply": _get_no_ollama_reply()}
+            
+            # For llama.cpp, add instruction to respond in JSON format
+            json_prompt = prompt + "\n\nIMPORTANT: Respond with valid JSON only."
+            reply_text = client.generate(prompt=json_prompt, options=options, stream=False)
+            
+            logger.debug(f"[LLAMACPP] est_tokens={est_tokens}")
+        else:
+            # Use Ollama direct HTTP (default)
+            base_url = Config.OLLAMA_BASE_URL.rstrip("/")
+            model = Config.OLLAMA_MODEL
+            
+            payload = {
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",  # Request JSON output
+                "options": options
+            }
+            
+            req = urllib.request.Request(
+                f"{base_url}/api/generate",
+                data=json.dumps(payload).encode('utf-8'),
+                headers={'Content-Type': 'application/json'},
+                method="POST"
+            )
+            
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                response_data = json.loads(response.read().decode('utf-8'))
+            
+            # Log token counts from Ollama
+            prompt_tokens = response_data.get("prompt_eval_count", 0)
+            eval_tokens = response_data.get("eval_count", 0)
+            logger.debug(f"[OLLAMA] est_tokens={est_tokens}, prompt_tokens={prompt_tokens}, eval_tokens={eval_tokens}")
+            
+            reply_text = response_data.get("response", "").strip()
 
         def _extract_reply_from_args(args: Any) -> str:
             if not isinstance(args, dict):
@@ -3007,37 +3203,54 @@ def _ollama_request(prompt: str) -> Dict[str, Any]:
 
             return parsed
 
+        # Clean up reply_text - some models return doubled braces from template escaping
+        cleaned_text = reply_text.strip()
+        # Handle doubled braces: {{"reply":...}} -> {"reply":...}
+        if cleaned_text.startswith("{{") and cleaned_text.endswith("}}"):
+            cleaned_text = cleaned_text[1:-1]
+        # Remove markdown code fences if present
+        if cleaned_text.startswith("```json"):
+            cleaned_text = cleaned_text[7:]
+        if cleaned_text.startswith("```"):
+            cleaned_text = cleaned_text[3:]
+        if cleaned_text.endswith("```"):
+            cleaned_text = cleaned_text[:-3]
+        cleaned_text = cleaned_text.strip()
+        
         # Try to parse as JSON
         try:
-            parsed = json.loads(reply_text)
+            parsed = json.loads(cleaned_text)
             parsed = _postprocess_llm_json(parsed)
             if isinstance(parsed, dict):
                 return parsed
             return {"reply": str(parsed)}
         except json.JSONDecodeError:
             # LLM didn't return valid JSON, extract reply if possible
-            return {"reply": reply_text if reply_text else "I couldn't process that."}
+            return {"reply": cleaned_text if cleaned_text else "I couldn't process that."}
 
     except urllib.error.URLError as e:
         # Distinguish slow-model timeouts from true connection failures.
         reason = getattr(e, "reason", None)
         is_timeout = isinstance(reason, socket.timeout) or "timed out" in str(e).lower()
+        llm_name = "llama.cpp" if llm_mode == "llamacpp" else "Ollama"
         if is_timeout:
-            logger.warning(f"Ollama request timed out after {Config.LLM_TIMEOUT}s: {e}")
+            logger.warning(f"{llm_name} request timed out after {Config.LLM_TIMEOUT}s: {e}")
             return {
-                "reply": f"Ollama is taking too long to respond (timeout: {Config.LLM_TIMEOUT}s). Increase --llm-timeout or WYZER_LLM_TIMEOUT."
+                "reply": f"{llm_name} is taking too long to respond (timeout: {Config.LLM_TIMEOUT}s). Increase --llm-timeout or WYZER_LLM_TIMEOUT."
             }
 
-        logger.warning(f"Ollama request failed (URL error): {e}")
-        return {"reply": "I couldn't reach Ollama. Is it running?"}
+        logger.warning(f"{llm_name} request failed (URL error): {e}")
+        return {"reply": f"I couldn't reach {llm_name}. Is it running?"}
 
     except socket.timeout as e:
-        logger.warning(f"Ollama request timed out after {Config.LLM_TIMEOUT}s: {e}")
+        llm_name = "llama.cpp" if llm_mode == "llamacpp" else "Ollama"
+        logger.warning(f"{llm_name} request timed out after {Config.LLM_TIMEOUT}s: {e}")
         return {
-            "reply": f"Ollama is taking too long to respond (timeout: {Config.LLM_TIMEOUT}s). Increase --llm-timeout or WYZER_LLM_TIMEOUT."
+            "reply": f"{llm_name} is taking too long to respond (timeout: {Config.LLM_TIMEOUT}s). Increase --llm-timeout or WYZER_LLM_TIMEOUT."
         }
 
     except Exception as e:
         # Keep generic fallback, but log the underlying error for debugging.
-        logger.exception(f"Unexpected Ollama error: {e}")
-        return {"reply": "I had trouble talking to Ollama."}
+        llm_name = "llama.cpp" if llm_mode == "llamacpp" else "Ollama"
+        logger.error(f"Unexpected {llm_name} error: {e}")
+        return {"reply": f"I had trouble talking to {llm_name}."}

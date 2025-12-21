@@ -993,6 +993,15 @@ class WyzerAssistantMultiprocess:
         ollama_model: str = "llama3.1:latest",
         ollama_url: str = "http://127.0.0.1:11434",
         llm_timeout: int = 30,
+        # Llama.cpp embedded server settings (Phase 8)
+        llamacpp_bin: str = "./wyzer/llm_bin/llama-server.exe",
+        llamacpp_model: str = "./wyzer/llm_models/model.gguf",
+        llamacpp_port: int = 8081,
+        llamacpp_ctx: int = 2048,
+        llamacpp_threads: int = 0,  # 0 = auto (recommended with auto-optimize)
+        llamacpp_auto_optimize: bool = True,
+        llamacpp_gpu_layers: int = -1,
+        # TTS settings
         tts_enabled: bool = True,
         tts_engine: str = "piper",
         piper_exe_path: str = "./wyzer/assets/piper/piper.exe",
@@ -1068,6 +1077,15 @@ class WyzerAssistantMultiprocess:
             "ollama_model": ollama_model,
             "ollama_url": ollama_url,
             "llm_timeout": llm_timeout,
+            # Llama.cpp settings (Phase 8)
+            "llamacpp_bin": llamacpp_bin,
+            "llamacpp_model": llamacpp_model,
+            "llamacpp_port": llamacpp_port,
+            "llamacpp_ctx": llamacpp_ctx,
+            "llamacpp_threads": llamacpp_threads,
+            "llamacpp_auto_optimize": llamacpp_auto_optimize,
+            "llamacpp_gpu_layers": llamacpp_gpu_layers,
+            # TTS settings
             "tts_enabled": bool(tts_enabled),
             "tts_engine": tts_engine,
             "piper_exe_path": piper_exe_path,

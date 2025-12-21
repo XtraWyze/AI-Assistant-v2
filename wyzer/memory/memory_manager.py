@@ -42,6 +42,193 @@ MEMORY_RECORD_TYPES = ["fact", "preference", "skill", "history_marker"]
 DEFAULT_RECORD_TYPE = "fact"
 DEFAULT_SOURCE = "explicit_user"
 
+# ============================================================================
+# GLOBAL PINNED KEYS - Always injected for personal queries
+# ============================================================================
+# These are core identity facts that should be available when user asks
+# personal questions like "what's my name" or "who am I"
+GLOBAL_PINNED_KEYS = {
+    "name", "user_name", "my_name",
+    "wife", "husband", "spouse", "partner",
+    "dog", "cat", "pet",
+    "household", "family",
+    "birthday", "birth_date",
+    "location", "city", "address",
+}
+
+# Personal query patterns - when these match, include global pinned memories
+_PERSONAL_QUERY_RE = re.compile(
+    r"\b(my\s|who am i|what(?:'s| is) my|do you (?:know|remember)|about me)\b",
+    re.IGNORECASE
+)
+
+# Identity-specific query patterns - these ask about a SPECIFIC piece of identity info
+# For these, we only inject the directly relevant memory, not all likes/preferences
+# Patterns are designed to match common STT outputs (with/without apostrophes, "is"/"'s" variants)
+_IDENTITY_QUERY_PATTERNS = [
+    # Name queries - match: "what's my name", "whats my name", "what is my name", "who am i"
+    (re.compile(r"\b(?:what(?:'?s|\s+is)\s+my\s+name|who\s+am\s+i|my\s+name)\b", re.IGNORECASE), {"name", "user_name", "my_name"}),
+    # Wife/spouse queries - match: "what's my wife's name", "whats my wifes name", etc.
+    (re.compile(r"\b(?:what(?:'?s|\s+is)\s+my\s+(?:wife|spouse|partner)(?:'?s)?\s*name|who\s+is\s+my\s+(?:wife|spouse|partner))\b", re.IGNORECASE), {"wife", "wife_name", "spouse", "partner"}),
+    # Husband queries
+    (re.compile(r"\b(?:what(?:'?s|\s+is)\s+my\s+(?:husband|spouse|partner)(?:'?s)?\s*name|who\s+is\s+my\s+(?:husband|spouse|partner))\b", re.IGNORECASE), {"husband", "husband_name", "spouse", "partner"}),
+    # Dog/pet queries - match: "what's my dog's name", "whats my dogs name", "what is my dogs name"
+    (re.compile(r"\b(?:what(?:'?s|\s+is)\s+my\s+(?:dog|pet)(?:'?s)?\s*name|who\s+is\s+my\s+(?:dog|pet))\b", re.IGNORECASE), {"dog", "dog_name", "pet", "pet_name"}),
+    # Cat queries
+    (re.compile(r"\b(?:what(?:'?s|\s+is)\s+my\s+cat(?:'?s)?\s*name|who\s+is\s+my\s+cat)\b", re.IGNORECASE), {"cat", "cat_name", "pet", "pet_name"}),
+    # Birthday queries - match: "what's my birthday", "when's my birthday", "whens my birthday"
+    (re.compile(r"\b(?:what(?:'?s|\s+is)\s+my\s+(?:birthday|birth\s*date)|when(?:'?s|\s+is)\s+my\s+birthday)\b", re.IGNORECASE), {"birthday", "birth_date"}),
+    # Location queries
+    (re.compile(r"\b(?:where\s+do\s+i\s+live|what(?:'?s|\s+is)\s+my\s+(?:address|location|city))\b", re.IGNORECASE), {"location", "city", "address"}),
+]
+
+
+def _get_identity_query_keys(user_text: str) -> Optional[set]:
+    """
+    Check if query is asking about a specific identity fact.
+    
+    Args:
+        user_text: User's query text
+        
+    Returns:
+        Set of relevant memory keys if identity query detected, None otherwise
+    """
+    if not user_text:
+        return None
+    
+    for pattern, relevant_keys in _IDENTITY_QUERY_PATTERNS:
+        if pattern.search(user_text):
+            return relevant_keys
+    return None
+
+
+def _is_likes_preference_key(key: Optional[str]) -> bool:
+    """
+    Check if a memory key is a likes/preference key (e.g., likes_one_piece, favorite_anime).
+    
+    These are filtered out for identity-specific queries to keep responses focused.
+    """
+    if not key:
+        return False
+    key_lower = key.lower()
+    return key_lower.startswith("likes_") or key_lower.startswith("favorite_") or key_lower.startswith("prefers_")
+
+
+def _is_personal_query(user_text: str) -> bool:
+    """Check if query is asking about personal/user information."""
+    return bool(_PERSONAL_QUERY_RE.search(user_text)) if user_text else False
+
+
+def _is_global_pinned_key(key: Optional[str]) -> bool:
+    """Check if a memory key is in the global always-inject set."""
+    if not key:
+        return False
+    key_lower = key.lower().replace("_", " ").replace("-", " ")
+    # Check if any global key is a substring of the memory key
+    for global_key in GLOBAL_PINNED_KEYS:
+        if global_key in key_lower or key_lower in global_key:
+            return True
+    return False
+
+
+# ============================================================================
+# TOPIC-GATING for preferences/likes memories
+# ============================================================================
+# Certain preference memories should only be injected when user's query
+# is topically relevant. This prevents rambling about One Piece when user
+# asks generic questions like "tell me something".
+
+# Topic gates: maps memory key patterns to required keywords in user query
+_TOPIC_GATES = {
+    # One Piece anime preference - only inject when anime/manga related
+    "one_piece": {"one piece", "anime", "manga", "luffy", "arc", "one-piece", "onepiece"},
+    # Weed/dabs preference - only inject when substance related
+    "weed": {"weed", "dab", "dabs", "smoke", "thc", "cannabis", "marijuana", "edible", "edibles"},
+    "dabs": {"weed", "dab", "dabs", "smoke", "thc", "cannabis", "marijuana"},
+}
+
+
+def _get_topic_gate_keywords(key: Optional[str]) -> Optional[set]:
+    """
+    Get required keywords for a topic-gated memory key.
+    
+    Args:
+        key: Memory key (e.g., "likes_one_piece")
+        
+    Returns:
+        Set of required keywords if topic-gated, None if not gated
+    """
+    if not key:
+        return None
+    key_lower = key.lower()
+    
+    for topic, keywords in _TOPIC_GATES.items():
+        if topic in key_lower:
+            return keywords
+    return None
+
+
+def _passes_topic_gate(key: Optional[str], user_text: str) -> bool:
+    """
+    Check if a memory key passes its topic gate for the given user query.
+    
+    Returns True if:
+    - Key is not topic-gated (always passes)
+    - Key is topic-gated AND user query contains at least one required keyword
+    
+    Args:
+        key: Memory key
+        user_text: User's input text
+        
+    Returns:
+        True if memory should be injected, False if gated out
+    """
+    required_keywords = _get_topic_gate_keywords(key)
+    if required_keywords is None:
+        return True  # Not gated
+    
+    if not user_text:
+        return False  # No query = gated out
+    
+    user_lower = user_text.lower()
+    for keyword in required_keywords:
+        if keyword in user_lower:
+            return True  # Found required keyword
+    return False  # No required keyword found
+
+
+# Smalltalk pattern (mirrors llm_engine.py for deterministic behavior)
+_SMALLTALK_RE = re.compile(
+    r"^\s*(?:"
+    r"tell\s+me\s+something(?:\s*\.)?$|"
+    r"say\s+something(?:\s*\.)?$|"
+    r"talk\s+to\s+me(?:\s*\.)?$|"
+    r"what'?s?\s+up(?:\s*[\?\.])?$|"
+    r"how\s+are\s+you(?:\s*[\?\.])?$|"
+    r"hello(?:\s*[\!\.])?$|"
+    r"hi(?:\s*[\!\.])?$|"
+    r"hey(?:\s*[\!\.])?$"
+    r")\s*$",
+    re.IGNORECASE
+)
+
+
+def _is_smalltalk_request(text: str) -> bool:
+    """
+    Detect if user is making a generic smalltalk request.
+    
+    For smalltalk, we inject NO memories to keep responses focused and short.
+    
+    Args:
+        text: User's input text
+        
+    Returns:
+        True if smalltalk request detected
+    """
+    if not text:
+        return False
+    return bool(_SMALLTALK_RE.match(text))
+
 
 def _derive_key(value: str) -> Optional[str]:
     """
@@ -50,8 +237,13 @@ def _derive_key(value: str) -> Optional[str]:
     Heuristics:
     - "my name is X" -> "name"
     - "my birthday is X" -> "birthday"
+    - "my wife's name is X" -> "wife_name" (canonical)
+    - "my dog's name is X" -> "dog_name"
     - "my favorite X is Y" -> "favorite_X"
     - "I like X" -> "likes_X"
+    
+    Uses canonical key mappings so synonyms (wife/spouse/partner) all map
+    to the same canonical key for consistent retrieval.
     
     Args:
         value: The memory value text
@@ -64,6 +256,26 @@ def _derive_key(value: str) -> Optional[str]:
     
     text = value.lower().strip()
     
+    # Canonical key mappings: synonyms -> canonical key
+    _CANONICAL_KEYS = {
+        "wife": "wife_name",
+        "spouse": "wife_name",  # Default to wife_name for gender-neutral
+        "partner": "wife_name",
+        "husband": "husband_name",
+        "dog": "dog_name",
+        "pet": "pet_name",
+        "cat": "cat_name",
+        "mom": "mom_name",
+        "mother": "mom_name",
+        "dad": "dad_name",
+        "father": "dad_name",
+        "brother": "brother_name",
+        "sister": "sister_name",
+        "son": "son_name",
+        "daughter": "daughter_name",
+        "boss": "boss_name",
+    }
+    
     # Pattern: "my name is X" or "my name's X"
     if re.match(r"^my\s+name(?:'s|\s+is)\s+", text):
         return "name"
@@ -75,6 +287,27 @@ def _derive_key(value: str) -> Optional[str]:
     # Pattern: "my age is X" or "I am X years old"
     if re.match(r"^my\s+age\s+is\s+", text) or re.match(r"^i(?:'m|\s+am)\s+\d+\s+years?\s+old", text):
         return "age"
+    
+    # Pattern: "my <relationship>'s name is X" (possessive with apostrophe)
+    # Handles: "my wife's name is Audrey", "my dog's name is Bella", etc.
+    match = re.match(r"^my\s+(\w+)(?:'s|s)\s+name\s+is\s+", text)
+    if match:
+        relationship = match.group(1).strip().lower()
+        # Use canonical key if available, otherwise derive from relationship
+        canonical = _CANONICAL_KEYS.get(relationship)
+        if canonical:
+            return canonical
+        return f"{relationship}_name"
+    
+    # Pattern: "my <relationship> is X" (without possessive, means the person IS X)
+    # Handles: "my wife is Audrey", "my dog is Bella"
+    match = re.match(r"^my\s+(wife|husband|spouse|partner|dog|cat|pet|mom|mother|dad|father|brother|sister|son|daughter|boss)\s+is\s+", text)
+    if match:
+        relationship = match.group(1).strip().lower()
+        canonical = _CANONICAL_KEYS.get(relationship)
+        if canonical:
+            return canonical
+        return f"{relationship}_name"
     
     # Pattern: "my favorite X is Y"
     match = re.match(r"^my\s+fav(?:ou?rite)?\s+(\w+)\s+is\s+", text)
@@ -1221,16 +1454,22 @@ class MemoryManager:
         self,
         user_text: str,
         k_total: int = 6,
-        pinned_max: int = 4,
+        pinned_max: int = 3,
         mention_max: int = 4,
         max_chars: int = 1200
     ) -> str:
         """
-        Select memories for injection using deterministic static + mention-triggered buckets.
+        Select memories for injection using smart filtering.
+        
+        OPTIMIZED for token efficiency:
+        - Pinned memories are NOT blindly injected
+        - Only relevant memories reach the LLM
         
         Selection order:
-        1. PINNED/STATIC memories (always included up to pinned_max)
-        2. MENTION-TRIGGERED memories (included if user mentions them, up to mention_max)
+        1. MENTION-TRIGGERED memories (key/alias/value matches query tokens)
+        2. PINNED/STATIC memories - CONDITIONAL:
+           - For personal queries ("my X", "who am I"): include global keys (name, wife, dog, etc.)
+           - For any query: include pinned if key/alias/tags match query
         3. TOP-K fallback (fill remaining slots with highest-scoring records)
         
         Args:
@@ -1249,6 +1488,12 @@ class MemoryManager:
             if not self._use_memories:
                 return ""
             
+            # SMALLTALK GATING: For generic smalltalk prompts, inject NO memories
+            # This prevents rambling responses with irrelevant personal info
+            if _is_smalltalk_request(user_text):
+                logger.debug(f"[MEMORY] Smalltalk detected: '{user_text[:50]}' → injecting NO memories")
+                return ""
+            
             memories = self._load_memories()
             if not memories:
                 return ""
@@ -1257,39 +1502,109 @@ class MemoryManager:
             user_text_lower = user_text.lower() if user_text else ""
             user_tokens = self._tokenize_for_matching(user_text)
             
+            # Check for identity-specific queries (only inject directly relevant memories)
+            identity_query_keys = _get_identity_query_keys(user_text)
+            
             selected = []
             selected_ids = set()
+            filtered_likes_keys = []  # Track filtered likes/preferences for debug log
+            topic_gated_keys = []     # Track topic-gated keys for debug log
             
-            # 1. PINNED/STATIC memories (always included when enabled)
-            pinned_records = [m for m in memories if m.get("pinned", False)]
-            # Sort by created_at descending for determinism
-            pinned_records.sort(key=lambda m: m.get("created_at", ""), reverse=True)
-            
-            for record in pinned_records[:pinned_max]:
-                selected.append(("static", record))
-                selected_ids.add(record.get("id"))
-            
-            if selected:
-                pinned_keys = [r.get("key") or r.get("text", "")[:30] for _, r in selected]
-                logger.info(f"[MEMORY] Injecting {len(selected)} pinned: {pinned_keys}")
-                logger.debug(f"[MEMORY] Pinned details: {[r.get('text', '')[:50] for _, r in selected]}")
-            
-            # 2. MENTION-TRIGGERED memories
+            # 1. MENTION-TRIGGERED memories FIRST (most relevant to current query)
             mention_count = 0
             mentioned_keys = []
             for record in memories:
-                if record.get("id") in selected_ids:
-                    continue
                 if mention_count >= mention_max:
                     break
                 if self._is_mentioned(record, user_text_lower, user_tokens):
+                    key = record.get("key")
+                    # Filter out likes/preferences for identity-specific queries
+                    if identity_query_keys and _is_likes_preference_key(key):
+                        filtered_likes_keys.append(key)
+                        continue
+                    # Topic-gating: check if this memory passes its topic gate
+                    if not _passes_topic_gate(key, user_text):
+                        topic_gated_keys.append(key)
+                        continue
                     selected.append(("mentioned", record))
                     selected_ids.add(record.get("id"))
-                    mentioned_keys.append(record.get("key") or record.get("text", "")[:30])
+                    mentioned_keys.append(key or record.get("text", "")[:30])
                     mention_count += 1
             
             if mention_count > 0:
                 logger.info(f"[MEMORY] Injecting {mention_count} mentioned: {mentioned_keys}")
+            
+            # 2. PINNED/STATIC memories - CONDITIONAL injection
+            # Only inject pinned memories if:
+            #   A) Query is personal AND key is a global/core fact, OR
+            #   B) Pinned memory matches the query (key/alias/tag overlap)
+            is_personal = _is_personal_query(user_text)
+            pinned_records = [m for m in memories if m.get("pinned", False) and m.get("id") not in selected_ids]
+            
+            # Filter pinned records based on relevance
+            relevant_pinned = []
+            for record in pinned_records:
+                key = record.get("key")
+                
+                # Topic-gating: check if this memory passes its topic gate
+                if not _passes_topic_gate(key, user_text):
+                    topic_gated_keys.append(key)
+                    continue
+                
+                # For identity-specific queries, skip likes/preferences and non-matching keys
+                if identity_query_keys:
+                    # Skip likes/preferences entirely
+                    if _is_likes_preference_key(key):
+                        filtered_likes_keys.append(key)
+                        continue
+                    # Only include if key matches identity query keys
+                    if key:
+                        key_lower = key.lower().replace("_", " ").replace("-", " ")
+                        key_matches = any(iq_key in key_lower or key_lower in iq_key for iq_key in identity_query_keys)
+                        if key_matches:
+                            relevant_pinned.append(record)
+                    continue
+                
+                # A) Global key + personal query
+                if is_personal and _is_global_pinned_key(key):
+                    relevant_pinned.append(record)
+                    continue
+                # B) Pinned but matches query (treat like mention-triggered)
+                if self._is_mentioned(record, user_text_lower, user_tokens):
+                    relevant_pinned.append(record)
+                    continue
+                # C) Check tags for relevance
+                tags = record.get("tags", [])
+                tag_tokens = set()
+                for tag in tags:
+                    tag_tokens.update(self._tokenize_for_matching(tag))
+                if tag_tokens & user_tokens:
+                    relevant_pinned.append(record)
+            
+            # Sort by created_at descending for determinism
+            relevant_pinned.sort(key=lambda m: m.get("created_at", ""), reverse=True)
+            
+            # Calculate how many pinned we can still add
+            remaining_pinned = min(pinned_max, k_total - len(selected))
+            for record in relevant_pinned[:remaining_pinned]:
+                selected.append(("static", record))
+                selected_ids.add(record.get("id"))
+            
+            pinned_added = len([s for s in selected if s[0] == "static"])
+            if pinned_added > 0:
+                pinned_keys = [r.get("key") or r.get("text", "")[:30] for label, r in selected if label == "static"]
+                logger.info(f"[MEMORY] Injecting {pinned_added} pinned (of {len(pinned_records)} total): {pinned_keys}")
+                logger.debug(f"[MEMORY] Pinned details: {[r.get('text', '')[:50] for label, r in selected if label == 'static']}")
+            elif pinned_records:
+                logger.debug(f"[MEMORY] Skipped {len(pinned_records)} pinned (not relevant to query)")
+            
+            # Log filtered likes/preferences for identity queries
+            if filtered_likes_keys:
+                logger.debug(f"[MEMORY] Filtered out {len(filtered_likes_keys)} likes/preferences for identity query: {filtered_likes_keys[:5]}")
+            
+            # Log topic-gated keys
+            if topic_gated_keys:
+                logger.debug(f"[MEMORY] Topic-gated out {len(topic_gated_keys)} memories (no keyword match): {topic_gated_keys[:5]}")
             
             # 3. TOP-K FALLBACK (fill remaining slots)
             remaining_slots = k_total - len(selected)
@@ -1298,6 +1613,12 @@ class MemoryManager:
                 scored = []
                 for record in memories:
                     if record.get("id") in selected_ids:
+                        continue
+                    key = record.get("key")
+                    # Topic-gating: check if this memory passes its topic gate
+                    if not _passes_topic_gate(key, user_text):
+                        if key and key not in topic_gated_keys:
+                            topic_gated_keys.append(key)
                         continue
                     score = self._score_record(record, user_tokens)
                     if score > 0:
@@ -1351,6 +1672,117 @@ class MemoryManager:
             
             result = header + "\n".join(lines) + footer
             logger.info(f"[MEMORY] Injection: {len(lines)} memories, {total_chars} chars → LLM")
+            return result
+
+    def select_for_fastlane_injection(self, user_text: str) -> str:
+        """
+        Select ONLY the single most relevant memory for fast-lane identity queries.
+        
+        This is called for FAST_LANE mode (identity/smalltalk) to minimize prompt size.
+        Returns at most ONE memory line for the directly relevant key.
+        
+        Selection logic:
+        1. Detect identity query type (name, wife, dog, birthday, etc.)
+        2. Return ONLY the memory matching that specific key
+        3. For smalltalk, return empty (no memories needed)
+        
+        Args:
+            user_text: User's query text
+            
+        Returns:
+            Single memory line (e.g., "Your name is Levi") or empty string
+        """
+        logger = get_logger()
+        
+        with self._lock:
+            # Smalltalk gets NO memories - keep response generic and snappy
+            if _is_smalltalk_request(user_text):
+                logger.info(f"[MEMORY_FASTLANE] keys=[] selected=None (smalltalk, no injection)")
+                return ""
+            
+            # Get the specific identity keys for this query
+            identity_keys = _get_identity_query_keys(user_text)
+            if not identity_keys:
+                logger.info(f"[MEMORY_FASTLANE] no relevant key found for identity query")
+                return ""
+            
+            memories = self._load_memories()
+            if not memories:
+                logger.info(
+                    f"[MEMORY_FASTLANE] keys={list(identity_keys)} selected=None "
+                    f"(no memories stored)"
+                )
+                return ""
+            
+            # Find the FIRST matching memory for the identity query keys
+            from wyzer.memory.command_detector import _transform_first_to_second_person
+            
+            matched_memory = None
+            matched_key = None
+            
+            for record in memories:
+                key = record.get("key")
+                if not key:
+                    continue
+                
+                key_lower = key.lower().replace("_", " ").replace("-", " ")
+                
+                # Check if this key matches any of the identity query keys
+                # Use stricter matching: exact match or word-boundary match
+                for iq_key in identity_keys:
+                    iq_key_norm = iq_key.lower().replace("_", " ").replace("-", " ")
+                    # Exact match
+                    if key_lower == iq_key_norm:
+                        matched_memory = record
+                        matched_key = key
+                        break
+                    # Key starts with identity query key (e.g., "dog" matches "dog_name")
+                    if key_lower.startswith(iq_key_norm + " ") or key_lower.startswith(iq_key_norm):
+                        # Ensure it's not a partial match like "doggy"
+                        if key_lower == iq_key_norm or key_lower.startswith(iq_key_norm + " "):
+                            matched_memory = record
+                            matched_key = key
+                            break
+                    # Identity key starts with memory key (e.g., "dog_name" memory matches "dog" query)
+                    if iq_key_norm.startswith(key_lower + " ") or iq_key_norm.startswith(key_lower):
+                        if iq_key_norm == key_lower or iq_key_norm.startswith(key_lower + " "):
+                            matched_memory = record
+                            matched_key = key
+                            break
+                
+                if matched_memory:
+                    break
+            
+            if not matched_memory:
+                logger.info(
+                    f"[MEMORY_FASTLANE] keys={list(identity_keys)} selected=None "
+                    f"(no match found)"
+                )
+                return ""
+            
+            # Format the single memory line
+            value = matched_memory.get("value") or matched_memory.get("text") or ""
+            if not value:
+                logger.info(
+                    f"[MEMORY_FASTLANE] keys={list(identity_keys)} selected=\"{matched_key}\" "
+                    f"(empty value)"
+                )
+                return ""
+            
+            # Transform to second person
+            transformed = _transform_first_to_second_person(value)
+            display_value = transformed if transformed else value
+            
+            # Build the result
+            result = f"{matched_key}: {display_value}"
+            injected_chars = len(result)
+            
+            # Log successful injection at INFO level
+            logger.info(
+                f"[MEMORY_FASTLANE] keys={list(identity_keys)} selected=\"{matched_key}\" "
+                f"injected_chars={injected_chars}"
+            )
+            
             return result
 
     def set_use_memories(self, enabled: bool, source: str = "unknown") -> bool:

@@ -96,7 +96,8 @@ class TestChunkBuffer(unittest.TestCase):
         """Flush returns any remaining buffered text."""
         from wyzer.brain.stream_tts import ChunkBuffer
         
-        buffer = ChunkBuffer(min_chars=150)
+        # Use high first_emit_chars to prevent early emission for this test
+        buffer = ChunkBuffer(min_chars=150, first_emit_chars=200)
         
         # Add text without any triggers
         buffer.add("Some text without ending")

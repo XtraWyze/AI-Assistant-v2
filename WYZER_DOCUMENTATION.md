@@ -432,15 +432,32 @@ Files:
 
 ## LLM Integration
 
-### Ollama Setup
+Wyzer supports multiple LLM backends for local inference:
+- **Ollama** (default) - Easy-to-use local LLM server
+- **llama.cpp** - Embedded server for direct GGUF model loading
 
-Wyzer uses Ollama for local LLM inference.
+### LLM Mode Selection
+
+Use the `--llm` flag to select the backend:
+- `--llm ollama` (default) - Use Ollama server
+- `--llm llamacpp` - Use embedded llama.cpp server
+- `--llm off` or `--no-ollama` - Tools-only mode, no LLM
+
+### Ollama Setup (Default)
+
+Wyzer uses Ollama for local LLM inference by default.
 
 1. **Install Ollama**: https://ollama.ai
 2. **Pull a model**: `ollama pull llama3.1:latest`
 3. **Start Ollama**: `ollama serve` (usually runs automatically)
 
-### Supported Models
+#### Ollama CLI Options
+
+```bash
+python run.py --llm ollama --ollama-model llama3.1:latest --ollama-url http://127.0.0.1:11434
+```
+
+### Supported Ollama Models
 
 Any Ollama-compatible model works. Recommended:
 - `llama3.1:latest` (default, balanced)
@@ -448,12 +465,68 @@ Any Ollama-compatible model works. Recommended:
 - `llama3.2:latest` (newer, efficient)
 - `mistral:latest` (alternative)
 
-### No-Ollama Mode
+### llama.cpp Setup (Embedded Server)
+
+For more control or to avoid Ollama, use the embedded llama.cpp server mode:
+
+#### Step 1: Download llama.cpp
+
+1. Download the latest `llama-server` from [llama.cpp releases](https://github.com/ggerganov/llama.cpp/releases)
+2. Place `llama-server.exe` (Windows) in `wyzer/llm_bin/`
+
+#### Step 2: Download a GGUF Model
+
+1. Download a GGUF model (e.g., from [HuggingFace](https://huggingface.co/models?search=gguf))
+2. Place the `.gguf` file in `wyzer/llm_models/`
+3. Rename to `model.gguf` or specify path with `--llamacpp-model`
+
+Recommended models:
+- `llama-3.1-8b-instruct.Q4_K_M.gguf` - Good balance of quality and speed
+- `llama-3.2-3b-instruct.Q4_K_M.gguf` - Faster, smaller
+- `mistral-7b-instruct-v0.2.Q4_K_M.gguf` - Alternative
+
+#### Step 3: Run with llama.cpp
+
+```bash
+python run.py --llm llamacpp
+```
+
+#### llama.cpp CLI Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--llamacpp-bin` | `./wyzer/llm_bin/llama-server.exe` | Path to llama-server executable |
+| `--llamacpp-model` | `./wyzer/llm_models/model.gguf` | Path to GGUF model file |
+| `--llamacpp-port` | `8081` | HTTP port for llama.cpp server |
+| `--llamacpp-ctx` | `2048` | Context window size |
+| `--llamacpp-threads` | `4` | Number of threads (0=auto) |
+
+#### Example Full Command
+
+```bash
+python run.py --llm llamacpp --llamacpp-model ./wyzer/llm_models/llama-3.1-8b.Q4_K_M.gguf --llamacpp-ctx 4096 --llamacpp-threads 8
+```
+
+#### Directory Structure
+
+```
+wyzer/
+├── llm_bin/
+│   └── llama-server.exe      # llama.cpp server binary
+├── llm_models/
+│   └── model.gguf            # Your GGUF model
+└── logs/
+    └── llamacpp_server.log   # Server output log
+```
+
+### No-Ollama Mode (Tools Only)
 
 Run without LLM for deterministic tool-only mode:
 
 ```bash
 python run.py --no-ollama
+# or
+python run.py --llm off
 ```
 
 In this mode:

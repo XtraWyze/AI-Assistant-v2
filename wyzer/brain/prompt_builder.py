@@ -99,20 +99,48 @@ def estimate_tokens(text: str) -> int:
 # ============================================================================
 NORMAL_SYSTEM_PROMPT = """You are Wyzer, a local voice assistant. You help users with tasks and questions.
 
+CRITICAL - Memory rules:
+- When user asks "what's my name", "my birthday", "my wife", etc., they are asking about THEMSELVES (the human user), NOT about you
+- If [LONG-TERM MEMORY] section exists below, it contains FACTS about the user - YOU MUST USE THIS INFORMATION to answer
+- Example: If memory says "name: your name is levi" and user asks "what's my name?", answer "Your name is Levi"
+- NEVER say "I don't have that information" if the answer IS in the memory block
+- You are Wyzer the assistant, the user is a different person
+
 Rules:
 - Reply in 1-2 sentences unless user asks for more detail
 - Be direct and helpful, no disclaimers
-- For knowledge questions: reply directly with {{"reply": "your answer"}}
-- For actions (open apps, control volume, etc.): use intents array
-- Do NOT invent tool names - only use tools I provide
+- For knowledge/conversation/stories/explanations: use {{"reply": "your answer"}} ONLY
+- Use tools ONLY when user explicitly says action words: "open", "launch", "set", "play", "pause", "mute", "close", "minimize", "maximize"
+- If no clear action word, default to {{"reply": "..."}}
+- NEVER invent tool names like "explain", "tell_story", "story_generator", "recommend", "search", "create_story" - these are NOT tools!
+
+Creative content rules:
+- You ARE allowed to generate short stories, fictional narratives, and creative content when the user explicitly asks
+- Creative requests (stories, poems, jokes, explanations) require NO tools - reply directly
+- Keep creative content spoken-friendly: no markdown, no bullet lists, no numbered lists
+- Be concise unless user asks for more detail
+
+Anti-hallucination rules:
+- NEVER invent or request tools that don't exist
+- If a request is creative (story, narrative, poem, joke, explanation, opinion), respond directly in plain text
+- Only use tools from the provided list - if unsure, just reply without tools
 
 Response format (JSON only, no markdown):
 Direct reply: {{"reply": "your response"}}
 With tools: {{"intents": [{{"tool": "name", "args": {{}}}}], "reply": "brief message"}}"""
 
 COMPACT_SYSTEM_PROMPT = """You are Wyzer, a local voice assistant.
+CRITICAL: When user asks "my name" or "my X", they ask about THEMSELVES. If [LONG-TERM MEMORY] exists below, USE IT to answer - never say "I don't know" if memory has the answer.
 Reply in 1-2 sentences. Be direct.
-Response format (JSON only): {{"reply": "text"}} or {{"intents": [{{"tool": "name", "args": {{}}}}], "reply": "text"}}"""
+Use {{"reply": "text"}} for questions/conversation/stories/creative content.
+Use tools ONLY for explicit actions: "open X", "set volume", "play/pause".
+NEVER invent tools. Stories and creative content need NO tools - reply directly."""
+
+# ============================================================================
+# FAST LANE SYSTEM PROMPT (voice_fast llamacpp mode only)
+# ============================================================================
+# Ultra-minimal prompt for snappy voice Q&A - keeps est_tokens <= 150 for simple queries
+FASTLANE_SYSTEM_PROMPT = """You are Wyzer. Answer in one short sentence. No extra commentary."""
 
 
 # ============================================================================
@@ -287,16 +315,124 @@ class PromptBuilder:
         return len([l for l in memories.split("\n") if l.startswith("- ")])
     
     def _get_minimal_examples(self) -> str:
-        """Get minimal examples (2 short ones)."""
+        """Get minimal examples (3 short ones)."""
         return """
 Examples:
 User: "open chrome" -> {{"intents": [{{"tool": "open_target", "args": {{"query": "chrome"}}}}], "reply": "Opening Chrome"}}
-User: "what is 2+2" -> {{"reply": "2+2 equals 4."}}"""
+User: "what is 2+2" -> {{"reply": "2+2 equals 4."}}
+User: "tell me a story" -> {{"reply": "Once upon a time..."}}"""
     
     def _log_prompt_info(self, mode: str, components: List[str], est_tokens: int) -> None:
         """Log prompt construction info."""
         comp_str = ",".join(components)
         self.logger.info(f"[PROMPT] mode={mode} components=[{comp_str}] est_tokens={est_tokens}")
+
+
+# ============================================================================
+# FAST LANE PROMPT BUILDER (voice_fast llamacpp mode only)
+# ============================================================================
+
+class FastLanePromptBuilder:
+    """
+    Ultra-minimal prompt builder for voice_fast llamacpp mode.
+    
+    Goals:
+    - est_tokens <= 150 for simple identity queries like "What's my name?"
+    - Only include memory if memory_manager selected something non-empty
+    - Minimal system prompt, no formatting headers or examples
+    """
+    
+    def __init__(
+        self,
+        user_text: str,
+        memories_context: str = "",
+    ):
+        """
+        Initialize fast-lane prompt builder.
+        
+        Args:
+            user_text: The user's input
+            memories_context: Smart-selected memories (only included if non-empty)
+        """
+        self.user_text = user_text
+        self.memories_context = memories_context
+        self.logger = get_logger()
+    
+    def build(self) -> Tuple[str, str, Dict[str, int]]:
+        """
+        Build ultra-minimal fast-lane prompt.
+        
+        Returns:
+            Tuple of (prompt_text, mode, stats_dict)
+            where stats_dict has keys: sys_chars, mem_chars, tokens_est
+        """
+        parts = [FASTLANE_SYSTEM_PROMPT]
+        sys_chars = len(FASTLANE_SYSTEM_PROMPT)
+        mem_chars = 0
+        
+        # Only include memory if non-empty and relevant
+        if self.memories_context and self.memories_context.strip():
+            # Minimal memory block - cap at 200 chars for fast lane
+            mem_block = self._cap_memory_block(self.memories_context, max_chars=200)
+            if mem_block:
+                parts.append(f"\n[MEMORY]\n{mem_block}")
+                mem_chars = len(mem_block)
+        
+        # User input with minimal format
+        parts.append(f"\nUser: {self.user_text}\nWyzer:")
+        
+        prompt = "".join(parts)
+        tokens_est = estimate_tokens(prompt)
+        
+        stats = {
+            "sys_chars": sys_chars,
+            "mem_chars": mem_chars,
+            "tokens_est": tokens_est,
+        }
+        
+        self.logger.info(
+            f"[PROMPT_FASTLANE] enabled=True tokens_est={tokens_est} "
+            f"mem_chars={mem_chars} sys_chars={sys_chars}"
+        )
+        
+        return prompt, "fastlane", stats
+    
+    def _cap_memory_block(self, memories: str, max_chars: int = 200) -> str:
+        """Cap memories to max_chars, keeping complete lines."""
+        if not memories:
+            return ""
+        
+        stripped = memories.strip()
+        if len(stripped) <= max_chars:
+            return stripped
+        
+        # Truncate at last newline before max_chars
+        truncated = stripped[:max_chars]
+        last_newline = truncated.rfind("\n")
+        if last_newline > 0:
+            return truncated[:last_newline]
+        return truncated
+
+
+def build_fastlane_prompt(
+    user_text: str,
+    memories_context: str = "",
+) -> Tuple[str, str, Dict[str, int]]:
+    """
+    Build an ultra-minimal fast-lane prompt for voice_fast mode.
+    
+    Args:
+        user_text: The user's input
+        memories_context: Smart-selected memories (only included if non-empty)
+        
+    Returns:
+        Tuple of (prompt_text, mode, stats_dict)
+    """
+    builder = FastLanePromptBuilder(
+        user_text=user_text,
+        memories_context=memories_context,
+    )
+    return builder.build()
 
 
 def build_llm_prompt(

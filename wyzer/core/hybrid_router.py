@@ -156,6 +156,32 @@ _REASONING_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Creative content patterns: stories, poems, jokes, narratives
+# These should ALWAYS route to LLM reply-only, never attempt tool execution
+_CREATIVE_CONTENT_RE = re.compile(
+    r"(?:"
+    r"(?:tell|write|create|make|give)\s+(?:me\s+)?(?:a\s+)?(?:short\s+)?(?:story|tale|narrative|poem|joke|limerick|haiku)|"  # "tell me a story"
+    r"^(?:a\s+)?story\s+(?:about|of|for)|"         # "a story about..."
+    r"\bstory\s+(?:about|of|for|featuring|with)\b|"  # "story about X"
+    r"^once\s+upon\s+a\s+time|"                    # fairy tale prompt
+    r"\b(?:creative|fictional|fantasy)\s+(?:story|tale|narrative)|"  # "creative story"
+    r"\bwrite\s+(?:about|something|me)\b|"         # "write about..."
+    r"\bcompose\s+(?:a\s+)?(?:story|poem|song|lyrics)|"  # "compose a poem"
+    r"\bmake\s+up\s+(?:a\s+)?(?:story|tale)|"      # "make up a story"
+    r"\bimagine\s+(?:a\s+)?(?:story|scenario|world)|"  # "imagine a story"
+    r"\binvent\s+(?:a\s+)?(?:story|tale)"          # "invent a story"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_creative_request(text: str) -> bool:
+    """Check if text is a creative content request (story, poem, joke, etc.)."""
+    tl = (text or "").strip()
+    if not tl:
+        return False
+    return bool(_CREATIVE_CONTENT_RE.search(tl))
+
 
 # Check if text is a volume query that should bypass reasoning check
 def _is_volume_query(text: str) -> bool:
@@ -178,6 +204,9 @@ def needs_reasoning(text: str) -> bool:
     tl = (text or "").strip()
     if not tl:
         return False
+    # Creative content requests should always need LLM reply-only (no tools)
+    if _is_creative_request(tl):
+        return True
     # Volume queries should never need reasoning - they're simple tool calls
     if _is_volume_query(tl):
         return False

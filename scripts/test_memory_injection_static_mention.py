@@ -76,25 +76,31 @@ class TestMemoryInjectionCore(unittest.TestCase):
         result = self.mgr.select_for_injection("hello")
         self.assertEqual(result, "")
     
-    def test_pinned_records_always_included(self):
-        """Pinned records are always included regardless of user text."""
-        # Add a pinned memory
-        self.mgr.add_explicit("My favorite color is blue", pinned=True)
+    def test_pinned_records_included_for_personal_queries(self):
+        """Pinned global records are included for personal queries."""
+        # Add a pinned memory with a global key (name, wife, dog, etc.)
+        self.mgr.add_explicit("My name is Alice", key="name", pinned=True)
         
-        # Query with unrelated text
-        result = self.mgr.select_for_injection("what is the weather")
+        # Personal query should include global pinned memory
+        result = self.mgr.select_for_injection("who am I")
+        self.assertIn("alice", result.lower())
         
-        self.assertIn("blue", result.lower())
+        # Non-personal query should NOT include unrelated pinned memory
+        self.mgr.add_explicit("My favorite color is blue", key="favorite_color", pinned=True)
+        result2 = self.mgr.select_for_injection("what is the weather")
+        self.assertNotIn("blue", result2.lower())
     
     def test_pinned_max_respected(self):
-        """Only PINNED_MAX pinned records are included."""
-        # Add 6 pinned memories (more than default PINNED_MAX=4)
-        for i in range(6):
-            self.mgr.add_explicit(f"Pinned fact number {i}", pinned=True)
+        """Only PINNED_MAX pinned records are included for matching queries."""
+        # Add 6 pinned memories with global keys (more than default PINNED_MAX=4)
+        global_keys = ["name", "wife", "dog", "birthday", "location", "pet"]
+        for i, key in enumerate(global_keys):
+            self.mgr.add_explicit(f"Pinned fact number {i}", key=key, pinned=True)
         
-        result = self.mgr.select_for_injection("anything", pinned_max=4)
+        # Personal query to trigger global pinned injection
+        result = self.mgr.select_for_injection("who am I", pinned_max=4)
         
-        # Count how many pinned facts appear
+        # Count how many pinned facts appear (should be limited to 4)
         count = result.lower().count("pinned fact")
         self.assertLessEqual(count, 4)
     
@@ -141,23 +147,25 @@ class TestMemoryInjectionCore(unittest.TestCase):
     
     def test_k_total_respected(self):
         """Total memories don't exceed K_TOTAL."""
-        # Add 10 unpinned memories
+        # Add 10 memories that will be mention-triggered
         for i in range(10):
-            self.mgr.add_explicit(f"Fact number {i}", key=f"fact{i}")
+            self.mgr.add_explicit(f"Fact about item{i}", key=f"item{i}")
         
-        result = self.mgr.select_for_injection("general query", k_total=6)
+        # Query mentions several keys
+        result = self.mgr.select_for_injection("tell me about item0 item1 item2 item3 item4 item5 item6", k_total=6)
         
-        # Count bullet points
-        count = result.count("•")
+        # Count lines with memories (start with "- (")
+        count = len([l for l in result.split('\n') if l.strip().startswith('- (')])
         self.assertLessEqual(count, 6)
     
     def test_max_chars_respected(self):
         """Output doesn't exceed max_chars."""
-        # Add many long memories
+        # Add many long memories with keys that will be mention-triggered
         for i in range(20):
-            self.mgr.add_explicit(f"This is a very long memory number {i} " * 5)
+            self.mgr.add_explicit(f"This is a very long memory about topic{i} " * 5, key=f"topic{i}")
         
-        result = self.mgr.select_for_injection("query", max_chars=500)
+        # Query that mentions several topics
+        result = self.mgr.select_for_injection("tell me about topic0 topic1 topic2 topic3", max_chars=500)
         
         self.assertLessEqual(len(result), 600)  # Some buffer for header
     
@@ -175,16 +183,15 @@ class TestMemoryInjectionCore(unittest.TestCase):
         self.assertEqual(result2, result3)
     
     def test_stopwords_ignored_in_matching(self):
-        """Common words like 'the', 'my', 'is' don't cause false matches."""
-        self.mgr.add_explicit("The is my favorite word", key="test")
+        """Common words like 'the', 'is' don't cause false matches."""
+        self.mgr.add_explicit("The is my favorite word", key="test_word")
         
-        # Query with only stopwords
-        result = self.mgr.select_for_injection("the is my a an")
+        # Query with only stopwords (not personal query, no matching keys)
+        result = self.mgr.select_for_injection("the is a an at")
         
-        # Should not be included since only stopwords match
-        # (unless it's in top-K fallback, which is fine)
-        # Just verify it doesn't crash
-        self.assertIsInstance(result, str)
+        # Should return empty since no relevant memories
+        # (the memory key 'test_word' doesn't match query tokens)
+        self.assertEqual(result, "")
 
 
 class TestMigrationBackwardCompat(unittest.TestCase):
@@ -456,12 +463,19 @@ class TestScoringDeterminism(unittest.TestCase):
         
         self.assertIn("tesla", result.lower())
     
-    def test_pinned_always_first(self):
-        """Pinned memories should appear first in output."""
-        result = self.mgr.select_for_injection("random unrelated query")
+    def test_pinned_first_when_relevant(self):
+        """Pinned memories appear first when included."""
+        # Add a pinned global memory and query personally
+        result = self.mgr.select_for_injection("who is my wife")
         
-        # Sarah should be mentioned since that memory is pinned
+        # Family memory is pinned AND matches query (key=family, query mentions wife)
         self.assertIn("sarah", result.lower())
+        
+        # The pinned one should appear before others
+        lines = [l for l in result.split('\n') if l.startswith('- (')]
+        if len(lines) >= 1:
+            # First line should be the pinned/mentioned family memory
+            self.assertIn("sarah", lines[0].lower())
 
 
 if __name__ == "__main__":
