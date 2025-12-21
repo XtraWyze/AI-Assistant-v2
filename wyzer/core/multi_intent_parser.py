@@ -79,6 +79,34 @@ def _infer_missing_verb(clause: str, previous_clauses: List[str]) -> str:
         if re.match(pattern, clause, re.IGNORECASE):
             return clause
     
+    # DON'T infer verbs for questions or informational queries
+    # These should be handled by LLM, not treated as tool targets
+    clause_lower = clause.lower()
+    question_patterns = [
+        r"^what(?:'?s|\s+is|\s+are|\s+does|\s+do)\s+",  # what's, what is, what are
+        r"^who\s+",                                      # who is
+        r"^where\s+",                                    # where is
+        r"^when\s+",                                     # when is
+        r"^why\s+",                                      # why is
+        r"^how\s+",                                      # how do, how is
+        r"^is\s+",                                       # is it
+        r"^are\s+",                                      # are there
+        r"^can\s+",                                      # can you
+        r"^does\s+",                                     # does it
+        r"^do\s+",                                       # do you
+        r"^will\s+",                                     # will it
+        r"^should\s+",                                   # should I
+        r"^tell\s+me\s+",                                # tell me about
+        r"^explain\s+",                                  # explain this
+    ]
+    for pattern in question_patterns:
+        if re.match(pattern, clause_lower):
+            return clause  # Don't infer verb for questions
+    
+    # Also check if it ends with a question mark
+    if clause.rstrip().endswith("?"):
+        return clause
+    
     # Look at the last clause that had a verb
     for prev in reversed(previous_clauses):
         prev = prev.strip().lower()
@@ -313,5 +341,85 @@ def parse_multi_intent_with_fallback(text: str) -> Optional[Tuple[List[Dict[str,
         return (intents, confidence)
     
     # Otherwise, let LLM handle it
+    return None
+
+
+def parse_multi_intent_partial(text: str) -> Optional[Tuple[List[Dict[str, Any]], str, float]]:
+    """
+    Parse multi-intent command with PARTIAL success support.
+    
+    This handles cases like "Open Chrome, Open Chrome, and what's a VPN?" where
+    some clauses are tool intents and some need LLM handling.
+    
+    Returns:
+        (tool_intents, leftover_text, confidence) if at least one tool intent parsed
+        None if no tool intents could be parsed
+        
+    The leftover_text contains clauses that need LLM handling (questions, etc.)
+    """
+    raw_text = (text or "").strip()
+    if not raw_text:
+        return None
+    
+    if not _looks_like_multi_intent(raw_text):
+        return None
+    
+    # Try each separator in order of preference
+    for sep_pattern, execution_mode in MULTI_INTENT_SEPARATORS:
+        clauses = _split_by_separator(raw_text, sep_pattern)
+        
+        if len(clauses) < 2:
+            continue
+        
+        # Expand comma-separated lists
+        expanded_clauses = []
+        for clause in clauses:
+            if ',' in clause and sep_pattern != r"\s*,\s*":
+                comma_parts = _split_comma_separated_list(clause)
+                expanded_clauses.extend(comma_parts)
+            else:
+                expanded_clauses.append(clause)
+        
+        if len(expanded_clauses) > len(clauses):
+            clauses = expanded_clauses
+        
+        if len(clauses) < 2 or len(clauses) > 7:
+            continue
+        
+        # Parse clauses, collecting tool intents and leftover text
+        parsed_intents = []
+        leftover_clauses = []
+        min_confidence = 1.0
+        processed_clauses = []
+        
+        for clause in clauses:
+            clause = clause.strip()
+            if not clause:
+                continue
+            
+            # Try to infer missing verb from previous clauses
+            enhanced_clause = _infer_missing_verb(clause, processed_clauses)
+            processed_clauses.append(enhanced_clause)
+            
+            # Use hybrid_router's single-clause decision
+            decision = _decide_single_clause(enhanced_clause)
+            
+            # If this clause can be handled as a tool, collect it
+            if decision.mode == "tool_plan" and decision.confidence >= 0.7 and decision.intents:
+                parsed_intents.extend(decision.intents)
+                min_confidence = min(min_confidence, decision.confidence)
+            else:
+                # This clause needs LLM - add to leftover (use original clause, not enhanced)
+                leftover_clauses.append(clause)
+        
+        # If we got at least one tool intent and have leftover, return partial result
+        if parsed_intents and leftover_clauses:
+            leftover_text = ", ".join(leftover_clauses)
+            return (parsed_intents, leftover_text, min_confidence * 0.90)
+        
+        # If all clauses parsed as tools, use the regular function
+        if parsed_intents and not leftover_clauses:
+            return (parsed_intents, "", min_confidence * 0.95)
+    
     return None
 

@@ -1,5 +1,7 @@
 # Device/Drive Scanning with Deep Tier Implementation
 
+> *Last Updated: December 2025*
+
 ## Overview
 Updated the system storage scanning system to support deep tier (full file system) scanning as the default for device and drive-specific scan commands. This complements the library scanning tier 3 implementation and provides consistent comprehensive scanning across the system.
 

@@ -2,6 +2,8 @@
 
 Complete reference for all command-line arguments and environment variable configurations.
 
+> *Last Updated: December 2025*
+
 ---
 
 ## Command-Line Arguments
@@ -30,15 +32,25 @@ Complete reference for all command-line arguments and environment variable confi
 | `--model` | choice | `small` | Whisper model size: `tiny`, `base`, `small`, `medium`, `large` |
 | `--whisper-device` | choice | `cpu` | Device for Whisper inference: `cpu`, `cuda` |
 
-### LLM / Ollama
+### LLM Configuration
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--no-ollama` | flag | `false` | Run without Ollama entirely (tools-only mode, LLM features disabled) |
-| `--llm` | choice | `ollama` | LLM mode: `ollama`, `off` |
+| `--no-ollama` | flag | `false` | Run without LLM entirely (tools-only mode, LLM features disabled) |
+| `--llm` | choice | `llamacpp` | LLM mode: `llamacpp`, `ollama`, `off` |
 | `--ollama-model` | string | `llama3.1:latest` | Ollama model name |
 | `--ollama-url` | string | `http://127.0.0.1:11434` | Ollama API base URL |
 | `--llm-timeout` | int | `30` | LLM request timeout in seconds |
+
+### llama.cpp Configuration
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--llamacpp-bin` | string | `./wyzer/llm_bin/llama-server.exe` | Path to llama-server executable |
+| `--llamacpp-model` | string | `./wyzer/llm_models/model.gguf` | Path to GGUF model file |
+| `--llamacpp-port` | int | `8081` | HTTP port for llama.cpp server |
+| `--llamacpp-ctx` | int | `2048` | Context window size |
+| `--llamacpp-threads` | int | `0` (auto) | Number of threads (0=auto recommended) |
 
 ### Text-to-Speech (TTS)
 
@@ -114,8 +126,8 @@ All environment variables are prefixed with `WYZER_`.
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
-| `WYZER_LLM_MODE` | string | `ollama` | LLM mode: `ollama` or `off` |
-| `WYZER_NO_OLLAMA` | bool | `false` | Run without Ollama entirely |
+| `WYZER_LLM_MODE` | string | `llamacpp` | LLM mode: `llamacpp`, `ollama`, or `off` |
+| `WYZER_NO_OLLAMA` | bool | `false` | Run without LLM entirely |
 | `WYZER_OLLAMA_URL` | string | `http://127.0.0.1:11434` | Ollama API base URL |
 | `WYZER_OLLAMA_MODEL` | string | `llama3.1:latest` | Ollama model name |
 | `WYZER_LLM_TIMEOUT` | int | `30` | LLM request timeout in seconds |
@@ -126,19 +138,44 @@ All environment variables are prefixed with `WYZER_`.
 | `WYZER_OLLAMA_NUM_PREDICT` | int | `120` | Ollama max tokens to predict |
 | `WYZER_LLM_MAX_PROMPT_CHARS` | int | `8000` | Maximum prompt characters for LLM |
 
+### llama.cpp Settings
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `WYZER_LLAMACPP_BIN` | string | `./wyzer/llm_bin/llama-server.exe` | Path to llama-server executable |
+| `WYZER_LLAMACPP_MODEL` | string | `./wyzer/llm_models/model.gguf` | Path to GGUF model file |
+| `WYZER_LLAMACPP_PORT` | int | `8081` | HTTP port for llama.cpp server |
+| `WYZER_LLAMACPP_CTX` | int | `2048` | Context window size |
+| `WYZER_LLAMACPP_THREADS` | int | `0` (auto) | Number of threads |
+| `WYZER_LLAMACPP_AUTO_OPTIMIZE` | bool | `true` | Auto-detect GPU and optimize settings |
+| `WYZER_LLAMACPP_GPU_LAYERS` | int | `-1` (all) | Number of layers to offload to GPU |
+| `WYZER_LLAMACPP_BATCH_SIZE` | int | `512` | Batch size for inference |
+
+### Voice-Fast Preset
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `WYZER_VOICE_FAST` | string | `auto` | Enable voice-fast preset (true/false/auto) |
+| `WYZER_VOICE_FAST_MAX_TOKENS` | int | `64` | Max tokens for concise responses |
+| `WYZER_VOICE_FAST_TEMPERATURE` | float | `0.2` | Temperature for voice-fast mode |
+| `WYZER_VOICE_FAST_TOP_P` | float | `0.9` | Top_p for voice-fast mode |
+| `WYZER_VOICE_FAST_STORY_MAX_TOKENS` | int | `320` | Max tokens for creative content |
+
 ### Text-to-Speech (TTS)
 
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `WYZER_TTS_ENABLED` | bool | `true` | Enable TTS |
 | `WYZER_STREAM_TTS` | bool | `false` | Enable streaming TTS (speak chunks as LLM generates them) |
+| `WYZER_STREAM_TTS_BUFFER_CHARS` | int | `150` | Minimum buffer size before emitting a TTS segment |
+| `WYZER_STREAM_TTS_FIRST_EMIT_CHARS` | int | `32` | First-emit optimization for lower perceived latency |
 | `WYZER_TTS_ENGINE` | string | `piper` | TTS engine to use |
 | `WYZER_PIPER_EXE_PATH` | string | `./assets/piper/piper.exe` | Path to Piper executable |
 | `WYZER_PIPER_MODEL_PATH` | string | `./assets/piper/en_US-voice.onnx` | Path to Piper voice model |
 | `WYZER_PIPER_SPEAKER_ID` | int | `None` | Piper speaker ID (optional) |
 | `WYZER_TTS_RATE` | float | `1.0` | TTS speech rate multiplier |
 | `WYZER_TTS_OUTPUT_DEVICE` | int | `None` | Audio output device for TTS |
-| `WYZER_SPEAK_HOTWORD_INTERRUPT` | bool | `true` | Allow hotword to interrupt TTS |
+| `WYZER_SPEAK_HOTWORD_INTERRUPT` | bool | `true` | Allow hotword to interrupt TTS (barge-in) |
 | `WYZER_POST_SPEAK_DRAIN_SEC` | float | `0.35` | Post-speak drain duration (seconds) |
 | `WYZER_SPEAK_START_COOLDOWN_SEC` | float | `1.8` | Speak start cooldown (seconds) |
 | `WYZER_POST_BARGEIN_IGNORE_SEC` | float | `3.0` | Post barge-in ignore duration (seconds) |
@@ -214,9 +251,18 @@ All environment variables are prefixed with `WYZER_`.
 
 ### Basic Usage
 ```bash
-python run.py                           # Normal mode with hotword
+python run.py                           # Normal mode with hotword (uses llama.cpp)
+python run.py --llm ollama              # Use Ollama instead of llama.cpp
 python run.py --no-hotword              # Immediate listening (no hotword)
 python run.py --quiet                   # Clean output without debug info
+```
+
+### llama.cpp Configuration
+```bash
+python run.py --llm llamacpp            # Explicit llama.cpp mode (default)
+python run.py --llamacpp-model ./wyzer/llm_models/custom.gguf  # Custom model
+python run.py --llamacpp-ctx 4096       # Larger context window
+python run.py --llamacpp-threads 8      # Specific thread count
 ```
 
 ### Memory Injection

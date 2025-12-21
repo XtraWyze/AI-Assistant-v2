@@ -1,5 +1,7 @@
 # Interruption System Implementation
 
+> *Last Updated: December 2025*
+
 ## Summary
 Added a clean interruption system that allows canceling the current process without breaking the assistant. The interruption works across both single-process and multi-process modes.
 

@@ -607,9 +607,9 @@ def _decide_single_clause(text: str) -> HybridDecision:
         weekday_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
         
         # Pattern: "weather in <location>" / "temperature in <location>" / "forecast for <location>"
-        m = re.search(r"\b(?:in|for|at|near|on)\s+(.+?)(?:\?|$)", clause, re.IGNORECASE)
+        m = re.search(r"\b(?:in|for|at|near|on)\s+(.+?)(?:\?|!|\.)?$", clause, re.IGNORECASE)
         if m:
-            location = (m.group(1) or "").strip().rstrip("?").strip()
+            location = (m.group(1) or "").strip().rstrip("?!.").strip()
             # Filter out common non-location words and temporal words
             location_l = location.lower()
             temporal_words = {"it", "this", "here", "there", "the area", "outside", "tomorrow", "today", "the week", "this week", "next week", "weather", "the weather", "forecast", "the forecast"}
@@ -1222,11 +1222,27 @@ def decide(text: str) -> HybridDecision:
     # Try multi-intent parsing: handle "open steam and chrome" directly without LLM
     if looks_multi_intent(raw):
         try:
-            from wyzer.core.multi_intent_parser import parse_multi_intent_with_fallback
+            from wyzer.core.multi_intent_parser import parse_multi_intent_with_fallback, parse_multi_intent_partial
             result = parse_multi_intent_with_fallback(raw)
             if result is not None:
                 intents, confidence = result
                 return HybridDecision(mode="tool_plan", intents=intents, reply="", confidence=confidence)
+            
+            # Try partial parsing: "Open Chrome, Open Chrome, and what's a VPN?"
+            # This returns tool intents + leftover text for LLM
+            partial_result = parse_multi_intent_partial(raw)
+            if partial_result is not None:
+                intents, leftover_text, confidence = partial_result
+                if intents and leftover_text:
+                    # Return with special marker indicating partial + leftover
+                    return HybridDecision(
+                        mode="tool_plan",
+                        intents=intents,
+                        reply=f"__LEFTOVER__:{leftover_text}",  # Special marker for orchestrator
+                        confidence=confidence
+                    )
+                elif intents:
+                    return HybridDecision(mode="tool_plan", intents=intents, reply="", confidence=confidence)
         except Exception:
             # If multi-intent parser fails, fall back to LLM
             pass

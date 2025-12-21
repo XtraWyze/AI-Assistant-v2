@@ -1,6 +1,8 @@
 # Wyzer AI Assistant - Complete Documentation
 
 > **A fully local, privacy-focused voice assistant for Windows**
+> 
+> *Last Updated: December 2025*
 
 ---
 
@@ -19,7 +21,8 @@
 11. [Multi-Intent Commands](#multi-intent-commands)
 12. [Hybrid Router](#hybrid-router)
 13. [Memory System](#memory-system)
-14. [Troubleshooting](#troubleshooting)
+14. [Interruption System](#interruption-system)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -28,18 +31,21 @@
 Wyzer is a **local voice assistant** that runs entirely on your Windows machine. It provides:
 
 - **Hotword Detection**: Wake the assistant with "Hey Wyzer" or just "Wyzer"
-- **Speech-to-Text (STT)**: Uses Whisper for accurate transcription
-- **Local LLM Processing**: Ollama integration for natural language understanding
+- **Speech-to-Text (STT)**: Uses Faster-Whisper for accurate transcription
+- **Local LLM Processing**: Supports llama.cpp (embedded server) or Ollama for natural language understanding
 - **Text-to-Speech (TTS)**: Piper TTS for natural voice responses
 - **Tool Execution**: Control your system, manage windows, play media, and more
-- **Multi-Intent Commands**: Execute multiple actions in a single request
+- **Multi-Intent Commands**: Execute multiple actions in a single request (with or without separators)
 - **Memory System**: Remember facts about you with explicit "remember X" commands
+- **Hybrid Routing**: Fast deterministic routing bypasses LLM for obvious commands
+- **Interruption System**: Cancel any process with the wake word (barge-in)
 
 ### Key Principles
 
 - **Privacy First**: All processing happens locally - no cloud services required
 - **Modular Design**: Each component (STT, LLM, TTS, Tools) is independently configurable
 - **Multiprocess Architecture**: Responsive UI with heavy processing offloaded to worker processes
+- **Fast-Path Routing**: Deterministic commands bypass LLM for sub-100ms response times
 
 ---
 
@@ -112,11 +118,18 @@ python -m venv venv_new
 pip install -r requirements.txt
 ```
 
-### Step 4: Install Ollama Model
+### Step 4: Install Ollama Model (if using Ollama mode)
 
 ```bash
 ollama pull llama3.1:latest
 ```
+
+### Step 4b: Setup llama.cpp (if using llamacpp mode - default)
+
+1. Download `llama-server.exe` from [llama.cpp releases](https://github.com/ggerganov/llama.cpp/releases)
+2. Place in `wyzer/llm_bin/`
+3. Download a GGUF model (e.g., `llama-3.1-8b-instruct.Q4_K_M.gguf`)
+4. Place in `wyzer/llm_models/` and rename to `model.gguf`
 
 ### Step 5: Verify Piper Setup
 
@@ -159,8 +172,10 @@ run.bat
 | **Media** | "Pause music", "Next track", "Volume up" |
 | **Volume** | "Set volume to 50%", "Mute Spotify", "Turn down Chrome" |
 | **Timers** | "Set a timer for 5 minutes", "Cancel the timer" |
-| **System** | "What's my system info?", "Show monitor info" |
-| **Multi-Intent** | "Open Chrome and then pause music" |
+| **System** | "What's my system info?", "Show monitor info", "How many monitors?" |
+| **Storage** | "List drives", "Scan devices", "Open D drive", "How much space on C?" |
+| **Google** | "Google cats", "Search google for recipes" |
+| **Multi-Intent** | "Open Chrome and then pause music", "Close Discord open Spotify" |
 
 ### Follow-Up Mode
 
@@ -193,39 +208,56 @@ python run.py [OPTIONS]
 | `--whisper-device` | Device for Whisper (cpu/cuda) | `cpu` |
 | `--device` | Audio input device index | Auto |
 | `--list-devices` | List audio devices and exit | - |
-| `--no-ollama` | Run without Ollama (tools-only mode) | Off |
-| `--llm` | LLM mode (ollama/off) | `ollama` |
+| `--no-ollama` | Run without LLM (tools-only mode) | Off |
+| `--llm` | LLM mode (llamacpp/ollama/off) | `llamacpp` |
 | `--ollama-model` | Ollama model name | `llama3.1:latest` |
 | `--ollama-url` | Ollama API URL | `http://127.0.0.1:11434` |
+| `--llamacpp-bin` | Path to llama-server executable | `./wyzer/llm_bin/llama-server.exe` |
+| `--llamacpp-model` | Path to GGUF model file | `./wyzer/llm_models/model.gguf` |
+| `--llamacpp-port` | HTTP port for llama.cpp server | `8081` |
+| `--llamacpp-ctx` | Context window size | `2048` |
+| `--llamacpp-threads` | Number of threads (0=auto) | `0` |
 | `--llm-timeout` | LLM request timeout (seconds) | `30` |
 | `--tts` | Enable TTS (on/off) | `on` |
 | `--tts-device` | Audio output device for TTS | Auto |
 | `--no-speak-interrupt` | Disable barge-in | Off |
+| `--stream-tts` | Enable streaming TTS | Off |
 | `--quiet` | Hide debug info (cleaner output) | Off |
 | `--single-process` | Run in single-process mode (debugging) | Off |
 | `--log-level` | Logging level (DEBUG/INFO/WARNING/ERROR) | `INFO` |
 | `--profile` | Performance profile (low_end/normal) | `normal` |
+| `--no-memories` | Disable long-term memory injection | Off |
 
 ### Environment Variables
 
+All environment variables are prefixed with `WYZER_`.
+
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `WYZER_NO_OLLAMA` | Disable Ollama entirely | `false` |
-| `WYZER_QUIET_MODE` | Enable quiet mode | `false` |
+| `WYZER_LLM_MODE` | LLM mode: `llamacpp`, `ollama`, or `off` | `llamacpp` |
+| `WYZER_NO_OLLAMA` | Disable LLM entirely | `false` |
 | `WYZER_SAMPLE_RATE` | Audio sample rate | `16000` |
 | `WYZER_VAD_THRESHOLD` | VAD sensitivity (0.0-1.0) | `0.5` |
-| `WYZER_VAD_SILENCE_TIMEOUT` | Silence timeout (seconds) | `0.8` |
+| `WYZER_VAD_SILENCE_TIMEOUT` | Silence timeout (seconds) | `1.2` |
+| `WYZER_NO_SPEECH_START_TIMEOUT_SEC` | Abort if no speech within this window | `2.5` |
 | `WYZER_MAX_RECORD_SECONDS` | Max recording duration | `10.0` |
 | `WYZER_HOTWORD_THRESHOLD` | Hotword sensitivity | `0.5` |
 | `WYZER_HOTWORD_COOLDOWN_SEC` | Cooldown between hotwords | `1.5` |
+| `WYZER_HOTWORD_TRIGGER_STREAK` | Consecutive frames required | `3` |
 | `WYZER_WHISPER_MODEL` | Default Whisper model | `small` |
 | `WYZER_OLLAMA_MODEL` | Default Ollama model | `llama3.1:latest` |
 | `WYZER_OLLAMA_URL` | Ollama API URL | `http://127.0.0.1:11434` |
 | `WYZER_OLLAMA_STREAM` | Enable streaming responses | `true` |
 | `WYZER_OLLAMA_TEMPERATURE` | LLM temperature | `0.4` |
 | `WYZER_TTS_ENABLED` | Enable TTS | `true` |
+| `WYZER_STREAM_TTS` | Enable streaming TTS | `false` |
 | `WYZER_FOLLOWUP_ENABLED` | Enable follow-up mode | `true` |
-| `WYZER_FOLLOWUP_TIMEOUT_SEC` | Follow-up timeout | `3.0` |
+| `WYZER_FOLLOWUP_TIMEOUT_SEC` | Follow-up timeout | `2.0` |
+| `WYZER_QUIET_MODE` | Hide debug info | `false` |
+| `WYZER_USE_MEMORIES` | Enable memory injection | `true` |
+| `WYZER_TOOL_POOL_ENABLED` | Enable tool worker pool | `true` |
+| `WYZER_TOOL_POOL_WORKERS` | Number of tool pool workers | `3` |
+| `WYZER_VOICE_FAST` | Concise response mode | `auto` |
 
 ---
 
@@ -295,7 +327,7 @@ Wyzer includes a comprehensive set of tools for system control:
 |------|-------------|---------|
 | `open_target` | Open apps, folders, files, URLs | "Open Chrome", "Open Downloads" |
 | `open_website` | Open a website in browser | "Open youtube.com" |
-| `local_library_refresh` | Re-scan installed apps | "Refresh the library" |
+| `local_library_refresh` | Re-scan installed apps | "Refresh the library", "Scan files" |
 
 ### Window Management
 
@@ -303,7 +335,7 @@ Wyzer includes a comprehensive set of tools for system control:
 |------|-------------|---------|
 | `focus_window` | Bring window to front | "Focus Discord" |
 | `minimize_window` | Minimize a window | "Minimize Chrome" |
-| `maximize_window` | Maximize a window | "Maximize Spotify" |
+| `maximize_window` | Maximize a window | "Maximize Spotify", "Fullscreen Chrome" |
 | `close_window` | Close a window | "Close Notepad" |
 | `move_window_to_monitor` | Move window to another display | "Move Chrome to monitor 2" |
 | `get_window_monitor` | Get which monitor a window is on | "What monitor is Chrome on?" |
@@ -312,18 +344,18 @@ Wyzer includes a comprehensive set of tools for system control:
 
 | Tool | Description | Example |
 |------|-------------|---------|
-| `media_play_pause` | Toggle play/pause | "Pause music", "Resume" |
-| `media_next` | Skip to next track | "Next track" |
-| `media_previous` | Go to previous track | "Previous song" |
-| `get_now_playing` | Get current media info | "What's playing?" |
+| `media_play_pause` | Toggle play/pause | "Pause music", "Resume", "Play" |
+| `media_next` | Skip to next track | "Next track", "Skip" |
+| `media_previous` | Go to previous track | "Previous song", "Go back" |
+| `get_now_playing` | Get current media info | "What's playing?", "What song is this?" |
 
 ### Volume Control
 
 | Tool | Description | Example |
 |------|-------------|---------|
-| `volume_control` | Master/app volume control | "Volume 50%", "Mute Spotify" |
-| `volume_up` | Increase volume | "Volume up" |
-| `volume_down` | Decrease volume | "Turn it down" |
+| `volume_control` | Master/app volume control | "Volume 50%", "Mute Spotify", "Turn Spotify down by 10%" |
+| `volume_up` | Increase volume | "Volume up", "Louder" |
+| `volume_down` | Decrease volume | "Turn it down", "Quieter" |
 | `volume_mute_toggle` | Toggle mute | "Mute", "Unmute" |
 
 ### Audio Devices
@@ -336,15 +368,27 @@ Wyzer includes a comprehensive set of tools for system control:
 
 | Tool | Description | Example |
 |------|-------------|---------|
-| `system_storage_scan` | Scan drives for info | "Scan my drives" |
-| `system_storage_list` | List available drives | "List my drives" |
-| `system_storage_open` | Open a drive in Explorer | "Open D drive" |
+| `system_storage_scan` | Scan drives for info | "Scan my drives", "Scan devices", "Scan drive C" |
+| `system_storage_list` | List available drives | "List drives", "How much space do I have?" |
+| `system_storage_open` | Open a drive in Explorer | "Open D drive", "Open C:" |
 
 ### Timers
 
 | Tool | Description | Example |
 |------|-------------|---------|
-| `timer` | Set/cancel/check timer | "Set timer for 5 minutes", "Cancel timer" |
+| `timer` | Set/cancel/check timer | "Set timer for 5 minutes", "Cancel timer", "How much time left?" |
+
+### Google Search
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `google_search_open` | Open Google search in browser | "Google cats", "Search google for recipes" |
+
+### Monitor Info
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `monitor_info` | Get connected monitor details | "Monitor info", "How many monitors?" |
 
 ---
 
@@ -433,23 +477,94 @@ Files:
 ## LLM Integration
 
 Wyzer supports multiple LLM backends for local inference:
-- **Ollama** (default) - Easy-to-use local LLM server
-- **llama.cpp** - Embedded server for direct GGUF model loading
+- **llama.cpp** (default) - Embedded server for direct GGUF model loading with auto-optimization
+- **Ollama** - Easy-to-use local LLM server
 
 ### LLM Mode Selection
 
 Use the `--llm` flag to select the backend:
-- `--llm ollama` (default) - Use Ollama server
-- `--llm llamacpp` - Use embedded llama.cpp server
+- `--llm llamacpp` (default) - Use embedded llama.cpp server
+- `--llm ollama` - Use Ollama server
 - `--llm off` or `--no-ollama` - Tools-only mode, no LLM
 
-### Ollama Setup (Default)
+### llama.cpp Setup (Default - Recommended)
 
-Wyzer uses Ollama for local LLM inference by default.
+The embedded llama.cpp server provides the best performance with auto-optimization.
+
+#### Step 1: Download llama.cpp
+
+1. Download the latest `llama-server` from [llama.cpp releases](https://github.com/ggerganov/llama.cpp/releases)
+2. Place `llama-server.exe` (Windows) in `wyzer/llm_bin/`
+
+#### Step 2: Download a GGUF Model
+
+1. Download a GGUF model (e.g., from [HuggingFace](https://huggingface.co/models?search=gguf))
+2. Place the `.gguf` file in `wyzer/llm_models/`
+3. Rename to `model.gguf` or specify path with `--llamacpp-model`
+
+Recommended models:
+- `llama-3.1-8b-instruct.Q4_K_M.gguf` - Good balance of quality and speed
+- `llama-3.2-3b-instruct.Q4_K_M.gguf` - Faster, smaller
+- `mistral-7b-instruct-v0.2.Q4_K_M.gguf` - Alternative
+
+#### Step 3: Run with llama.cpp
+
+```bash
+python run.py --llm llamacpp
+```
+
+Or just:
+```bash
+python run.py  # llamacpp is the default
+```
+
+#### llama.cpp CLI Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--llamacpp-bin` | `./wyzer/llm_bin/llama-server.exe` | Path to llama-server executable |
+| `--llamacpp-model` | `./wyzer/llm_models/model.gguf` | Path to GGUF model file |
+| `--llamacpp-port` | `8081` | HTTP port for llama.cpp server |
+| `--llamacpp-ctx` | `2048` | Context window size |
+| `--llamacpp-threads` | `0` (auto) | Number of threads |
+
+#### Auto-Optimization Features
+
+When `WYZER_LLAMACPP_AUTO_OPTIMIZE=true` (default):
+- Automatic GPU detection and layer offloading
+- Optimal thread count based on CPU cores
+- Flash attention enabled when available
+- Batch size optimization
+
+#### Voice-Fast Preset
+
+When using llama.cpp, the "voice-fast" preset is enabled by default:
+- Concise, snappy responses (max 64 tokens)
+- Lower temperature (0.2) for more focused answers
+- Story mode automatically uses higher limits (320 tokens)
+
+#### Directory Structure
+
+```
+wyzer/
+├── llm_bin/
+│   └── llama-server.exe      # llama.cpp server binary
+├── llm_models/
+│   └── model.gguf            # Your GGUF model
+└── logs/
+    └── llamacpp_server.log   # Server output log
+```
+
+### Ollama Setup (Alternative)
+
+### Ollama Setup (Alternative)
+
+Wyzer also supports Ollama for local LLM inference.
 
 1. **Install Ollama**: https://ollama.ai
 2. **Pull a model**: `ollama pull llama3.1:latest`
 3. **Start Ollama**: `ollama serve` (usually runs automatically)
+4. **Run Wyzer with Ollama**: `python run.py --llm ollama`
 
 #### Ollama CLI Options
 
@@ -538,10 +653,11 @@ In this mode:
 
 ## Multi-Intent Commands
 
-Wyzer supports executing multiple commands in sequence:
+Wyzer supports executing multiple commands in sequence, with or without explicit separators:
 
 ### Syntax Examples
 
+**With separators:**
 ```
 "Open Chrome and then play music"
 "Pause Spotify, then set volume to 50%"
@@ -549,21 +665,47 @@ Wyzer supports executing multiple commands in sequence:
 "Open Downloads and show monitor info"
 ```
 
-### Supported Conjunctions
+**Without separators (implicit multi-intent):**
+```
+"Close Chrome open Spotify"
+"Minimize Discord maximize Notepad"
+"Open settings close Discord"
+```
 
-- `and then`
-- `then`
-- `and`
-- `after that`
-- `;` (semicolon)
-- `,` (comma with clear intent)
+### Supported Separators
+
+- `and then` - Sequential execution
+- `then` - Sequential execution
+- `and` - Parallel execution
+- `after that` - Sequential execution
+- `;` (semicolon) - Sequential execution
+- `,` (comma with clear intent) - Parallel execution
+
+### Implicit Verb Boundary Detection
+
+Commands without separators are automatically detected when multiple action verbs appear:
+- `"close chrome open spotify"` → `close_window` + `open_target`
+- `"minimize chrome maximize notepad"` → `minimize_window` + `maximize_window`
+
+### Supported Action Verbs
+`open`, `launch`, `start`, `close`, `quit`, `exit`, `minimize`, `shrink`, `maximize`, `fullscreen`, `expand`, `move`, `send`, `play`, `pause`, `resume`, `mute`, `unmute`, `scan`
 
 ### How It Works
 
-1. **Hybrid Router** checks for multi-intent markers
-2. **Multi-Intent Parser** splits the command
+1. **Hybrid Router** checks for multi-intent markers (explicit or implicit)
+2. **Multi-Intent Parser** splits the command by separators or verb boundaries
 3. Each intent is validated and executed in order
 4. Results are combined into a single response
+
+### Confidence Scoring
+
+Multi-intent queries use composite confidence calculation:
+```
+Composite Confidence = min(clause_confidences) * 0.95
+```
+
+- Minimum per-clause confidence: 0.7
+- Minimum composite confidence: 0.75 (to bypass LLM)
 
 ---
 
@@ -573,14 +715,32 @@ The Hybrid Router provides **fast-path** deterministic command routing, bypassin
 
 ### Fast-Path Commands (No LLM)
 
-| Pattern | Action |
-|---------|--------|
-| "what time is it" | `get_time` tool |
-| "open [app/folder]" | `open_target` tool |
-| "pause/play music" | `media_play_pause` tool |
-| "volume up/down/50%" | `volume_control` tool |
-| "focus/minimize/close [window]" | Window management tools |
-| "what's the weather" | `get_weather_forecast` tool |
+| Pattern | Tool | Confidence |
+|---------|------|------------|
+| "what time is it" | `get_time` | 0.95 |
+| "what's the weather [in location]" | `get_weather_forecast` | 0.92 |
+| "open [app/folder]" | `open_target` | 0.90 |
+| "close [window]" | `close_window` | 0.85 |
+| "minimize [window]" | `minimize_window` | 0.85 |
+| "maximize/fullscreen [window]" | `maximize_window` | 0.85 |
+| "move [window] to monitor [N]" | `move_window_to_monitor` | 0.85 |
+| "what monitor is [app] on" | `get_window_monitor` | 0.85 |
+| "pause/play music" | `media_play_pause` | 0.80 |
+| "next/previous track" | `media_next/previous` | 0.85 |
+| "volume up/down/50%" | `volume_control` | 0.85-0.93 |
+| "mute/unmute [app]" | `volume_control` | 0.90 |
+| "switch audio to [device]" | `set_audio_output_device` | 0.90 |
+| "scan devices/drives" | `system_storage_scan` | 0.92-0.95 |
+| "list drives" | `system_storage_list` | 0.92 |
+| "open [drive] drive" | `system_storage_open` | 0.93 |
+| "set timer for X minutes" | `timer` | 0.92 |
+| "cancel timer" | `timer` | 0.93 |
+| "google [query]" | `google_search_open` | 0.90 |
+| "scan files/apps" | `local_library_refresh` | 0.92 |
+| "refresh library" | `local_library_refresh` | 0.93 |
+| "system info" | `get_system_info` | 0.90 |
+| "monitor info" | `monitor_info` | 0.90 |
+| "where am i" / "my location" | `get_location` | 0.90 |
 
 ### LLM-Required Queries
 
@@ -588,9 +748,10 @@ These patterns always route to the LLM:
 - "Why..." questions
 - "How do I..." questions
 - "Explain..." requests
-- "What is..." (general knowledge)
+- "What is..." (general knowledge, not time/weather/volume)
 - Recommendations/opinions
 - Complex reasoning
+- Creative content requests (stories, poems, jokes)
 
 ---
 
@@ -633,6 +794,35 @@ When enabled (default: **ON**), all long-term memories are injected into LLM pro
 - **Env:** `WYZER_USE_MEMORIES=0` disables injection
 
 **Priority Order:** CLI flag > env var > config default (true)
+
+---
+
+## Interruption System
+
+Wyzer includes a clean interruption system that allows canceling any process without breaking the assistant.
+
+### How It Works
+
+- **Barge-In**: Say the wake word while Wyzer is speaking to interrupt immediately
+- **State-Aware**: The system handles interruption based on the current state:
+  - **SPEAKING**: Stops TTS immediately
+  - **LISTENING**: Drains audio queue and returns to idle
+  - **THINKING**: Sends interrupt to brain worker
+  - **TRANSCRIBING**: Waits for transcription to complete
+
+### Safety Features
+
+1. **Non-Breaking**: All interruptions are clean and don't crash the system
+2. **Thread-Safe**: Uses proper synchronization mechanisms
+3. **Process-Safe**: Works across multiprocess architecture
+4. **State Consistent**: Always transitions to IDLE after interruption
+
+### Disabling Barge-In
+
+To disable the ability to interrupt with the wake word:
+```bash
+python run.py --no-speak-interrupt
+```
 
 ---
 
@@ -781,10 +971,12 @@ AI-Assistant-v2/
 
 ### Starting Wyzer
 ```bash
-python run.py                    # Normal mode
+python run.py                    # Normal mode (uses llama.cpp)
+python run.py --llm ollama       # Use Ollama instead
 python run.py --no-hotword       # Immediate listening (no wake word)
 python run.py --no-ollama        # Tools-only mode (no LLM)
 python run.py --quiet            # Clean output
+python run.py --stream-tts       # Streaming TTS (speak while generating)
 ```
 
 ### Voice Commands
@@ -792,14 +984,25 @@ python run.py --quiet            # Clean output
 |-----|------|
 | "Hey Wyzer" | Wake the assistant |
 | "What time is it?" | Get current time |
+| "What's the weather?" | Get weather forecast |
 | "Open Chrome" | Launch Chrome |
+| "Close Discord" | Close window |
+| "Minimize Spotify" | Minimize window |
+| "Move Chrome to monitor 2" | Move window |
 | "Volume 50%" | Set volume to 50% |
-| "Pause" | Pause media |
-| "Close Spotify" | Close Spotify window |
+| "Mute Spotify" | Mute specific app |
+| "Pause" / "Play" | Media controls |
+| "Next track" | Skip to next |
 | "Set timer for 5 minutes" | Start a timer |
+| "Cancel timer" | Cancel the timer |
+| "Google cats" | Search Google |
+| "Scan devices" | Deep scan drives |
+| "List drives" | Show drive info |
+| "Open D drive" | Open in Explorer |
 | "Remember my name is John" | Save fact to memory |
 | "What do you remember?" | List memories |
-| "Use memories" | Enable memory injection |
+| "Forget that" | Delete last memory |
+| "Close Chrome open Spotify" | Multi-intent command |
 
 ### Keyboard Controls
 | Key | Action |
@@ -808,5 +1011,5 @@ python run.py --quiet            # Clean output
 
 ---
 
-*Wyzer AI Assistant - Phase 7*
+*Wyzer AI Assistant - December 2025*
 *Local, Private, Powerful*

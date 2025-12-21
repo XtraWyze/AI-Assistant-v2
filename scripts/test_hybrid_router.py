@@ -193,7 +193,7 @@ def main() -> int:
             "expect_route": "tool_plan",
             "expect_tool": "get_weather_forecast",
             "expect_llm_calls": 0,
-            "expect_args": {"location": "tomorrow"},
+            "expect_args": {"day_offset": 1, "days": 2},
         },
         {
             "text": "is it cold outside",

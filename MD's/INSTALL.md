@@ -1,5 +1,7 @@
 # Wyzer AI Assistant - Installation Guide
 
+> *Last Updated: December 2025*
+
 The `requirements.txt` file can cause dependency conflicts. Use this step-by-step guide instead.
 
 ## Quick Install (Recommended)
@@ -110,17 +112,19 @@ Make sure you see `(venv_new)` in your terminal prompt before running commands.
 
 ---
 
-## All 24 Tools Available
+## All 26 Tools Available
 
 | Category | Tools |
 |----------|-------|
 | Time/Info | `get_time`, `get_system_info`, `get_location` |
 | Weather | `get_weather_forecast` |
-| Media | `media_play_pause`, `media_next`, `media_previous` |
+| Media | `media_play_pause`, `media_next`, `media_previous`, `get_now_playing` |
 | Volume | `volume_control`, `volume_up`, `volume_down`, `volume_mute_toggle` |
 | Audio | `set_audio_output_device` |
-| Windows | `close_window`, `focus_window`, `maximize_window`, `minimize_window`, `move_window_to_monitor` |
+| Windows | `close_window`, `focus_window`, `maximize_window`, `minimize_window`, `move_window_to_monitor`, `get_window_monitor` |
 | Monitor | `monitor_info` |
 | Apps | `open_target`, `open_website` |
 | Storage | `system_storage_list`, `system_storage_open`, `system_storage_scan` |
 | Library | `local_library_refresh` |
+| Timer | `timer` |
+| Search | `google_search_open` |

@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "timestamp": 1766013613.5411203,
+  "timestamp": 1766344307.8940525,
   "folders": {
     "desktop": "C:\\Users\\kolyw\\Desktop",
     "downloads": "C:\\Users\\kolyw\\Downloads",
@@ -379,6 +379,22 @@
       "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\System Tools\\Task Manager.lnk",
       "type": "shortcut"
     },
+    "console": {
+      "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Tesseract-OCR\\Console.lnk",
+      "type": "shortcut"
+    },
+    "dokumentation": {
+      "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Tesseract-OCR\\Dokumentation.lnk",
+      "type": "shortcut"
+    },
+    "faq": {
+      "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Tesseract-OCR\\FAQ.lnk",
+      "type": "shortcut"
+    },
+    "homepage": {
+      "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Tesseract-OCR\\Homepage.lnk",
+      "type": "shortcut"
+    },
     "virtual desktop streamer": {
       "path": "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Virtual Desktop Streamer\\Virtual Desktop Streamer.lnk",
       "type": "shortcut"
@@ -496,7 +512,12 @@
       "type": "exe"
     }
   },
-  "aliases": {},
+  "aliases": {
+    "vs code": {
+      "type": "app",
+      "target": "C:\\Users\\kolyw\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
+    }
+  },
   "tier2_apps": [
     {
       "name": "Arduino Ide",
@@ -1028,7 +1049,7 @@
       "exe_path": "C:\\Program Files\\Rockstar Games\\Launcher\\LauncherPatcher.exe",
       "source": "program_files",
       "folder": "Launcher",
-      "mtime": 1760592956.197126
+      "mtime": 1765611862.5739045
     },
     {
       "name": "Dtudriver",
@@ -1085,6 +1106,125 @@
       "source": "program_files",
       "folder": "tools",
       "mtime": 1758729996.0
+    },
+    {
+      "name": "Ambiguous Words",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\ambiguous_words.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731309948.0
+    },
+    {
+      "name": "Classifier Tester",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\classifier_tester.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731309958.0
+    },
+    {
+      "name": "Cntraining",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\cntraining.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731309964.0
+    },
+    {
+      "name": "Combine Lang Model",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\combine_lang_model.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731309970.0
+    },
+    {
+      "name": "Combine Tessdata",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\combine_tessdata.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731309976.0
+    },
+    {
+      "name": "Dawg2Wordlist",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\dawg2wordlist.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731309982.0
+    },
+    {
+      "name": "Lstmeval",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\lstmeval.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731309988.0
+    },
+    {
+      "name": "Lstmtraining",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\lstmtraining.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731309994.0
+    },
+    {
+      "name": "Merge Unicharsets",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\merge_unicharsets.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731310000.0
+    },
+    {
+      "name": "Mftraining",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\mftraining.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731310006.0
+    },
+    {
+      "name": "Set Unicharset Properties",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\set_unicharset_properties.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731310012.0
+    },
+    {
+      "name": "Shapeclustering",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\shapeclustering.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731310018.0
+    },
+    {
+      "name": "Tesseract",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731310486.0
+    },
+    {
+      "name": "Text2Image",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\text2image.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731310030.0
+    },
+    {
+      "name": "Unicharset Extractor",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\unicharset_extractor.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731310036.0
+    },
+    {
+      "name": "Winpath",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\winpath.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731310654.0
+    },
+    {
+      "name": "Wordlist2Dawg",
+      "exe_path": "C:\\Program Files\\Tesseract-OCR\\wordlist2dawg.exe",
+      "source": "program_files",
+      "folder": "Tesseract-OCR",
+      "mtime": 1731310042.0
     },
     {
       "name": "Virtualdesktop.Server",
@@ -1204,223 +1344,6 @@
       "source": "program_files",
       "folder": "wslsettings",
       "mtime": 1760074154.0
-    },
-    {
-      "name": "Easyanticheat Eos",
-      "exe_path": "C:\\Program Files (x86)\\EasyAntiCheat_EOS\\EasyAntiCheat_EOS.exe",
-      "source": "program_files",
-      "folder": "EasyAntiCheat_EOS",
-      "mtime": 1761887347.5999026
-    },
-    {
-      "name": "Easyfmsi",
-      "exe_path": "C:\\Program Files (x86)\\Futuremark\\SystemInfo\\EasyFMSI.exe",
-      "source": "program_files",
-      "folder": "SystemInfo",
-      "mtime": 1756158998.0
-    },
-    {
-      "name": "Fmsicompat",
-      "exe_path": "C:\\Program Files (x86)\\Futuremark\\SystemInfo\\FMSICompat.exe",
-      "source": "program_files",
-      "folder": "SystemInfo",
-      "mtime": 1756158998.0
-    },
-    {
-      "name": "Fmsidiag",
-      "exe_path": "C:\\Program Files (x86)\\Futuremark\\SystemInfo\\FMSIDiag.exe",
-      "source": "program_files",
-      "folder": "SystemInfo",
-      "mtime": 1756159000.0
-    },
-    {
-      "name": "Fmsiscan",
-      "exe_path": "C:\\Program Files (x86)\\Futuremark\\SystemInfo\\FMSIScan.exe",
-      "source": "program_files",
-      "folder": "SystemInfo",
-      "mtime": 1756159002.0
-    },
-    {
-      "name": "Fmsisvc",
-      "exe_path": "C:\\Program Files (x86)\\Futuremark\\SystemInfo\\FMSISvc.exe",
-      "source": "program_files",
-      "folder": "SystemInfo",
-      "mtime": 1756159002.0
-    },
-    {
-      "name": "Fmsix",
-      "exe_path": "C:\\Program Files (x86)\\Futuremark\\SystemInfo\\FMSIX.exe",
-      "source": "program_files",
-      "folder": "SystemInfo",
-      "mtime": 1756159004.0
-    },
-    {
-      "name": "Extexport",
-      "exe_path": "C:\\Program Files (x86)\\Internet Explorer\\ExtExport.exe",
-      "source": "program_files",
-      "folder": "Internet Explorer",
-      "mtime": 1765307913.1027968
-    },
-    {
-      "name": "Ieinstal",
-      "exe_path": "C:\\Program Files (x86)\\Internet Explorer\\ieinstal.exe",
-      "source": "program_files",
-      "folder": "Internet Explorer",
-      "mtime": 1765307913.2347186
-    },
-    {
-      "name": "Ielowutil",
-      "exe_path": "C:\\Program Files (x86)\\Internet Explorer\\ielowutil.exe",
-      "source": "program_files",
-      "folder": "Internet Explorer",
-      "mtime": 1711956138.5910475
-    },
-    {
-      "name": "Iexplore",
-      "exe_path": "C:\\Program Files (x86)\\Internet Explorer\\iexplore.exe",
-      "source": "program_files",
-      "folder": "Internet Explorer",
-      "mtime": 1765307913.1353688
-    },
-    {
-      "name": "Rzs3Wizardpkgs3",
-      "exe_path": "C:\\Program Files (x86)\\Razer\\RzS3WizardPkg\\RzS3WizardPkgS3.exe",
-      "source": "program_files",
-      "folder": "RzS3WizardPkg",
-      "mtime": 1686926246.0
-    },
-    {
-      "name": "Drivers",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\drivers.exe",
-      "source": "program_files",
-      "folder": "bin",
-      "mtime": 1755719174.0
-    },
-    {
-      "name": "Fossilize Replay",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\fossilize-replay.exe",
-      "source": "program_files",
-      "folder": "bin",
-      "mtime": 1763795002.0
-    },
-    {
-      "name": "Fossilize Replay64",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\fossilize-replay64.exe",
-      "source": "program_files",
-      "folder": "bin",
-      "mtime": 1763795010.0
-    },
-    {
-      "name": "Gldriverquery",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\gldriverquery.exe",
-      "source": "program_files",
-      "folder": "bin",
-      "mtime": 1507929144.0
-    },
-    {
-      "name": "Gldriverquery64",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\gldriverquery64.exe",
-      "source": "program_files",
-      "folder": "bin",
-      "mtime": 1509469058.0
-    },
-    {
-      "name": "Secure Desktop Capture",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\secure_desktop_capture.exe",
-      "source": "program_files",
-      "folder": "bin",
-      "mtime": 1763795004.0
-    },
-    {
-      "name": "Steamxboxutil",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\steamxboxutil.exe",
-      "source": "program_files",
-      "folder": "bin",
-      "mtime": 1763795004.0
-    },
-    {
-      "name": "Steamxboxutil64",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\steamxboxutil64.exe",
-      "source": "program_files",
-      "folder": "bin",
-      "mtime": 1763795010.0
-    },
-    {
-      "name": "Steam Monitor",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\steam_monitor.exe",
-      "source": "program_files",
-      "folder": "bin",
-      "mtime": 1763795004.0
-    },
-    {
-      "name": "Vulkandriverquery",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\vulkandriverquery.exe",
-      "source": "program_files",
-      "folder": "bin",
-      "mtime": 1763795004.0
-    },
-    {
-      "name": "Vulkandriverquery64",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\bin\\vulkandriverquery64.exe",
-      "source": "program_files",
-      "folder": "bin",
-      "mtime": 1763795010.0
-    },
-    {
-      "name": "Gameoverlayui",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\gameoverlayui.exe",
-      "source": "program_files",
-      "folder": "Steam",
-      "mtime": 1763795000.0
-    },
-    {
-      "name": "Gameoverlayui64",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\gameoverlayui64.exe",
-      "source": "program_files",
-      "folder": "Steam",
-      "mtime": 1763795010.0
-    },
-    {
-      "name": "Steam",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\steam.exe",
-      "source": "program_files",
-      "folder": "Steam",
-      "mtime": 1763795000.0
-    },
-    {
-      "name": "Steamerrorreporter",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\steamerrorreporter.exe",
-      "source": "program_files",
-      "folder": "Steam",
-      "mtime": 1763795006.0
-    },
-    {
-      "name": "Steamerrorreporter64",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\steamerrorreporter64.exe",
-      "source": "program_files",
-      "folder": "Steam",
-      "mtime": 1763795012.0
-    },
-    {
-      "name": "Steamsysinfo",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\steamsysinfo.exe",
-      "source": "program_files",
-      "folder": "Steam",
-      "mtime": 1763795008.0
-    },
-    {
-      "name": "Streaming",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\streaming_client.exe",
-      "source": "program_files",
-      "folder": "Steam",
-      "mtime": 1763795008.0
-    },
-    {
-      "name": "Writeminidump",
-      "exe_path": "C:\\Program Files (x86)\\Steam\\WriteMiniDump.exe",
-      "source": "program_files",
-      "folder": "Steam",
-      "mtime": 1326478852.0
     },
     {
       "name": "Comfyui",
@@ -36486,14 +36409,14 @@
       "letter": "C",
       "path": "C:\\",
       "total_gb": 930.63,
-      "free_gb": 54.64,
+      "free_gb": 40.61,
       "label": "Local Disk"
     },
     {
       "letter": "D",
       "path": "D:\\",
       "total_gb": 953.87,
-      "free_gb": 444.03,
+      "free_gb": 406.56,
       "label": "New Volume"
     }
   ],
@@ -36648,8 +36571,8 @@
       "install_path": "D:\\SteamLibrary\\steamapps\\common\\SkyrimVR",
       "app_id": "611670",
       "aliases": [
-        "the elder scrolls v",
-        "the elder scrolls v: skyrim vr"
+        "the elder scrolls v: skyrim vr",
+        "the elder scrolls v"
       ],
       "confidence": 0.95
     },
@@ -36691,8 +36614,8 @@
       "install_path": "C:/Program Files/Epic Games/rocketleague",
       "app_id": "Sugar",
       "aliases": [
-        "rocket league\u00ae",
-        "rl"
+        "rl",
+        "rocket league\u00ae"
       ],
       "confidence": 0.95
     },
@@ -36735,8 +36658,8 @@
       "install_path": null,
       "app_id": null,
       "aliases": [
-        "rockstar",
-        "rockstar games launcher"
+        "rockstar games launcher",
+        "rockstar"
       ],
       "confidence": 0.8
     },
@@ -36851,6 +36774,20 @@
       "app_id": null,
       "aliases": [
         "civilization"
+      ],
+      "confidence": 0.8
+    },
+    {
+      "name": "Satisfactory",
+      "source": "shortcut",
+      "launch": {
+        "type": "shortcut",
+        "target": "C:\\Users\\kolyw\\Desktop\\Satisfactory.lnk"
+      },
+      "install_path": null,
+      "app_id": null,
+      "aliases": [
+        "satisfactory"
       ],
       "confidence": 0.8
     },
@@ -37164,11 +37101,11 @@
     }
   ],
   "games_scan_meta": {
-    "last_refresh": "2025-12-17 18:20:56",
+    "last_refresh": "2025-12-21 14:12:34",
     "counts": {
       "steam": 18,
       "epic": 4,
-      "shortcuts": 13,
+      "shortcuts": 14,
       "folder_scan": 3,
       "xbox": 19
     },
@@ -37179,7 +37116,7 @@
       "folder_scan": true,
       "xbox": true
     },
-    "total_games": 47
+    "total_games": 48
   },
   "uwp_apps": [
     {
@@ -37619,14 +37556,14 @@
     }
   ],
   "uwp_scan_meta": {
-    "last_refresh": "2025-12-17 18:20:57",
+    "last_refresh": "2025-12-21 14:12:36",
     "count": 51,
     "status": "ok"
   },
   "scan_meta": {
-    "last_refresh": "2025-12-17 18:20:14",
+    "last_refresh": "2025-12-21 14:11:48",
     "dirs": {
-      "C:\\Program Files": 1765613739.555908,
+      "C:\\Program Files": 1766096168.2276685,
       "C:\\Program Files (x86)": 1764191160.0504584,
       "C:\\Users\\kolyw\\AppData\\Local\\Programs": 1762576439.533184
     }

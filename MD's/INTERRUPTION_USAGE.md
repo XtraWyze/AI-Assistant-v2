@@ -1,5 +1,7 @@
 # Interruption System Usage Examples
 
+> *Last Updated: December 2025*
+
 ## Basic Usage
 
 ### Single-Process Mode

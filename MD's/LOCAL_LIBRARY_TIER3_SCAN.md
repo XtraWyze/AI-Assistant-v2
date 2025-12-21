@@ -1,5 +1,7 @@
 # Local Library Tier 3 Scan Implementation
 
+> *Last Updated: December 2025*
+
 ## Overview
 Updated the local library system to support tier 3 (full file system) scanning as the default behavior for "scan files" and "scan apps" commands, with tier 1 (normal) as the default for generic "refresh library" and "rebuild library" commands.
 

@@ -26,6 +26,7 @@ from wyzer.core.intent_plan import (
     Intent,
     validate_intents,
     filter_unknown_tools,
+    normalize_tool_aliases,
     ExecutionResult,
     ExecutionSummary
 )
@@ -166,7 +167,7 @@ _WHAT_SHOULD_RE = re.compile(
     re.IGNORECASE
 )
 _ACTION_WORDS_RE = re.compile(
-    r"\b(?:scan|open|set|change|timer|volume|weather|location|storage|monitor|window|close|minimize|maximize|focus|mute|unmute|play|pause|launch|start)\b",
+    r"\b(?:scan|open|set|change|timer|time|volume|weather|location|storage|monitor|window|close|minimize|maximize|focus|mute|unmute|play|pause|launch|start)\b",
     re.IGNORECASE
 )
 
@@ -276,6 +277,9 @@ def is_informational_query(text: str) -> bool:
     
     # Check main pattern first
     if _INFORMATIONAL_QUERY_RE.match(stripped):
+        # But NOT if it contains action words (weather, timer, volume, etc.)
+        if _ACTION_WORDS_RE.search(stripped):
+            return False
         return True
     
     # Special handling for "recommend/suggest..." patterns
@@ -680,6 +684,83 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 "meta": {"reply_only": True, "reason": reason, "original_text": original_text},
             }
 
+        # =====================================================================
+        # DETERMINISTIC TOOL+TEXT SPLIT: Handle mixed utterances like
+        # "Pause music and what's a VPN?" without relying on LLM intent planning.
+        # This runs BEFORE the hybrid router to catch obvious tool phrases
+        # followed by natural-language questions.
+        # =====================================================================
+        from wyzer.core.deterministic_splitter import get_split_intents
+        
+        split_result = get_split_intents(text, registry)
+        if split_result is not None:
+            tool_intents, leftover_text = split_result
+            logger.info(f'[SPLIT] Executing tool+text split: tool={tool_intents[0]["tool"]} leftover="{leftover_text[:40]}..."')
+            
+            # Step 1: Execute the first tool intent(s)
+            execution_summary, executed_intents = execute_tool_plan(tool_intents, registry)
+            tool_reply = _format_fastpath_reply(text, executed_intents, execution_summary)
+            all_executed_intents = list(executed_intents)
+            
+            # Step 2: Check if leftover text contains MORE tool intents (multi-intent)
+            # This handles "Pause music, check weather, open chrome" where the splitter
+            # only catches the first tool but leftover has more tools to execute.
+            leftover_reply = ""
+            leftover_tool_intents = []
+            if leftover_text:
+                leftover_decision = hybrid_router.decide(leftover_text)
+                if leftover_decision.mode == "tool_plan" and leftover_decision.intents:
+                    if _hybrid_tool_plan_is_registered(leftover_decision.intents, registry):
+                        logger.info(f'[SPLIT] Leftover has {len(leftover_decision.intents)} more tool intents, executing...')
+                        leftover_summary, leftover_executed = execute_tool_plan(leftover_decision.intents, registry)
+                        leftover_reply = _format_fastpath_reply(leftover_text, leftover_executed, leftover_summary)
+                        leftover_tool_intents = [i["tool"] for i in leftover_decision.intents]
+                        all_executed_intents.extend(leftover_executed)
+                        # Merge execution summaries
+                        execution_summary.ran.extend(leftover_summary.ran)
+                        execution_summary.stopped_early = execution_summary.stopped_early or leftover_summary.stopped_early
+            
+            # Step 3: If leftover wasn't handled as tools and LLM is available, get reply-only response
+            llm_reply = ""
+            if leftover_text and not leftover_reply and not getattr(Config, "NO_OLLAMA", False):
+                llm_response = _call_llm_reply_only(leftover_text)
+                llm_reply = llm_response.get("reply", "").strip()
+            
+            # Step 4: Combine replies (tool result + leftover tools or LLM answer)
+            if leftover_reply:
+                combined_reply = f"{tool_reply} {leftover_reply}"
+            elif llm_reply:
+                # Combine with natural flow
+                combined_reply = f"{tool_reply} {llm_reply}"
+            else:
+                combined_reply = tool_reply
+            
+            end_time = time.perf_counter()
+            latency_ms = int((end_time - start_time) * 1000)
+            return {
+                "reply": combined_reply,
+                "latency_ms": latency_ms,
+                "execution_summary": {
+                    "ran": [
+                        {
+                            "tool": r.tool,
+                            "ok": r.ok,
+                            "result": r.result,
+                            "error": r.error,
+                        }
+                        for r in execution_summary.ran
+                    ],
+                    "stopped_early": execution_summary.stopped_early,
+                },
+                "meta": {
+                    "split_mode": True,
+                    "tool_intents": [i["tool"] for i in tool_intents],
+                    "leftover_text": leftover_text,
+                    "leftover_tool_intents": leftover_tool_intents,
+                    "had_llm_reply": bool(llm_reply),
+                },
+            }
+
         # Hybrid router FIRST: deterministic tool plans for obvious commands; LLM otherwise.
         hybrid_decision = hybrid_router.decide(text)
         if hybrid_decision.mode == "tool_plan" and hybrid_decision.intents:
@@ -691,6 +772,19 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 reply = _format_fastpath_reply(
                     text, executed_intents, execution_summary
                 )
+                
+                # Check for partial multi-intent with leftover text that needs LLM
+                # Format: "__LEFTOVER__:<text>" in hybrid_decision.reply
+                leftover_llm_reply = ""
+                leftover_text = ""
+                if hybrid_decision.reply and hybrid_decision.reply.startswith("__LEFTOVER__:"):
+                    leftover_text = hybrid_decision.reply[len("__LEFTOVER__:"):]
+                    if leftover_text and not getattr(Config, "NO_OLLAMA", False):
+                        logger.info(f'[HYBRID] Partial multi-intent: executing LLM for leftover="{leftover_text[:40]}..."')
+                        llm_response = _call_llm_reply_only(leftover_text)
+                        leftover_llm_reply = llm_response.get("reply", "").strip()
+                        if leftover_llm_reply:
+                            reply = f"{reply} {leftover_llm_reply}"
 
                 end_time = time.perf_counter()
                 latency_ms = int((end_time - start_time) * 1000)
@@ -712,6 +806,8 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                     "meta": {
                         "hybrid_route": "tool_plan",
                         "hybrid_confidence": float(hybrid_decision.confidence or 0.0),
+                        "leftover_text": leftover_text if leftover_text else None,
+                        "had_leftover_llm_reply": bool(leftover_llm_reply),
                     },
                 }
 
@@ -766,6 +862,11 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 intent_plan.intents = intent_plan.intents[:1]
 
             if intent_plan.intents:
+                # Normalize tool aliases BEFORE unknown-tool filtering (safety net)
+                intent_plan.intents, alias_logs = normalize_tool_aliases(intent_plan.intents, registry)
+                for log_msg in alias_logs:
+                    logger.debug(log_msg)
+                
                 # Filter unknown tools (though this path is for explicit tool requests)
                 valid_intents, unknown_tools = filter_unknown_tools(intent_plan.intents, registry)
                 if unknown_tools:
@@ -878,6 +979,11 @@ def handle_user_text(text: str) -> Dict[str, Any]:
             # Log parsed plan (tool names only)
             tool_names = [intent.tool for intent in intent_plan.intents]
             logger.info(f"[INTENT PLAN] Executing {len(intent_plan.intents)} intent(s): {', '.join(tool_names)}")
+            
+            # Normalize tool aliases BEFORE unknown-tool filtering (safety net)
+            intent_plan.intents, alias_logs = normalize_tool_aliases(intent_plan.intents, registry)
+            for log_msg in alias_logs:
+                logger.debug(log_msg)
             
             # Filter out unknown tools (graceful degradation instead of hard failure)
             valid_intents, unknown_tools = filter_unknown_tools(intent_plan.intents, registry)

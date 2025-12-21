@@ -1,5 +1,7 @@
 # Window Management Hybrid Routing - Complete Implementation
 
+> *Last Updated: December 2025*
+
 ## Summary
 Implemented consistent hybrid routing patterns for all window management commands: **open**, **close**, **minimize**, **maximize/fullscreen**, and **move monitor**. All commands now bypass the LLM and use deterministic tool routing with consistent confidence scoring.
 

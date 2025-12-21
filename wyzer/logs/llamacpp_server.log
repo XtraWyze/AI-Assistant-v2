@@ -5188,3 +5188,2134 @@ prompt eval time =    2111.39 ms /   176 tokens (   12.00 ms per token,    83.36
 slot      release: id  1 | task 76 | stop processing: n_tokens = 715, truncated = 0
 srv  update_slots: all slots are idle
 srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+
+============================================================
+[2025-12-20 22:48:33] Starting llama.cpp server
+Command: C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\llama-server.exe --model C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf --port 8081 --host 127.0.0.1 --ctx-size 2048 --threads 9 --n-gpu-layers 99 --flash-attn on --mlock --batch-size 512 --cont-batching
+============================================================
+load_backend: loaded RPC backend from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\ggml-rpc.dll
+load_backend: loaded CPU backend from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\ggml-cpu-skylakex.dll
+main: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true
+build: 7486 (74e05131e) with Clang 19.1.5 for Windows x86_64
+system info: n_threads = 9, n_threads_batch = 9, total_threads = 20
+
+system_info: n_threads = 9 (n_threads_batch = 9) / 20 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+
+init: using 19 threads for HTTP server
+start: binding port with default address family
+main: loading model
+srv    load_model: loading model 'C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf'
+common_init_result: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on
+srv  log_server_r: request: GET /health 127.0.0.1 503
+llama_params_fit_impl: no devices with dedicated memory found
+llama_params_fit: successfully fit params to free device memory
+llama_params_fit: fitting params to free memory took 0.45 seconds
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+llama_model_loader: loaded meta data with 36 key-value pairs and 255 tensors from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = llama
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = Llama-3.2-3B-Instruct
+llama_model_loader: - kv   3:                           general.finetune str              = Instruct
+llama_model_loader: - kv   4:                           general.basename str              = Llama-3.2-3B-Instruct
+llama_model_loader: - kv   5:                       general.quantized_by str              = Unsloth
+llama_model_loader: - kv   6:                         general.size_label str              = 3B
+llama_model_loader: - kv   7:                           general.repo_url str              = https://huggingface.co/unsloth
+llama_model_loader: - kv   8:                          llama.block_count u32              = 28
+llama_model_loader: - kv   9:                       llama.context_length u32              = 131072
+llama_model_loader: - kv  10:                     llama.embedding_length u32              = 3072
+llama_model_loader: - kv  11:                  llama.feed_forward_length u32              = 8192
+llama_model_loader: - kv  12:                 llama.attention.head_count u32              = 24
+llama_model_loader: - kv  13:              llama.attention.head_count_kv u32              = 8
+llama_model_loader: - kv  14:                       llama.rope.freq_base f32              = 500000.000000
+llama_model_loader: - kv  15:     llama.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  16:                 llama.attention.key_length u32              = 128
+llama_model_loader: - kv  17:               llama.attention.value_length u32              = 128
+llama_model_loader: - kv  18:                           llama.vocab_size u32              = 128256
+llama_model_loader: - kv  19:                 llama.rope.dimension_count u32              = 128
+llama_model_loader: - kv  20:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  21:                         tokenizer.ggml.pre str              = llama-bpe
+llama_model_loader: - kv  22:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  23:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  24:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
+llama_model_loader: - kv  25:                tokenizer.ggml.bos_token_id u32              = 128000
+llama_model_loader: - kv  26:                tokenizer.ggml.eos_token_id u32              = 128009
+llama_model_loader: - kv  27:            tokenizer.ggml.padding_token_id u32              = 128004
+llama_model_loader: - kv  28:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  29:                    tokenizer.chat_template str              = {{- bos_token }}\n{%- if custom_tools ...
+llama_model_loader: - kv  30:               general.quantization_version u32              = 2
+llama_model_loader: - kv  31:                          general.file_type u32              = 15
+llama_model_loader: - kv  32:                      quantize.imatrix.file str              = Llama-3.2-3B-Instruct-GGUF/imatrix_un...
+llama_model_loader: - kv  33:                   quantize.imatrix.dataset str              = unsloth_calibration_Llama-3.2-3B-Inst...
+llama_model_loader: - kv  34:             quantize.imatrix.entries_count i32              = 196
+llama_model_loader: - kv  35:              quantize.imatrix.chunks_count i32              = 689
+llama_model_loader: - type  f32:   58 tensors
+llama_model_loader: - type q4_K:  168 tensors
+llama_model_loader: - type q6_K:   29 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_K - Medium
+print_info: file size   = 1.87 GiB (5.01 BPW) 
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+load: printing all EOG tokens:
+load:   - 128001 ('<|end_of_text|>')
+load:   - 128008 ('<|eom_id|>')
+load:   - 128009 ('<|eot_id|>')
+load: special tokens cache size = 256
+load: token to piece cache size = 0.7999 MB
+print_info: arch             = llama
+print_info: vocab_only       = 0
+print_info: no_alloc         = 0
+print_info: n_ctx_train      = 131072
+print_info: n_embd           = 3072
+print_info: n_embd_inp       = 3072
+print_info: n_layer          = 28
+print_info: n_head           = 24
+print_info: n_head_kv        = 8
+print_info: n_rot            = 128
+print_info: n_swa            = 0
+print_info: is_swa_any       = 0
+print_info: n_embd_head_k    = 128
+print_info: n_embd_head_v    = 128
+print_info: n_gqa            = 3
+print_info: n_embd_k_gqa     = 1024
+print_info: n_embd_v_gqa     = 1024
+print_info: f_norm_eps       = 0.0e+00
+print_info: f_norm_rms_eps   = 1.0e-05
+print_info: f_clamp_kqv      = 0.0e+00
+print_info: f_max_alibi_bias = 0.0e+00
+print_info: f_logit_scale    = 0.0e+00
+print_info: f_attn_scale     = 0.0e+00
+print_info: n_ff             = 8192
+print_info: n_expert         = 0
+print_info: n_expert_used    = 0
+print_info: n_expert_groups  = 0
+print_info: n_group_used     = 0
+print_info: causal attn      = 1
+print_info: pooling type     = 0
+print_info: rope type        = 0
+print_info: rope scaling     = linear
+print_info: freq_base_train  = 500000.0
+print_info: freq_scale_train = 1
+print_info: n_ctx_orig_yarn  = 131072
+print_info: rope_yarn_log_mul= 0.0000
+print_info: rope_finetuned   = unknown
+print_info: model type       = 3B
+print_info: model params     = 3.21 B
+print_info: general.name     = Llama-3.2-3B-Instruct
+print_info: vocab type       = BPE
+print_info: n_vocab          = 128256
+print_info: n_merges         = 280147
+print_info: BOS token        = 128000 '<|begin_of_text|>'
+print_info: EOS token        = 128009 '<|eot_id|>'
+print_info: EOT token        = 128009 '<|eot_id|>'
+print_info: EOM token        = 128008 '<|eom_id|>'
+print_info: PAD token        = 128004 '<|finetune_right_pad_id|>'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 128001 '<|end_of_text|>'
+print_info: EOG token        = 128008 '<|eom_id|>'
+print_info: EOG token        = 128009 '<|eot_id|>'
+print_info: max token length = 256
+load_tensors: loading model tensors, this can take a while... (mmap = true)
+load_tensors: offloading output layer to GPU
+load_tensors: offloading 27 repeating layers to GPU
+load_tensors: offloaded 29/29 layers to GPU
+load_tensors:   CPU_Mapped model buffer size =  1904.85 MiB
+load_tensors:   CPU_REPACK model buffer size =  1299.38 MiB
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+....srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+...srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+....srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+.....................................srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+....................................
+common_init_result: added <|end_of_text|> logit bias = -inf
+common_init_result: added <|eom_id|> logit bias = -inf
+common_init_result: added <|eot_id|> logit bias = -inf
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 4
+llama_context: n_ctx         = 2048
+llama_context: n_ctx_seq     = 2048
+llama_context: n_batch       = 512
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = enabled
+llama_context: kv_unified    = true
+llama_context: freq_base     = 500000.0
+llama_context: freq_scale    = 1
+llama_context: n_ctx_seq (2048) < n_ctx_train (131072) -- the full capacity of the model will not be utilized
+llama_context:        CPU  output buffer size =     1.96 MiB
+llama_kv_cache:        CPU KV buffer size =   224.00 MiB
+llama_kv_cache: size =  224.00 MiB (  2048 cells,  28 layers,  4/1 seqs), K (f16):  112.00 MiB, V (f16):  112.00 MiB
+llama_context:        CPU compute buffer size =   280.51 MiB
+llama_context: graph nodes  = 875
+llama_context: graph splits = 1
+common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+srv          init: initializing slots, n_slots = 4
+slot         init: id  0 | task -1 | new slot, n_ctx = 2048
+slot         init: id  1 | task -1 | new slot, n_ctx = 2048
+slot         init: id  2 | task -1 | new slot, n_ctx = 2048
+slot         init: id  3 | task -1 | new slot, n_ctx = 2048
+srv          init: prompt cache is enabled, size limit: 8192 MiB
+srv          init: use `--cache-ram 0` to disable the prompt cache
+srv          init: for more info see https://github.com/ggml-org/llama.cpp/pull/16391
+srv          init: thinking = 0
+init: chat template, chat_template: {{- bos_token }}
+{%- if custom_tools is defined %}
+    {%- set tools = custom_tools %}
+{%- endif %}
+{%- if not tools_in_user_message is defined %}
+    {%- set tools_in_user_message = true %}
+{%- endif %}
+{%- if not date_string is defined %}
+    {%- if strftime_now is defined %}
+        {%- set date_string = strftime_now("%d %b %Y") %}
+    {%- else %}
+        {%- set date_string = "26 Jul 2024" %}
+    {%- endif %}
+{%- endif %}
+{%- if not tools is defined %}
+    {%- set tools = none %}
+{%- endif %}
+
+{#- This block extracts the system message, so we can slot it into the right place. #}
+{%- if messages[0]['role'] == 'system' %}
+    {%- set system_message = messages[0]['content']|trim %}
+    {%- set messages = messages[1:] %}
+{%- else %}
+    {%- set system_message = "" %}
+{%- endif %}
+
+{#- System message #}
+{{- "<|start_header_id|>system<|end_header_id|>\n\n" }}
+{%- if tools is not none %}
+    {{- "Environment: ipython\n" }}
+{%- endif %}
+{{- "Cutting Knowledge Date: December 2023\n" }}
+{{- "Today Date: " + date_string + "\n\n" }}
+{%- if tools is not none and not tools_in_user_message %}
+    {{- "You have access to the following functions. To call a function, please respond with JSON for a function call." }}
+    {{- 'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.' }}
+    {{- "Do not use variables.\n\n" }}
+    {%- for t in tools %}
+        {{- t | tojson(indent=4) }}
+        {{- "\n\n" }}
+    {%- endfor %}
+{%- endif %}
+{{- system_message }}
+{{- "<|eot_id|>" }}
+
+{#- Custom tools are passed in a user message with some extra guidance #}
+{%- if tools_in_user_message and not tools is none %}
+    {#- Extract the first user message so we can plug it in here #}
+    {%- if messages | length != 0 %}
+        {%- set first_user_message = messages[0]['content']|trim %}
+        {%- set messages = messages[1:] %}
+    {%- else %}
+        {{- raise_exception("Cannot put tools in the first user message when there's no first user message!") }}
+{%- endif %}
+    {{- '<|start_header_id|>user<|end_header_id|>\n\n' -}}
+    {{- "Given the following functions, please respond with a JSON for a function call " }}
+    {{- "with its proper arguments that best answers the given prompt.\n\n" }}
+    {{- 'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.' }}
+    {{- "Do not use variables.\n\n" }}
+    {%- for t in tools %}
+        {{- t | tojson(indent=4) }}
+        {{- "\n\n" }}
+    {%- endfor %}
+    {{- first_user_message + "<|eot_id|>"}}
+{%- endif %}
+
+{%- for message in messages %}
+    {%- if not (message.role == 'ipython' or message.role == 'tool' or 'tool_calls' in message) %}
+        {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' }}
+    {%- elif 'tool_calls' in message %}
+        {%- if not message.tool_calls|length == 1 %}
+            {{- raise_exception("This model only supports single tool-calls at once!") }}
+        {%- endif %}
+        {%- set tool_call = message.tool_calls[0].function %}
+        {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' -}}
+        {{- '{"name": "' + tool_call.name + '", ' }}
+        {{- '"parameters": ' }}
+        {{- tool_call.arguments | tojson }}
+        {{- "}" }}
+        {{- "<|eot_id|>" }}
+    {%- elif message.role == "tool" or message.role == "ipython" %}
+        {{- "<|start_header_id|>ipython<|end_header_id|>\n\n" }}
+        {%- if message.content is mapping or message.content is iterable %}
+            {{- message.content | tojson }}
+        {%- else %}
+            {{- message.content }}
+        {%- endif %}
+        {{- "<|eot_id|>" }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' }}
+{%- endif %}
+, example_format: '<|start_header_id|>system<|end_header_id|>
+
+Cutting Knowledge Date: December 2023
+Today Date: 20 Dec 2025
+
+You are a helpful assistant<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Hello<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+Hi there<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+How are you?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+'
+main: model loaded
+main: server is listening on http://127.0.0.1:8081
+main: starting the main loop...
+srv  update_slots: all slots are idle
+slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  3 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  3 | task 0 | processing task
+slot update_slots: id  3 | task 0 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 2
+slot update_slots: id  3 | task 0 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  3 | task 0 | prompt processing progress, n_tokens = 2, batch.n_tokens = 2, progress = 1.000000
+slot update_slots: id  3 | task 0 | prompt done, n_tokens = 2, batch.n_tokens = 2
+slot print_timing: id  3 | task 0 | 
+prompt eval time =      66.07 ms /     2 tokens (   33.03 ms per token,    30.27 tokens per second)
+       eval time =       0.00 ms /     1 tokens (    0.00 ms per token, 1000000.00 tokens per second)
+      total time =      66.07 ms /     3 tokens
+slot      release: id  3 | task 0 | stop processing: n_tokens = 2, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  2 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  2 | task 2 | processing task
+slot update_slots: id  2 | task 2 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 83
+slot update_slots: id  2 | task 2 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  2 | task 2 | prompt processing progress, n_tokens = 83, batch.n_tokens = 83, progress = 1.000000
+slot update_slots: id  2 | task 2 | prompt done, n_tokens = 83, batch.n_tokens = 83
+slot print_timing: id  2 | task 2 | 
+prompt eval time =     743.30 ms /    83 tokens (    8.96 ms per token,   111.66 tokens per second)
+       eval time =     351.91 ms /     8 tokens (   43.99 ms per token,    22.73 tokens per second)
+      total time =    1095.21 ms /    91 tokens
+slot      release: id  2 | task 2 | stop processing: n_tokens = 90, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  1 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  1 | task 11 | processing task
+slot update_slots: id  1 | task 11 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 759
+slot update_slots: id  1 | task 11 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  1 | task 11 | prompt processing progress, n_tokens = 512, batch.n_tokens = 512, progress = 0.674572
+slot update_slots: id  1 | task 11 | n_tokens = 512, memory_seq_rm [512, end)
+slot update_slots: id  1 | task 11 | prompt processing progress, n_tokens = 759, batch.n_tokens = 247, progress = 1.000000
+slot update_slots: id  1 | task 11 | prompt done, n_tokens = 759, batch.n_tokens = 247
+slot print_timing: id  1 | task 11 | 
+prompt eval time =    7731.26 ms /   759 tokens (   10.19 ms per token,    98.17 tokens per second)
+       eval time =    4898.80 ms /    83 tokens (   59.02 ms per token,    16.94 tokens per second)
+      total time =   12630.06 ms /   842 tokens
+slot      release: id  1 | task 11 | stop processing: n_tokens = 841, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  1 | task -1 | selected slot by LCP similarity, sim_best = 0.166 (> 0.100 thold), f_keep = 0.046
+srv  get_availabl: updating prompt cache
+srv   prompt_save:  - saving prompt with length 841, total state size = 91.995 MiB
+srv          load:  - looking for better prompt, base f_keep = 0.046, sim = 0.166
+srv        update:  - cache state: 1 prompts, 91.995 MiB (limits: 8192.000 MiB, 2048 tokens, 74889 est)
+srv        update:    - prompt 000001BD8BF95A20:     841 tokens, checkpoints:  0,    91.995 MiB
+srv  get_availabl: prompt cache update took 29.20 ms
+slot launch_slot_: id  1 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  1 | task 96 | processing task
+slot update_slots: id  1 | task 96 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 235
+slot update_slots: id  1 | task 96 | n_tokens = 39, memory_seq_rm [39, end)
+slot update_slots: id  1 | task 96 | prompt processing progress, n_tokens = 235, batch.n_tokens = 196, progress = 1.000000
+slot update_slots: id  1 | task 96 | prompt done, n_tokens = 235, batch.n_tokens = 196
+slot print_timing: id  1 | task 96 | 
+prompt eval time =    1636.38 ms /   196 tokens (    8.35 ms per token,   119.78 tokens per second)
+       eval time =    3307.21 ms /    64 tokens (   51.68 ms per token,    19.35 tokens per second)
+      total time =    4943.60 ms /   260 tokens
+slot      release: id  1 | task 96 | stop processing: n_tokens = 298, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  1 | task -1 | selected slot by LCP similarity, sim_best = 0.203 (> 0.100 thold), f_keep = 0.151
+srv  get_availabl: updating prompt cache
+srv   prompt_save:  - saving prompt with length 298, total state size = 32.598 MiB
+srv          load:  - looking for better prompt, base f_keep = 0.151, sim = 0.203
+srv        update:  - cache state: 2 prompts, 124.592 MiB (limits: 8192.000 MiB, 2048 tokens, 74889 est)
+srv        update:    - prompt 000001BD8BF95A20:     841 tokens, checkpoints:  0,    91.995 MiB
+srv        update:    - prompt 000001BD8BF95940:     298 tokens, checkpoints:  0,    32.598 MiB
+srv  get_availabl: prompt cache update took 11.43 ms
+slot launch_slot_: id  1 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  1 | task 161 | processing task
+slot update_slots: id  1 | task 161 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 222
+slot update_slots: id  1 | task 161 | n_tokens = 45, memory_seq_rm [45, end)
+slot update_slots: id  1 | task 161 | prompt processing progress, n_tokens = 222, batch.n_tokens = 177, progress = 1.000000
+slot update_slots: id  1 | task 161 | prompt done, n_tokens = 222, batch.n_tokens = 177
+slot print_timing: id  1 | task 161 | 
+prompt eval time =    1501.33 ms /   177 tokens (    8.48 ms per token,   117.90 tokens per second)
+       eval time =    3282.02 ms /    64 tokens (   51.28 ms per token,    19.50 tokens per second)
+      total time =    4783.35 ms /   241 tokens
+slot      release: id  1 | task 161 | stop processing: n_tokens = 285, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  0 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  0 | task 226 | processing task
+slot update_slots: id  0 | task 226 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 752
+slot update_slots: id  0 | task 226 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  0 | task 226 | prompt processing progress, n_tokens = 512, batch.n_tokens = 512, progress = 0.680851
+slot update_slots: id  0 | task 226 | n_tokens = 512, memory_seq_rm [512, end)
+slot update_slots: id  0 | task 226 | prompt processing progress, n_tokens = 752, batch.n_tokens = 240, progress = 1.000000
+slot update_slots: id  0 | task 226 | prompt done, n_tokens = 752, batch.n_tokens = 240
+slot print_timing: id  0 | task 226 | 
+prompt eval time =    7823.30 ms /   752 tokens (   10.40 ms per token,    96.12 tokens per second)
+       eval time =    1966.11 ms /    34 tokens (   57.83 ms per token,    17.29 tokens per second)
+      total time =    9789.40 ms /   786 tokens
+slot      release: id  0 | task 226 | stop processing: n_tokens = 785, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, sim_best = 0.684 (> 0.100 thold), f_keep = 0.652
+slot launch_slot_: id  0 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  0 | task 262 | processing task
+slot update_slots: id  0 | task 262 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 749
+slot update_slots: id  0 | task 262 | n_tokens = 512, memory_seq_rm [512, end)
+slot update_slots: id  0 | task 262 | prompt processing progress, n_tokens = 749, batch.n_tokens = 237, progress = 1.000000
+slot update_slots: id  0 | task 262 | prompt done, n_tokens = 749, batch.n_tokens = 237
+slot print_timing: id  0 | task 262 | 
+prompt eval time =    2931.59 ms /   237 tokens (   12.37 ms per token,    80.84 tokens per second)
+       eval time =    1741.76 ms /    30 tokens (   58.06 ms per token,    17.22 tokens per second)
+      total time =    4673.35 ms /   267 tokens
+slot      release: id  0 | task 262 | stop processing: n_tokens = 778, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+
+============================================================
+[2025-12-21 13:19:42] Starting llama.cpp server
+Command: C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\llama-server.exe --model C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf --port 8081 --host 127.0.0.1 --ctx-size 2048 --threads 9 --n-gpu-layers 99 --flash-attn on --mlock --batch-size 512 --cont-batching
+============================================================
+load_backend: loaded RPC backend from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\ggml-rpc.dll
+load_backend: loaded CPU backend from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\ggml-cpu-skylakex.dll
+main: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true
+build: 7486 (74e05131e) with Clang 19.1.5 for Windows x86_64
+system info: n_threads = 9, n_threads_batch = 9, total_threads = 20
+
+system_info: n_threads = 9 (n_threads_batch = 9) / 20 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+
+init: using 19 threads for HTTP server
+start: binding port with default address family
+main: loading model
+srv    load_model: loading model 'C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf'
+common_init_result: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on
+llama_params_fit_impl: no devices with dedicated memory found
+llama_params_fit: successfully fit params to free device memory
+llama_params_fit: fitting params to free memory took 0.44 seconds
+srv  log_server_r: request: GET /health 127.0.0.1 503
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+llama_model_loader: loaded meta data with 36 key-value pairs and 255 tensors from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = llama
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = Llama-3.2-3B-Instruct
+llama_model_loader: - kv   3:                           general.finetune str              = Instruct
+llama_model_loader: - kv   4:                           general.basename str              = Llama-3.2-3B-Instruct
+llama_model_loader: - kv   5:                       general.quantized_by str              = Unsloth
+llama_model_loader: - kv   6:                         general.size_label str              = 3B
+llama_model_loader: - kv   7:                           general.repo_url str              = https://huggingface.co/unsloth
+llama_model_loader: - kv   8:                          llama.block_count u32              = 28
+llama_model_loader: - kv   9:                       llama.context_length u32              = 131072
+llama_model_loader: - kv  10:                     llama.embedding_length u32              = 3072
+llama_model_loader: - kv  11:                  llama.feed_forward_length u32              = 8192
+llama_model_loader: - kv  12:                 llama.attention.head_count u32              = 24
+llama_model_loader: - kv  13:              llama.attention.head_count_kv u32              = 8
+llama_model_loader: - kv  14:                       llama.rope.freq_base f32              = 500000.000000
+llama_model_loader: - kv  15:     llama.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  16:                 llama.attention.key_length u32              = 128
+llama_model_loader: - kv  17:               llama.attention.value_length u32              = 128
+llama_model_loader: - kv  18:                           llama.vocab_size u32              = 128256
+llama_model_loader: - kv  19:                 llama.rope.dimension_count u32              = 128
+llama_model_loader: - kv  20:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  21:                         tokenizer.ggml.pre str              = llama-bpe
+llama_model_loader: - kv  22:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  23:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  24:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
+llama_model_loader: - kv  25:                tokenizer.ggml.bos_token_id u32              = 128000
+llama_model_loader: - kv  26:                tokenizer.ggml.eos_token_id u32              = 128009
+llama_model_loader: - kv  27:            tokenizer.ggml.padding_token_id u32              = 128004
+llama_model_loader: - kv  28:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  29:                    tokenizer.chat_template str              = {{- bos_token }}\n{%- if custom_tools ...
+llama_model_loader: - kv  30:               general.quantization_version u32              = 2
+llama_model_loader: - kv  31:                          general.file_type u32              = 15
+llama_model_loader: - kv  32:                      quantize.imatrix.file str              = Llama-3.2-3B-Instruct-GGUF/imatrix_un...
+llama_model_loader: - kv  33:                   quantize.imatrix.dataset str              = unsloth_calibration_Llama-3.2-3B-Inst...
+llama_model_loader: - kv  34:             quantize.imatrix.entries_count i32              = 196
+llama_model_loader: - kv  35:              quantize.imatrix.chunks_count i32              = 689
+llama_model_loader: - type  f32:   58 tensors
+llama_model_loader: - type q4_K:  168 tensors
+llama_model_loader: - type q6_K:   29 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_K - Medium
+print_info: file size   = 1.87 GiB (5.01 BPW) 
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+load: printing all EOG tokens:
+load:   - 128001 ('<|end_of_text|>')
+load:   - 128008 ('<|eom_id|>')
+load:   - 128009 ('<|eot_id|>')
+load: special tokens cache size = 256
+load: token to piece cache size = 0.7999 MB
+print_info: arch             = llama
+print_info: vocab_only       = 0
+print_info: no_alloc         = 0
+print_info: n_ctx_train      = 131072
+print_info: n_embd           = 3072
+print_info: n_embd_inp       = 3072
+print_info: n_layer          = 28
+print_info: n_head           = 24
+print_info: n_head_kv        = 8
+print_info: n_rot            = 128
+print_info: n_swa            = 0
+print_info: is_swa_any       = 0
+print_info: n_embd_head_k    = 128
+print_info: n_embd_head_v    = 128
+print_info: n_gqa            = 3
+print_info: n_embd_k_gqa     = 1024
+print_info: n_embd_v_gqa     = 1024
+print_info: f_norm_eps       = 0.0e+00
+print_info: f_norm_rms_eps   = 1.0e-05
+print_info: f_clamp_kqv      = 0.0e+00
+print_info: f_max_alibi_bias = 0.0e+00
+print_info: f_logit_scale    = 0.0e+00
+print_info: f_attn_scale     = 0.0e+00
+print_info: n_ff             = 8192
+print_info: n_expert         = 0
+print_info: n_expert_used    = 0
+print_info: n_expert_groups  = 0
+print_info: n_group_used     = 0
+print_info: causal attn      = 1
+print_info: pooling type     = 0
+print_info: rope type        = 0
+print_info: rope scaling     = linear
+print_info: freq_base_train  = 500000.0
+print_info: freq_scale_train = 1
+print_info: n_ctx_orig_yarn  = 131072
+print_info: rope_yarn_log_mul= 0.0000
+print_info: rope_finetuned   = unknown
+print_info: model type       = 3B
+print_info: model params     = 3.21 B
+print_info: general.name     = Llama-3.2-3B-Instruct
+print_info: vocab type       = BPE
+print_info: n_vocab          = 128256
+print_info: n_merges         = 280147
+print_info: BOS token        = 128000 '<|begin_of_text|>'
+print_info: EOS token        = 128009 '<|eot_id|>'
+print_info: EOT token        = 128009 '<|eot_id|>'
+print_info: EOM token        = 128008 '<|eom_id|>'
+print_info: PAD token        = 128004 '<|finetune_right_pad_id|>'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 128001 '<|end_of_text|>'
+print_info: EOG token        = 128008 '<|eom_id|>'
+print_info: EOG token        = 128009 '<|eot_id|>'
+print_info: max token length = 256
+load_tensors: loading model tensors, this can take a while... (mmap = true)
+load_tensors: offloading output layer to GPU
+load_tensors: offloading 27 repeating layers to GPU
+load_tensors: offloaded 29/29 layers to GPU
+load_tensors:   CPU_Mapped model buffer size =  1904.85 MiB
+load_tensors:   CPU_REPACK model buffer size =  1299.38 MiB
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+....srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+....srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+....srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+............................................srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+............................
+common_init_result: added <|end_of_text|> logit bias = -inf
+common_init_result: added <|eom_id|> logit bias = -inf
+common_init_result: added <|eot_id|> logit bias = -inf
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 4
+llama_context: n_ctx         = 2048
+llama_context: n_ctx_seq     = 2048
+llama_context: n_batch       = 512
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = enabled
+llama_context: kv_unified    = true
+llama_context: freq_base     = 500000.0
+llama_context: freq_scale    = 1
+llama_context: n_ctx_seq (2048) < n_ctx_train (131072) -- the full capacity of the model will not be utilized
+llama_context:        CPU  output buffer size =     1.96 MiB
+llama_kv_cache:        CPU KV buffer size =   224.00 MiB
+llama_kv_cache: size =  224.00 MiB (  2048 cells,  28 layers,  4/1 seqs), K (f16):  112.00 MiB, V (f16):  112.00 MiB
+llama_context:        CPU compute buffer size =   280.51 MiB
+llama_context: graph nodes  = 875
+llama_context: graph splits = 1
+common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+srv          init: initializing slots, n_slots = 4
+slot         init: id  0 | task -1 | new slot, n_ctx = 2048
+slot         init: id  1 | task -1 | new slot, n_ctx = 2048
+slot         init: id  2 | task -1 | new slot, n_ctx = 2048
+slot         init: id  3 | task -1 | new slot, n_ctx = 2048
+srv          init: prompt cache is enabled, size limit: 8192 MiB
+srv          init: use `--cache-ram 0` to disable the prompt cache
+srv          init: for more info see https://github.com/ggml-org/llama.cpp/pull/16391
+srv          init: thinking = 0
+init: chat template, chat_template: {{- bos_token }}
+{%- if custom_tools is defined %}
+    {%- set tools = custom_tools %}
+{%- endif %}
+{%- if not tools_in_user_message is defined %}
+    {%- set tools_in_user_message = true %}
+{%- endif %}
+{%- if not date_string is defined %}
+    {%- if strftime_now is defined %}
+        {%- set date_string = strftime_now("%d %b %Y") %}
+    {%- else %}
+        {%- set date_string = "26 Jul 2024" %}
+    {%- endif %}
+{%- endif %}
+{%- if not tools is defined %}
+    {%- set tools = none %}
+{%- endif %}
+
+{#- This block extracts the system message, so we can slot it into the right place. #}
+{%- if messages[0]['role'] == 'system' %}
+    {%- set system_message = messages[0]['content']|trim %}
+    {%- set messages = messages[1:] %}
+{%- else %}
+    {%- set system_message = "" %}
+{%- endif %}
+
+{#- System message #}
+{{- "<|start_header_id|>system<|end_header_id|>\n\n" }}
+{%- if tools is not none %}
+    {{- "Environment: ipython\n" }}
+{%- endif %}
+{{- "Cutting Knowledge Date: December 2023\n" }}
+{{- "Today Date: " + date_string + "\n\n" }}
+{%- if tools is not none and not tools_in_user_message %}
+    {{- "You have access to the following functions. To call a function, please respond with JSON for a function call." }}
+    {{- 'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.' }}
+    {{- "Do not use variables.\n\n" }}
+    {%- for t in tools %}
+        {{- t | tojson(indent=4) }}
+        {{- "\n\n" }}
+    {%- endfor %}
+{%- endif %}
+{{- system_message }}
+{{- "<|eot_id|>" }}
+
+{#- Custom tools are passed in a user message with some extra guidance #}
+{%- if tools_in_user_message and not tools is none %}
+    {#- Extract the first user message so we can plug it in here #}
+    {%- if messages | length != 0 %}
+        {%- set first_user_message = messages[0]['content']|trim %}
+        {%- set messages = messages[1:] %}
+    {%- else %}
+        {{- raise_exception("Cannot put tools in the first user message when there's no first user message!") }}
+{%- endif %}
+    {{- '<|start_header_id|>user<|end_header_id|>\n\n' -}}
+    {{- "Given the following functions, please respond with a JSON for a function call " }}
+    {{- "with its proper arguments that best answers the given prompt.\n\n" }}
+    {{- 'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.' }}
+    {{- "Do not use variables.\n\n" }}
+    {%- for t in tools %}
+        {{- t | tojson(indent=4) }}
+        {{- "\n\n" }}
+    {%- endfor %}
+    {{- first_user_message + "<|eot_id|>"}}
+{%- endif %}
+
+{%- for message in messages %}
+    {%- if not (message.role == 'ipython' or message.role == 'tool' or 'tool_calls' in message) %}
+        {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' }}
+    {%- elif 'tool_calls' in message %}
+        {%- if not message.tool_calls|length == 1 %}
+            {{- raise_exception("This model only supports single tool-calls at once!") }}
+        {%- endif %}
+        {%- set tool_call = message.tool_calls[0].function %}
+        {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' -}}
+        {{- '{"name": "' + tool_call.name + '", ' }}
+        {{- '"parameters": ' }}
+        {{- tool_call.arguments | tojson }}
+        {{- "}" }}
+        {{- "<|eot_id|>" }}
+    {%- elif message.role == "tool" or message.role == "ipython" %}
+        {{- "<|start_header_id|>ipython<|end_header_id|>\n\n" }}
+        {%- if message.content is mapping or message.content is iterable %}
+            {{- message.content | tojson }}
+        {%- else %}
+            {{- message.content }}
+        {%- endif %}
+        {{- "<|eot_id|>" }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' }}
+{%- endif %}
+, example_format: '<|start_header_id|>system<|end_header_id|>
+
+Cutting Knowledge Date: December 2023
+Today Date: 21 Dec 2025
+
+You are a helpful assistant<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Hello<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+Hi there<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+How are you?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+'
+main: model loaded
+main: server is listening on http://127.0.0.1:8081
+main: starting the main loop...
+srv  update_slots: all slots are idle
+slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  3 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  3 | task 0 | processing task
+slot update_slots: id  3 | task 0 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 2
+slot update_slots: id  3 | task 0 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  3 | task 0 | prompt processing progress, n_tokens = 2, batch.n_tokens = 2, progress = 1.000000
+slot update_slots: id  3 | task 0 | prompt done, n_tokens = 2, batch.n_tokens = 2
+slot print_timing: id  3 | task 0 | 
+prompt eval time =      60.38 ms /     2 tokens (   30.19 ms per token,    33.13 tokens per second)
+       eval time =       0.00 ms /     1 tokens (    0.00 ms per token, 1000000.00 tokens per second)
+      total time =      60.38 ms /     3 tokens
+slot      release: id  3 | task 0 | stop processing: n_tokens = 2, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  2 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  2 | task 2 | processing task
+slot update_slots: id  2 | task 2 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 184
+slot update_slots: id  2 | task 2 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  2 | task 2 | prompt processing progress, n_tokens = 184, batch.n_tokens = 184, progress = 1.000000
+slot update_slots: id  2 | task 2 | prompt done, n_tokens = 184, batch.n_tokens = 184
+slot print_timing: id  2 | task 2 | 
+prompt eval time =    1681.93 ms /   184 tokens (    9.14 ms per token,   109.40 tokens per second)
+       eval time =     910.55 ms /    19 tokens (   47.92 ms per token,    20.87 tokens per second)
+      total time =    2592.48 ms /   203 tokens
+slot      release: id  2 | task 2 | stop processing: n_tokens = 202, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+
+============================================================
+[2025-12-21 13:32:17] Starting llama.cpp server
+Command: C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\llama-server.exe --model C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf --port 8081 --host 127.0.0.1 --ctx-size 2048 --threads 9 --n-gpu-layers 99 --flash-attn on --mlock --batch-size 512 --cont-batching
+============================================================
+load_backend: loaded RPC backend from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\ggml-rpc.dll
+load_backend: loaded CPU backend from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\ggml-cpu-skylakex.dll
+main: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true
+build: 7486 (74e05131e) with Clang 19.1.5 for Windows x86_64
+system info: n_threads = 9, n_threads_batch = 9, total_threads = 20
+
+system_info: n_threads = 9 (n_threads_batch = 9) / 20 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+
+init: using 19 threads for HTTP server
+start: binding port with default address family
+main: loading model
+srv    load_model: loading model 'C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf'
+common_init_result: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on
+srv  log_server_r: request: GET /health 127.0.0.1 503
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+llama_params_fit_impl: no devices with dedicated memory found
+llama_params_fit: successfully fit params to free device memory
+llama_params_fit: fitting params to free memory took 0.45 seconds
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+llama_model_loader: loaded meta data with 36 key-value pairs and 255 tensors from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = llama
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = Llama-3.2-3B-Instruct
+llama_model_loader: - kv   3:                           general.finetune str              = Instruct
+llama_model_loader: - kv   4:                           general.basename str              = Llama-3.2-3B-Instruct
+llama_model_loader: - kv   5:                       general.quantized_by str              = Unsloth
+llama_model_loader: - kv   6:                         general.size_label str              = 3B
+llama_model_loader: - kv   7:                           general.repo_url str              = https://huggingface.co/unsloth
+llama_model_loader: - kv   8:                          llama.block_count u32              = 28
+llama_model_loader: - kv   9:                       llama.context_length u32              = 131072
+llama_model_loader: - kv  10:                     llama.embedding_length u32              = 3072
+llama_model_loader: - kv  11:                  llama.feed_forward_length u32              = 8192
+llama_model_loader: - kv  12:                 llama.attention.head_count u32              = 24
+llama_model_loader: - kv  13:              llama.attention.head_count_kv u32              = 8
+llama_model_loader: - kv  14:                       llama.rope.freq_base f32              = 500000.000000
+llama_model_loader: - kv  15:     llama.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  16:                 llama.attention.key_length u32              = 128
+llama_model_loader: - kv  17:               llama.attention.value_length u32              = 128
+llama_model_loader: - kv  18:                           llama.vocab_size u32              = 128256
+llama_model_loader: - kv  19:                 llama.rope.dimension_count u32              = 128
+llama_model_loader: - kv  20:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  21:                         tokenizer.ggml.pre str              = llama-bpe
+llama_model_loader: - kv  22:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  23:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  24:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
+llama_model_loader: - kv  25:                tokenizer.ggml.bos_token_id u32              = 128000
+llama_model_loader: - kv  26:                tokenizer.ggml.eos_token_id u32              = 128009
+llama_model_loader: - kv  27:            tokenizer.ggml.padding_token_id u32              = 128004
+llama_model_loader: - kv  28:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  29:                    tokenizer.chat_template str              = {{- bos_token }}\n{%- if custom_tools ...
+llama_model_loader: - kv  30:               general.quantization_version u32              = 2
+llama_model_loader: - kv  31:                          general.file_type u32              = 15
+llama_model_loader: - kv  32:                      quantize.imatrix.file str              = Llama-3.2-3B-Instruct-GGUF/imatrix_un...
+llama_model_loader: - kv  33:                   quantize.imatrix.dataset str              = unsloth_calibration_Llama-3.2-3B-Inst...
+llama_model_loader: - kv  34:             quantize.imatrix.entries_count i32              = 196
+llama_model_loader: - kv  35:              quantize.imatrix.chunks_count i32              = 689
+llama_model_loader: - type  f32:   58 tensors
+llama_model_loader: - type q4_K:  168 tensors
+llama_model_loader: - type q6_K:   29 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_K - Medium
+print_info: file size   = 1.87 GiB (5.01 BPW) 
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+load: printing all EOG tokens:
+load:   - 128001 ('<|end_of_text|>')
+load:   - 128008 ('<|eom_id|>')
+load:   - 128009 ('<|eot_id|>')
+load: special tokens cache size = 256
+load: token to piece cache size = 0.7999 MB
+print_info: arch             = llama
+print_info: vocab_only       = 0
+print_info: no_alloc         = 0
+print_info: n_ctx_train      = 131072
+print_info: n_embd           = 3072
+print_info: n_embd_inp       = 3072
+print_info: n_layer          = 28
+print_info: n_head           = 24
+print_info: n_head_kv        = 8
+print_info: n_rot            = 128
+print_info: n_swa            = 0
+print_info: is_swa_any       = 0
+print_info: n_embd_head_k    = 128
+print_info: n_embd_head_v    = 128
+print_info: n_gqa            = 3
+print_info: n_embd_k_gqa     = 1024
+print_info: n_embd_v_gqa     = 1024
+print_info: f_norm_eps       = 0.0e+00
+print_info: f_norm_rms_eps   = 1.0e-05
+print_info: f_clamp_kqv      = 0.0e+00
+print_info: f_max_alibi_bias = 0.0e+00
+print_info: f_logit_scale    = 0.0e+00
+print_info: f_attn_scale     = 0.0e+00
+print_info: n_ff             = 8192
+print_info: n_expert         = 0
+print_info: n_expert_used    = 0
+print_info: n_expert_groups  = 0
+print_info: n_group_used     = 0
+print_info: causal attn      = 1
+print_info: pooling type     = 0
+print_info: rope type        = 0
+print_info: rope scaling     = linear
+print_info: freq_base_train  = 500000.0
+print_info: freq_scale_train = 1
+print_info: n_ctx_orig_yarn  = 131072
+print_info: rope_yarn_log_mul= 0.0000
+print_info: rope_finetuned   = unknown
+print_info: model type       = 3B
+print_info: model params     = 3.21 B
+print_info: general.name     = Llama-3.2-3B-Instruct
+print_info: vocab type       = BPE
+print_info: n_vocab          = 128256
+print_info: n_merges         = 280147
+print_info: BOS token        = 128000 '<|begin_of_text|>'
+print_info: EOS token        = 128009 '<|eot_id|>'
+print_info: EOT token        = 128009 '<|eot_id|>'
+print_info: EOM token        = 128008 '<|eom_id|>'
+print_info: PAD token        = 128004 '<|finetune_right_pad_id|>'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 128001 '<|end_of_text|>'
+print_info: EOG token        = 128008 '<|eom_id|>'
+print_info: EOG token        = 128009 '<|eot_id|>'
+print_info: max token length = 256
+load_tensors: loading model tensors, this can take a while... (mmap = true)
+load_tensors: offloading output layer to GPU
+load_tensors: offloading 27 repeating layers to GPU
+load_tensors: offloaded 29/29 layers to GPU
+load_tensors:   CPU_Mapped model buffer size =  1904.85 MiB
+load_tensors:   CPU_REPACK model buffer size =  1299.38 MiB
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+....srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+...srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+....srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+....................................srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+.....................................
+common_init_result: added <|end_of_text|> logit bias = -inf
+common_init_result: added <|eom_id|> logit bias = -inf
+common_init_result: added <|eot_id|> logit bias = -inf
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 4
+llama_context: n_ctx         = 2048
+llama_context: n_ctx_seq     = 2048
+llama_context: n_batch       = 512
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = enabled
+llama_context: kv_unified    = true
+llama_context: freq_base     = 500000.0
+llama_context: freq_scale    = 1
+llama_context: n_ctx_seq (2048) < n_ctx_train (131072) -- the full capacity of the model will not be utilized
+llama_context:        CPU  output buffer size =     1.96 MiB
+llama_kv_cache:        CPU KV buffer size =   224.00 MiB
+llama_kv_cache: size =  224.00 MiB (  2048 cells,  28 layers,  4/1 seqs), K (f16):  112.00 MiB, V (f16):  112.00 MiB
+llama_context:        CPU compute buffer size =   280.51 MiB
+llama_context: graph nodes  = 875
+llama_context: graph splits = 1
+common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+srv          init: initializing slots, n_slots = 4
+slot         init: id  0 | task -1 | new slot, n_ctx = 2048
+slot         init: id  1 | task -1 | new slot, n_ctx = 2048
+slot         init: id  2 | task -1 | new slot, n_ctx = 2048
+slot         init: id  3 | task -1 | new slot, n_ctx = 2048
+srv          init: prompt cache is enabled, size limit: 8192 MiB
+srv          init: use `--cache-ram 0` to disable the prompt cache
+srv          init: for more info see https://github.com/ggml-org/llama.cpp/pull/16391
+srv          init: thinking = 0
+init: chat template, chat_template: {{- bos_token }}
+{%- if custom_tools is defined %}
+    {%- set tools = custom_tools %}
+{%- endif %}
+{%- if not tools_in_user_message is defined %}
+    {%- set tools_in_user_message = true %}
+{%- endif %}
+{%- if not date_string is defined %}
+    {%- if strftime_now is defined %}
+        {%- set date_string = strftime_now("%d %b %Y") %}
+    {%- else %}
+        {%- set date_string = "26 Jul 2024" %}
+    {%- endif %}
+{%- endif %}
+{%- if not tools is defined %}
+    {%- set tools = none %}
+{%- endif %}
+
+{#- This block extracts the system message, so we can slot it into the right place. #}
+{%- if messages[0]['role'] == 'system' %}
+    {%- set system_message = messages[0]['content']|trim %}
+    {%- set messages = messages[1:] %}
+{%- else %}
+    {%- set system_message = "" %}
+{%- endif %}
+
+{#- System message #}
+{{- "<|start_header_id|>system<|end_header_id|>\n\n" }}
+{%- if tools is not none %}
+    {{- "Environment: ipython\n" }}
+{%- endif %}
+{{- "Cutting Knowledge Date: December 2023\n" }}
+{{- "Today Date: " + date_string + "\n\n" }}
+{%- if tools is not none and not tools_in_user_message %}
+    {{- "You have access to the following functions. To call a function, please respond with JSON for a function call." }}
+    {{- 'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.' }}
+    {{- "Do not use variables.\n\n" }}
+    {%- for t in tools %}
+        {{- t | tojson(indent=4) }}
+        {{- "\n\n" }}
+    {%- endfor %}
+{%- endif %}
+{{- system_message }}
+{{- "<|eot_id|>" }}
+
+{#- Custom tools are passed in a user message with some extra guidance #}
+{%- if tools_in_user_message and not tools is none %}
+    {#- Extract the first user message so we can plug it in here #}
+    {%- if messages | length != 0 %}
+        {%- set first_user_message = messages[0]['content']|trim %}
+        {%- set messages = messages[1:] %}
+    {%- else %}
+        {{- raise_exception("Cannot put tools in the first user message when there's no first user message!") }}
+{%- endif %}
+    {{- '<|start_header_id|>user<|end_header_id|>\n\n' -}}
+    {{- "Given the following functions, please respond with a JSON for a function call " }}
+    {{- "with its proper arguments that best answers the given prompt.\n\n" }}
+    {{- 'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.' }}
+    {{- "Do not use variables.\n\n" }}
+    {%- for t in tools %}
+        {{- t | tojson(indent=4) }}
+        {{- "\n\n" }}
+    {%- endfor %}
+    {{- first_user_message + "<|eot_id|>"}}
+{%- endif %}
+
+{%- for message in messages %}
+    {%- if not (message.role == 'ipython' or message.role == 'tool' or 'tool_calls' in message) %}
+        {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' }}
+    {%- elif 'tool_calls' in message %}
+        {%- if not message.tool_calls|length == 1 %}
+            {{- raise_exception("This model only supports single tool-calls at once!") }}
+        {%- endif %}
+        {%- set tool_call = message.tool_calls[0].function %}
+        {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' -}}
+        {{- '{"name": "' + tool_call.name + '", ' }}
+        {{- '"parameters": ' }}
+        {{- tool_call.arguments | tojson }}
+        {{- "}" }}
+        {{- "<|eot_id|>" }}
+    {%- elif message.role == "tool" or message.role == "ipython" %}
+        {{- "<|start_header_id|>ipython<|end_header_id|>\n\n" }}
+        {%- if message.content is mapping or message.content is iterable %}
+            {{- message.content | tojson }}
+        {%- else %}
+            {{- message.content }}
+        {%- endif %}
+        {{- "<|eot_id|>" }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' }}
+{%- endif %}
+, example_format: '<|start_header_id|>system<|end_header_id|>
+
+Cutting Knowledge Date: December 2023
+Today Date: 21 Dec 2025
+
+You are a helpful assistant<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Hello<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+Hi there<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+How are you?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+'
+main: model loaded
+main: server is listening on http://127.0.0.1:8081
+main: starting the main loop...
+srv  update_slots: all slots are idle
+slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  3 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  3 | task 0 | processing task
+slot update_slots: id  3 | task 0 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 2
+slot update_slots: id  3 | task 0 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  3 | task 0 | prompt processing progress, n_tokens = 2, batch.n_tokens = 2, progress = 1.000000
+slot update_slots: id  3 | task 0 | prompt done, n_tokens = 2, batch.n_tokens = 2
+slot print_timing: id  3 | task 0 | 
+prompt eval time =      57.50 ms /     2 tokens (   28.75 ms per token,    34.78 tokens per second)
+       eval time =       0.00 ms /     1 tokens (    0.00 ms per token, 1000000.00 tokens per second)
+      total time =      57.50 ms /     3 tokens
+slot      release: id  3 | task 0 | stop processing: n_tokens = 2, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  2 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  2 | task 2 | processing task
+slot update_slots: id  2 | task 2 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 189
+slot update_slots: id  2 | task 2 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  2 | task 2 | prompt processing progress, n_tokens = 189, batch.n_tokens = 189, progress = 1.000000
+slot update_slots: id  2 | task 2 | prompt done, n_tokens = 189, batch.n_tokens = 189
+slot print_timing: id  2 | task 2 | 
+prompt eval time =    1705.17 ms /   189 tokens (    9.02 ms per token,   110.84 tokens per second)
+       eval time =    1291.90 ms /    26 tokens (   49.69 ms per token,    20.13 tokens per second)
+      total time =    2997.07 ms /   215 tokens
+slot      release: id  2 | task 2 | stop processing: n_tokens = 214, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.242 (> 0.100 thold), f_keep = 0.187
+srv  get_availabl: updating prompt cache
+srv   prompt_save:  - saving prompt with length 214, total state size = 23.409 MiB
+srv          load:  - looking for better prompt, base f_keep = 0.187, sim = 0.242
+srv        update:  - cache state: 1 prompts, 23.409 MiB (limits: 8192.000 MiB, 2048 tokens, 74888 est)
+srv        update:    - prompt 000002220C230F30:     214 tokens, checkpoints:  0,    23.409 MiB
+srv  get_availabl: prompt cache update took 9.73 ms
+slot launch_slot_: id  2 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  2 | task 29 | processing task
+slot update_slots: id  2 | task 29 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 165
+slot update_slots: id  2 | task 29 | n_tokens = 40, memory_seq_rm [40, end)
+slot update_slots: id  2 | task 29 | prompt processing progress, n_tokens = 165, batch.n_tokens = 125, progress = 1.000000
+slot update_slots: id  2 | task 29 | prompt done, n_tokens = 165, batch.n_tokens = 125
+slot print_timing: id  2 | task 29 | 
+prompt eval time =    1270.87 ms /   125 tokens (   10.17 ms per token,    98.36 tokens per second)
+       eval time =    2955.82 ms /    57 tokens (   51.86 ms per token,    19.28 tokens per second)
+      total time =    4226.69 ms /   182 tokens
+slot      release: id  2 | task 29 | stop processing: n_tokens = 221, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  1 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  1 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  1 | task 87 | processing task
+slot update_slots: id  1 | task 87 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 754
+slot update_slots: id  1 | task 87 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  1 | task 87 | prompt processing progress, n_tokens = 512, batch.n_tokens = 512, progress = 0.679045
+slot update_slots: id  1 | task 87 | n_tokens = 512, memory_seq_rm [512, end)
+slot update_slots: id  1 | task 87 | prompt processing progress, n_tokens = 754, batch.n_tokens = 242, progress = 1.000000
+slot update_slots: id  1 | task 87 | prompt done, n_tokens = 754, batch.n_tokens = 242
+slot print_timing: id  1 | task 87 | 
+prompt eval time =    9283.30 ms /   754 tokens (   12.31 ms per token,    81.22 tokens per second)
+       eval time =    2358.05 ms /    37 tokens (   63.73 ms per token,    15.69 tokens per second)
+      total time =   11641.35 ms /   791 tokens
+slot      release: id  1 | task 87 | stop processing: n_tokens = 790, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+
+============================================================
+[2025-12-21 13:47:38] Starting llama.cpp server
+Command: C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\llama-server.exe --model C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf --port 8081 --host 127.0.0.1 --ctx-size 2048 --threads 9 --n-gpu-layers 99 --flash-attn on --mlock --batch-size 512 --cont-batching
+============================================================
+load_backend: loaded RPC backend from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\ggml-rpc.dll
+load_backend: loaded CPU backend from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\ggml-cpu-skylakex.dll
+main: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true
+build: 7486 (74e05131e) with Clang 19.1.5 for Windows x86_64
+system info: n_threads = 9, n_threads_batch = 9, total_threads = 20
+
+system_info: n_threads = 9 (n_threads_batch = 9) / 20 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+
+init: using 19 threads for HTTP server
+start: binding port with default address family
+main: loading model
+srv    load_model: loading model 'C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf'
+common_init_result: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on
+srv  log_server_r: request: GET /health 127.0.0.1 503
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+llama_params_fit_impl: no devices with dedicated memory found
+llama_params_fit: successfully fit params to free device memory
+llama_params_fit: fitting params to free memory took 0.45 seconds
+llama_model_loader: loaded meta data with 36 key-value pairs and 255 tensors from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = llama
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = Llama-3.2-3B-Instruct
+llama_model_loader: - kv   3:                           general.finetune str              = Instruct
+llama_model_loader: - kv   4:                           general.basename str              = Llama-3.2-3B-Instruct
+llama_model_loader: - kv   5:                       general.quantized_by str              = Unsloth
+llama_model_loader: - kv   6:                         general.size_label str              = 3B
+llama_model_loader: - kv   7:                           general.repo_url str              = https://huggingface.co/unsloth
+llama_model_loader: - kv   8:                          llama.block_count u32              = 28
+llama_model_loader: - kv   9:                       llama.context_length u32              = 131072
+llama_model_loader: - kv  10:                     llama.embedding_length u32              = 3072
+llama_model_loader: - kv  11:                  llama.feed_forward_length u32              = 8192
+llama_model_loader: - kv  12:                 llama.attention.head_count u32              = 24
+llama_model_loader: - kv  13:              llama.attention.head_count_kv u32              = 8
+llama_model_loader: - kv  14:                       llama.rope.freq_base f32              = 500000.000000
+llama_model_loader: - kv  15:     llama.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  16:                 llama.attention.key_length u32              = 128
+llama_model_loader: - kv  17:               llama.attention.value_length u32              = 128
+llama_model_loader: - kv  18:                           llama.vocab_size u32              = 128256
+llama_model_loader: - kv  19:                 llama.rope.dimension_count u32              = 128
+llama_model_loader: - kv  20:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  21:                         tokenizer.ggml.pre str              = llama-bpe
+llama_model_loader: - kv  22:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  23:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  24:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
+llama_model_loader: - kv  25:                tokenizer.ggml.bos_token_id u32              = 128000
+llama_model_loader: - kv  26:                tokenizer.ggml.eos_token_id u32              = 128009
+llama_model_loader: - kv  27:            tokenizer.ggml.padding_token_id u32              = 128004
+llama_model_loader: - kv  28:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  29:                    tokenizer.chat_template str              = {{- bos_token }}\n{%- if custom_tools ...
+llama_model_loader: - kv  30:               general.quantization_version u32              = 2
+llama_model_loader: - kv  31:                          general.file_type u32              = 15
+llama_model_loader: - kv  32:                      quantize.imatrix.file str              = Llama-3.2-3B-Instruct-GGUF/imatrix_un...
+llama_model_loader: - kv  33:                   quantize.imatrix.dataset str              = unsloth_calibration_Llama-3.2-3B-Inst...
+llama_model_loader: - kv  34:             quantize.imatrix.entries_count i32              = 196
+llama_model_loader: - kv  35:              quantize.imatrix.chunks_count i32              = 689
+llama_model_loader: - type  f32:   58 tensors
+llama_model_loader: - type q4_K:  168 tensors
+llama_model_loader: - type q6_K:   29 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_K - Medium
+print_info: file size   = 1.87 GiB (5.01 BPW) 
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+load: printing all EOG tokens:
+load:   - 128001 ('<|end_of_text|>')
+load:   - 128008 ('<|eom_id|>')
+load:   - 128009 ('<|eot_id|>')
+load: special tokens cache size = 256
+load: token to piece cache size = 0.7999 MB
+print_info: arch             = llama
+print_info: vocab_only       = 0
+print_info: no_alloc         = 0
+print_info: n_ctx_train      = 131072
+print_info: n_embd           = 3072
+print_info: n_embd_inp       = 3072
+print_info: n_layer          = 28
+print_info: n_head           = 24
+print_info: n_head_kv        = 8
+print_info: n_rot            = 128
+print_info: n_swa            = 0
+print_info: is_swa_any       = 0
+print_info: n_embd_head_k    = 128
+print_info: n_embd_head_v    = 128
+print_info: n_gqa            = 3
+print_info: n_embd_k_gqa     = 1024
+print_info: n_embd_v_gqa     = 1024
+print_info: f_norm_eps       = 0.0e+00
+print_info: f_norm_rms_eps   = 1.0e-05
+print_info: f_clamp_kqv      = 0.0e+00
+print_info: f_max_alibi_bias = 0.0e+00
+print_info: f_logit_scale    = 0.0e+00
+print_info: f_attn_scale     = 0.0e+00
+print_info: n_ff             = 8192
+print_info: n_expert         = 0
+print_info: n_expert_used    = 0
+print_info: n_expert_groups  = 0
+print_info: n_group_used     = 0
+print_info: causal attn      = 1
+print_info: pooling type     = 0
+print_info: rope type        = 0
+print_info: rope scaling     = linear
+print_info: freq_base_train  = 500000.0
+print_info: freq_scale_train = 1
+print_info: n_ctx_orig_yarn  = 131072
+print_info: rope_yarn_log_mul= 0.0000
+print_info: rope_finetuned   = unknown
+print_info: model type       = 3B
+print_info: model params     = 3.21 B
+print_info: general.name     = Llama-3.2-3B-Instruct
+print_info: vocab type       = BPE
+print_info: n_vocab          = 128256
+print_info: n_merges         = 280147
+print_info: BOS token        = 128000 '<|begin_of_text|>'
+print_info: EOS token        = 128009 '<|eot_id|>'
+print_info: EOT token        = 128009 '<|eot_id|>'
+print_info: EOM token        = 128008 '<|eom_id|>'
+print_info: PAD token        = 128004 '<|finetune_right_pad_id|>'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 128001 '<|end_of_text|>'
+print_info: EOG token        = 128008 '<|eom_id|>'
+print_info: EOG token        = 128009 '<|eot_id|>'
+print_info: max token length = 256
+load_tensors: loading model tensors, this can take a while... (mmap = true)
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+load_tensors: offloading output layer to GPU
+load_tensors: offloading 27 repeating layers to GPU
+load_tensors: offloaded 29/29 layers to GPU
+load_tensors:   CPU_Mapped model buffer size =  1904.85 MiB
+load_tensors:   CPU_REPACK model buffer size =  1299.38 MiB
+....srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+...srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+...srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+.................................srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+.........................................
+common_init_result: added <|end_of_text|> logit bias = -inf
+common_init_result: added <|eom_id|> logit bias = -inf
+common_init_result: added <|eot_id|> logit bias = -inf
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 4
+llama_context: n_ctx         = 2048
+llama_context: n_ctx_seq     = 2048
+llama_context: n_batch       = 512
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = enabled
+llama_context: kv_unified    = true
+llama_context: freq_base     = 500000.0
+llama_context: freq_scale    = 1
+llama_context: n_ctx_seq (2048) < n_ctx_train (131072) -- the full capacity of the model will not be utilized
+llama_context:        CPU  output buffer size =     1.96 MiB
+llama_kv_cache:        CPU KV buffer size =   224.00 MiB
+llama_kv_cache: size =  224.00 MiB (  2048 cells,  28 layers,  4/1 seqs), K (f16):  112.00 MiB, V (f16):  112.00 MiB
+llama_context:        CPU compute buffer size =   280.51 MiB
+llama_context: graph nodes  = 875
+llama_context: graph splits = 1
+common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+srv          init: initializing slots, n_slots = 4
+slot         init: id  0 | task -1 | new slot, n_ctx = 2048
+slot         init: id  1 | task -1 | new slot, n_ctx = 2048
+slot         init: id  2 | task -1 | new slot, n_ctx = 2048
+slot         init: id  3 | task -1 | new slot, n_ctx = 2048
+srv          init: prompt cache is enabled, size limit: 8192 MiB
+srv          init: use `--cache-ram 0` to disable the prompt cache
+srv          init: for more info see https://github.com/ggml-org/llama.cpp/pull/16391
+srv          init: thinking = 0
+init: chat template, chat_template: {{- bos_token }}
+{%- if custom_tools is defined %}
+    {%- set tools = custom_tools %}
+{%- endif %}
+{%- if not tools_in_user_message is defined %}
+    {%- set tools_in_user_message = true %}
+{%- endif %}
+{%- if not date_string is defined %}
+    {%- if strftime_now is defined %}
+        {%- set date_string = strftime_now("%d %b %Y") %}
+    {%- else %}
+        {%- set date_string = "26 Jul 2024" %}
+    {%- endif %}
+{%- endif %}
+{%- if not tools is defined %}
+    {%- set tools = none %}
+{%- endif %}
+
+{#- This block extracts the system message, so we can slot it into the right place. #}
+{%- if messages[0]['role'] == 'system' %}
+    {%- set system_message = messages[0]['content']|trim %}
+    {%- set messages = messages[1:] %}
+{%- else %}
+    {%- set system_message = "" %}
+{%- endif %}
+
+{#- System message #}
+{{- "<|start_header_id|>system<|end_header_id|>\n\n" }}
+{%- if tools is not none %}
+    {{- "Environment: ipython\n" }}
+{%- endif %}
+{{- "Cutting Knowledge Date: December 2023\n" }}
+{{- "Today Date: " + date_string + "\n\n" }}
+{%- if tools is not none and not tools_in_user_message %}
+    {{- "You have access to the following functions. To call a function, please respond with JSON for a function call." }}
+    {{- 'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.' }}
+    {{- "Do not use variables.\n\n" }}
+    {%- for t in tools %}
+        {{- t | tojson(indent=4) }}
+        {{- "\n\n" }}
+    {%- endfor %}
+{%- endif %}
+{{- system_message }}
+{{- "<|eot_id|>" }}
+
+{#- Custom tools are passed in a user message with some extra guidance #}
+{%- if tools_in_user_message and not tools is none %}
+    {#- Extract the first user message so we can plug it in here #}
+    {%- if messages | length != 0 %}
+        {%- set first_user_message = messages[0]['content']|trim %}
+        {%- set messages = messages[1:] %}
+    {%- else %}
+        {{- raise_exception("Cannot put tools in the first user message when there's no first user message!") }}
+{%- endif %}
+    {{- '<|start_header_id|>user<|end_header_id|>\n\n' -}}
+    {{- "Given the following functions, please respond with a JSON for a function call " }}
+    {{- "with its proper arguments that best answers the given prompt.\n\n" }}
+    {{- 'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.' }}
+    {{- "Do not use variables.\n\n" }}
+    {%- for t in tools %}
+        {{- t | tojson(indent=4) }}
+        {{- "\n\n" }}
+    {%- endfor %}
+    {{- first_user_message + "<|eot_id|>"}}
+{%- endif %}
+
+{%- for message in messages %}
+    {%- if not (message.role == 'ipython' or message.role == 'tool' or 'tool_calls' in message) %}
+        {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' }}
+    {%- elif 'tool_calls' in message %}
+        {%- if not message.tool_calls|length == 1 %}
+            {{- raise_exception("This model only supports single tool-calls at once!") }}
+        {%- endif %}
+        {%- set tool_call = message.tool_calls[0].function %}
+        {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' -}}
+        {{- '{"name": "' + tool_call.name + '", ' }}
+        {{- '"parameters": ' }}
+        {{- tool_call.arguments | tojson }}
+        {{- "}" }}
+        {{- "<|eot_id|>" }}
+    {%- elif message.role == "tool" or message.role == "ipython" %}
+        {{- "<|start_header_id|>ipython<|end_header_id|>\n\n" }}
+        {%- if message.content is mapping or message.content is iterable %}
+            {{- message.content | tojson }}
+        {%- else %}
+            {{- message.content }}
+        {%- endif %}
+        {{- "<|eot_id|>" }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' }}
+{%- endif %}
+, example_format: '<|start_header_id|>system<|end_header_id|>
+
+Cutting Knowledge Date: December 2023
+Today Date: 21 Dec 2025
+
+You are a helpful assistant<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Hello<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+Hi there<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+How are you?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+'
+main: model loaded
+main: server is listening on http://127.0.0.1:8081
+main: starting the main loop...
+srv  update_slots: all slots are idle
+slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  3 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  3 | task 0 | processing task
+slot update_slots: id  3 | task 0 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 2
+slot update_slots: id  3 | task 0 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  3 | task 0 | prompt processing progress, n_tokens = 2, batch.n_tokens = 2, progress = 1.000000
+slot update_slots: id  3 | task 0 | prompt done, n_tokens = 2, batch.n_tokens = 2
+slot print_timing: id  3 | task 0 | 
+prompt eval time =      59.33 ms /     2 tokens (   29.67 ms per token,    33.71 tokens per second)
+       eval time =       0.00 ms /     1 tokens (    0.00 ms per token, 1000000.00 tokens per second)
+      total time =      59.33 ms /     3 tokens
+slot      release: id  3 | task 0 | stop processing: n_tokens = 2, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  2 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  2 | task 2 | processing task
+slot update_slots: id  2 | task 2 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 295
+slot update_slots: id  2 | task 2 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  2 | task 2 | prompt processing progress, n_tokens = 295, batch.n_tokens = 295, progress = 1.000000
+slot update_slots: id  2 | task 2 | prompt done, n_tokens = 295, batch.n_tokens = 295
+slot print_timing: id  2 | task 2 | 
+prompt eval time =    2784.97 ms /   295 tokens (    9.44 ms per token,   105.93 tokens per second)
+       eval time =    3319.75 ms /    64 tokens (   51.87 ms per token,    19.28 tokens per second)
+      total time =    6104.71 ms /   359 tokens
+slot      release: id  2 | task 2 | stop processing: n_tokens = 358, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.237 (> 0.100 thold), f_keep = 0.246
+srv  get_availabl: updating prompt cache
+srv   prompt_save:  - saving prompt with length 358, total state size = 39.161 MiB
+srv          load:  - looking for better prompt, base f_keep = 0.246, sim = 0.237
+srv        update:  - cache state: 1 prompts, 39.161 MiB (limits: 8192.000 MiB, 2048 tokens, 74889 est)
+srv        update:    - prompt 00000299E168D660:     358 tokens, checkpoints:  0,    39.161 MiB
+srv  get_availabl: prompt cache update took 13.00 ms
+slot launch_slot_: id  2 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  2 | task 67 | processing task
+slot update_slots: id  2 | task 67 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 371
+slot update_slots: id  2 | task 67 | n_tokens = 88, memory_seq_rm [88, end)
+slot update_slots: id  2 | task 67 | prompt processing progress, n_tokens = 371, batch.n_tokens = 283, progress = 1.000000
+slot update_slots: id  2 | task 67 | prompt done, n_tokens = 371, batch.n_tokens = 283
+slot print_timing: id  2 | task 67 | 
+prompt eval time =    2768.60 ms /   283 tokens (    9.78 ms per token,   102.22 tokens per second)
+       eval time =    3397.54 ms /    64 tokens (   53.09 ms per token,    18.84 tokens per second)
+      total time =    6166.14 ms /   347 tokens
+slot      release: id  2 | task 67 | stop processing: n_tokens = 434, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.380 (> 0.100 thold), f_keep = 0.366
+srv  get_availabl: updating prompt cache
+srv   prompt_save:  - saving prompt with length 434, total state size = 47.474 MiB
+srv          load:  - looking for better prompt, base f_keep = 0.366, sim = 0.380
+srv        update:  - cache state: 2 prompts, 86.635 MiB (limits: 8192.000 MiB, 2048 tokens, 74889 est)
+srv        update:    - prompt 00000299E168D660:     358 tokens, checkpoints:  0,    39.161 MiB
+srv        update:    - prompt 00000299E168D580:     434 tokens, checkpoints:  0,    47.474 MiB
+srv  get_availabl: prompt cache update took 20.07 ms
+slot launch_slot_: id  2 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  2 | task 132 | processing task
+slot update_slots: id  2 | task 132 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 418
+slot update_slots: id  2 | task 132 | n_tokens = 159, memory_seq_rm [159, end)
+slot update_slots: id  2 | task 132 | prompt processing progress, n_tokens = 418, batch.n_tokens = 259, progress = 1.000000
+slot update_slots: id  2 | task 132 | prompt done, n_tokens = 418, batch.n_tokens = 259
+slot print_timing: id  2 | task 132 | 
+prompt eval time =    2613.99 ms /   259 tokens (   10.09 ms per token,    99.08 tokens per second)
+       eval time =    3455.27 ms /    64 tokens (   53.99 ms per token,    18.52 tokens per second)
+      total time =    6069.26 ms /   323 tokens
+slot      release: id  2 | task 132 | stop processing: n_tokens = 481, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.439 (> 0.100 thold), f_keep = 0.428
+srv  get_availabl: updating prompt cache
+srv   prompt_save:  - saving prompt with length 481, total state size = 52.616 MiB
+srv          load:  - looking for better prompt, base f_keep = 0.428, sim = 0.439
+srv        update:  - cache state: 3 prompts, 139.251 MiB (limits: 8192.000 MiB, 2048 tokens, 74889 est)
+srv        update:    - prompt 00000299E168D660:     358 tokens, checkpoints:  0,    39.161 MiB
+srv        update:    - prompt 00000299E168D580:     434 tokens, checkpoints:  0,    47.474 MiB
+srv        update:    - prompt 00000299E168D3C0:     481 tokens, checkpoints:  0,    52.616 MiB
+srv  get_availabl: prompt cache update took 18.66 ms
+slot launch_slot_: id  2 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  2 | task 197 | processing task
+slot update_slots: id  2 | task 197 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 469
+slot update_slots: id  2 | task 197 | n_tokens = 206, memory_seq_rm [206, end)
+slot update_slots: id  2 | task 197 | prompt processing progress, n_tokens = 469, batch.n_tokens = 263, progress = 1.000000
+slot update_slots: id  2 | task 197 | prompt done, n_tokens = 469, batch.n_tokens = 263
+slot print_timing: id  2 | task 197 | 
+prompt eval time =    2769.28 ms /   263 tokens (   10.53 ms per token,    94.97 tokens per second)
+       eval time =    3523.40 ms /    64 tokens (   55.05 ms per token,    18.16 tokens per second)
+      total time =    6292.68 ms /   327 tokens
+slot      release: id  2 | task 197 | stop processing: n_tokens = 532, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.496 (> 0.100 thold), f_keep = 0.476
+srv  get_availabl: updating prompt cache
+srv   prompt_save:  - saving prompt with length 532, total state size = 58.194 MiB
+srv          load:  - looking for better prompt, base f_keep = 0.476, sim = 0.496
+srv        update:  - cache state: 4 prompts, 197.445 MiB (limits: 8192.000 MiB, 2048 tokens, 74889 est)
+srv        update:    - prompt 00000299E168D660:     358 tokens, checkpoints:  0,    39.161 MiB
+srv        update:    - prompt 00000299E168D580:     434 tokens, checkpoints:  0,    47.474 MiB
+srv        update:    - prompt 00000299E168D3C0:     481 tokens, checkpoints:  0,    52.616 MiB
+srv        update:    - prompt 00000299E168D200:     532 tokens, checkpoints:  0,    58.194 MiB
+srv  get_availabl: prompt cache update took 20.73 ms
+slot launch_slot_: id  2 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  2 | task 262 | processing task
+slot update_slots: id  2 | task 262 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 510
+slot update_slots: id  2 | task 262 | n_tokens = 253, memory_seq_rm [253, end)
+slot update_slots: id  2 | task 262 | prompt processing progress, n_tokens = 510, batch.n_tokens = 257, progress = 1.000000
+slot update_slots: id  2 | task 262 | prompt done, n_tokens = 510, batch.n_tokens = 257
+slot print_timing: id  2 | task 262 | 
+prompt eval time =    2728.75 ms /   257 tokens (   10.62 ms per token,    94.18 tokens per second)
+       eval time =    3565.90 ms /    64 tokens (   55.72 ms per token,    17.95 tokens per second)
+      total time =    6294.65 ms /   321 tokens
+slot      release: id  2 | task 262 | stop processing: n_tokens = 573, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+
+============================================================
+[2025-12-21 13:59:40] Starting llama.cpp server
+Command: C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\llama-server.exe --model C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf --port 8081 --host 127.0.0.1 --ctx-size 2048 --threads 9 --n-gpu-layers 99 --flash-attn on --mlock --batch-size 512 --cont-batching
+============================================================
+load_backend: loaded RPC backend from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\ggml-rpc.dll
+load_backend: loaded CPU backend from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\ggml-cpu-skylakex.dll
+main: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true
+build: 7486 (74e05131e) with Clang 19.1.5 for Windows x86_64
+system info: n_threads = 9, n_threads_batch = 9, total_threads = 20
+
+system_info: n_threads = 9 (n_threads_batch = 9) / 20 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+
+init: using 19 threads for HTTP server
+start: binding port with default address family
+main: loading model
+srv    load_model: loading model 'C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf'
+common_init_result: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on
+srv  log_server_r: request: GET /health 127.0.0.1 503
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+llama_params_fit_impl: no devices with dedicated memory found
+llama_params_fit: successfully fit params to free device memory
+llama_params_fit: fitting params to free memory took 0.50 seconds
+llama_model_loader: loaded meta data with 36 key-value pairs and 255 tensors from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = llama
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = Llama-3.2-3B-Instruct
+llama_model_loader: - kv   3:                           general.finetune str              = Instruct
+llama_model_loader: - kv   4:                           general.basename str              = Llama-3.2-3B-Instruct
+llama_model_loader: - kv   5:                       general.quantized_by str              = Unsloth
+llama_model_loader: - kv   6:                         general.size_label str              = 3B
+llama_model_loader: - kv   7:                           general.repo_url str              = https://huggingface.co/unsloth
+llama_model_loader: - kv   8:                          llama.block_count u32              = 28
+llama_model_loader: - kv   9:                       llama.context_length u32              = 131072
+llama_model_loader: - kv  10:                     llama.embedding_length u32              = 3072
+llama_model_loader: - kv  11:                  llama.feed_forward_length u32              = 8192
+llama_model_loader: - kv  12:                 llama.attention.head_count u32              = 24
+llama_model_loader: - kv  13:              llama.attention.head_count_kv u32              = 8
+llama_model_loader: - kv  14:                       llama.rope.freq_base f32              = 500000.000000
+llama_model_loader: - kv  15:     llama.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  16:                 llama.attention.key_length u32              = 128
+llama_model_loader: - kv  17:               llama.attention.value_length u32              = 128
+llama_model_loader: - kv  18:                           llama.vocab_size u32              = 128256
+llama_model_loader: - kv  19:                 llama.rope.dimension_count u32              = 128
+llama_model_loader: - kv  20:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  21:                         tokenizer.ggml.pre str              = llama-bpe
+llama_model_loader: - kv  22:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  23:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  24:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
+llama_model_loader: - kv  25:                tokenizer.ggml.bos_token_id u32              = 128000
+llama_model_loader: - kv  26:                tokenizer.ggml.eos_token_id u32              = 128009
+llama_model_loader: - kv  27:            tokenizer.ggml.padding_token_id u32              = 128004
+llama_model_loader: - kv  28:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  29:                    tokenizer.chat_template str              = {{- bos_token }}\n{%- if custom_tools ...
+llama_model_loader: - kv  30:               general.quantization_version u32              = 2
+llama_model_loader: - kv  31:                          general.file_type u32              = 15
+llama_model_loader: - kv  32:                      quantize.imatrix.file str              = Llama-3.2-3B-Instruct-GGUF/imatrix_un...
+llama_model_loader: - kv  33:                   quantize.imatrix.dataset str              = unsloth_calibration_Llama-3.2-3B-Inst...
+llama_model_loader: - kv  34:             quantize.imatrix.entries_count i32              = 196
+llama_model_loader: - kv  35:              quantize.imatrix.chunks_count i32              = 689
+llama_model_loader: - type  f32:   58 tensors
+llama_model_loader: - type q4_K:  168 tensors
+llama_model_loader: - type q6_K:   29 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_K - Medium
+print_info: file size   = 1.87 GiB (5.01 BPW) 
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+load: printing all EOG tokens:
+load:   - 128001 ('<|end_of_text|>')
+load:   - 128008 ('<|eom_id|>')
+load:   - 128009 ('<|eot_id|>')
+load: special tokens cache size = 256
+load: token to piece cache size = 0.7999 MB
+print_info: arch             = llama
+print_info: vocab_only       = 0
+print_info: no_alloc         = 0
+print_info: n_ctx_train      = 131072
+print_info: n_embd           = 3072
+print_info: n_embd_inp       = 3072
+print_info: n_layer          = 28
+print_info: n_head           = 24
+print_info: n_head_kv        = 8
+print_info: n_rot            = 128
+print_info: n_swa            = 0
+print_info: is_swa_any       = 0
+print_info: n_embd_head_k    = 128
+print_info: n_embd_head_v    = 128
+print_info: n_gqa            = 3
+print_info: n_embd_k_gqa     = 1024
+print_info: n_embd_v_gqa     = 1024
+print_info: f_norm_eps       = 0.0e+00
+print_info: f_norm_rms_eps   = 1.0e-05
+print_info: f_clamp_kqv      = 0.0e+00
+print_info: f_max_alibi_bias = 0.0e+00
+print_info: f_logit_scale    = 0.0e+00
+print_info: f_attn_scale     = 0.0e+00
+print_info: n_ff             = 8192
+print_info: n_expert         = 0
+print_info: n_expert_used    = 0
+print_info: n_expert_groups  = 0
+print_info: n_group_used     = 0
+print_info: causal attn      = 1
+print_info: pooling type     = 0
+print_info: rope type        = 0
+print_info: rope scaling     = linear
+print_info: freq_base_train  = 500000.0
+print_info: freq_scale_train = 1
+print_info: n_ctx_orig_yarn  = 131072
+print_info: rope_yarn_log_mul= 0.0000
+print_info: rope_finetuned   = unknown
+print_info: model type       = 3B
+print_info: model params     = 3.21 B
+print_info: general.name     = Llama-3.2-3B-Instruct
+print_info: vocab type       = BPE
+print_info: n_vocab          = 128256
+print_info: n_merges         = 280147
+print_info: BOS token        = 128000 '<|begin_of_text|>'
+print_info: EOS token        = 128009 '<|eot_id|>'
+print_info: EOT token        = 128009 '<|eot_id|>'
+print_info: EOM token        = 128008 '<|eom_id|>'
+print_info: PAD token        = 128004 '<|finetune_right_pad_id|>'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 128001 '<|end_of_text|>'
+print_info: EOG token        = 128008 '<|eom_id|>'
+print_info: EOG token        = 128009 '<|eot_id|>'
+print_info: max token length = 256
+load_tensors: loading model tensors, this can take a while... (mmap = true)
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+load_tensors: offloading output layer to GPU
+load_tensors: offloading 27 repeating layers to GPU
+load_tensors: offloaded 29/29 layers to GPU
+load_tensors:   CPU_Mapped model buffer size =  1904.85 MiB
+load_tensors:   CPU_REPACK model buffer size =  1299.38 MiB
+....srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+...srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+...srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+............................srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+..............................................
+common_init_result: added <|end_of_text|> logit bias = -inf
+common_init_result: added <|eom_id|> logit bias = -inf
+common_init_result: added <|eot_id|> logit bias = -inf
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 4
+llama_context: n_ctx         = 2048
+llama_context: n_ctx_seq     = 2048
+llama_context: n_batch       = 512
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = enabled
+llama_context: kv_unified    = true
+llama_context: freq_base     = 500000.0
+llama_context: freq_scale    = 1
+llama_context: n_ctx_seq (2048) < n_ctx_train (131072) -- the full capacity of the model will not be utilized
+llama_context:        CPU  output buffer size =     1.96 MiB
+llama_kv_cache:        CPU KV buffer size =   224.00 MiB
+llama_kv_cache: size =  224.00 MiB (  2048 cells,  28 layers,  4/1 seqs), K (f16):  112.00 MiB, V (f16):  112.00 MiB
+llama_context:        CPU compute buffer size =   280.51 MiB
+llama_context: graph nodes  = 875
+llama_context: graph splits = 1
+common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+srv          init: initializing slots, n_slots = 4
+slot         init: id  0 | task -1 | new slot, n_ctx = 2048
+slot         init: id  1 | task -1 | new slot, n_ctx = 2048
+slot         init: id  2 | task -1 | new slot, n_ctx = 2048
+slot         init: id  3 | task -1 | new slot, n_ctx = 2048
+srv          init: prompt cache is enabled, size limit: 8192 MiB
+srv          init: use `--cache-ram 0` to disable the prompt cache
+srv          init: for more info see https://github.com/ggml-org/llama.cpp/pull/16391
+srv          init: thinking = 0
+init: chat template, chat_template: {{- bos_token }}
+{%- if custom_tools is defined %}
+    {%- set tools = custom_tools %}
+{%- endif %}
+{%- if not tools_in_user_message is defined %}
+    {%- set tools_in_user_message = true %}
+{%- endif %}
+{%- if not date_string is defined %}
+    {%- if strftime_now is defined %}
+        {%- set date_string = strftime_now("%d %b %Y") %}
+    {%- else %}
+        {%- set date_string = "26 Jul 2024" %}
+    {%- endif %}
+{%- endif %}
+{%- if not tools is defined %}
+    {%- set tools = none %}
+{%- endif %}
+
+{#- This block extracts the system message, so we can slot it into the right place. #}
+{%- if messages[0]['role'] == 'system' %}
+    {%- set system_message = messages[0]['content']|trim %}
+    {%- set messages = messages[1:] %}
+{%- else %}
+    {%- set system_message = "" %}
+{%- endif %}
+
+{#- System message #}
+{{- "<|start_header_id|>system<|end_header_id|>\n\n" }}
+{%- if tools is not none %}
+    {{- "Environment: ipython\n" }}
+{%- endif %}
+{{- "Cutting Knowledge Date: December 2023\n" }}
+{{- "Today Date: " + date_string + "\n\n" }}
+{%- if tools is not none and not tools_in_user_message %}
+    {{- "You have access to the following functions. To call a function, please respond with JSON for a function call." }}
+    {{- 'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.' }}
+    {{- "Do not use variables.\n\n" }}
+    {%- for t in tools %}
+        {{- t | tojson(indent=4) }}
+        {{- "\n\n" }}
+    {%- endfor %}
+{%- endif %}
+{{- system_message }}
+{{- "<|eot_id|>" }}
+
+{#- Custom tools are passed in a user message with some extra guidance #}
+{%- if tools_in_user_message and not tools is none %}
+    {#- Extract the first user message so we can plug it in here #}
+    {%- if messages | length != 0 %}
+        {%- set first_user_message = messages[0]['content']|trim %}
+        {%- set messages = messages[1:] %}
+    {%- else %}
+        {{- raise_exception("Cannot put tools in the first user message when there's no first user message!") }}
+{%- endif %}
+    {{- '<|start_header_id|>user<|end_header_id|>\n\n' -}}
+    {{- "Given the following functions, please respond with a JSON for a function call " }}
+    {{- "with its proper arguments that best answers the given prompt.\n\n" }}
+    {{- 'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.' }}
+    {{- "Do not use variables.\n\n" }}
+    {%- for t in tools %}
+        {{- t | tojson(indent=4) }}
+        {{- "\n\n" }}
+    {%- endfor %}
+    {{- first_user_message + "<|eot_id|>"}}
+{%- endif %}
+
+{%- for message in messages %}
+    {%- if not (message.role == 'ipython' or message.role == 'tool' or 'tool_calls' in message) %}
+        {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' }}
+    {%- elif 'tool_calls' in message %}
+        {%- if not message.tool_calls|length == 1 %}
+            {{- raise_exception("This model only supports single tool-calls at once!") }}
+        {%- endif %}
+        {%- set tool_call = message.tool_calls[0].function %}
+        {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' -}}
+        {{- '{"name": "' + tool_call.name + '", ' }}
+        {{- '"parameters": ' }}
+        {{- tool_call.arguments | tojson }}
+        {{- "}" }}
+        {{- "<|eot_id|>" }}
+    {%- elif message.role == "tool" or message.role == "ipython" %}
+        {{- "<|start_header_id|>ipython<|end_header_id|>\n\n" }}
+        {%- if message.content is mapping or message.content is iterable %}
+            {{- message.content | tojson }}
+        {%- else %}
+            {{- message.content }}
+        {%- endif %}
+        {{- "<|eot_id|>" }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' }}
+{%- endif %}
+, example_format: '<|start_header_id|>system<|end_header_id|>
+
+Cutting Knowledge Date: December 2023
+Today Date: 21 Dec 2025
+
+You are a helpful assistant<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Hello<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+Hi there<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+How are you?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+'
+main: model loaded
+main: server is listening on http://127.0.0.1:8081
+main: starting the main loop...
+srv  update_slots: all slots are idle
+slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  3 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  3 | task 0 | processing task
+slot update_slots: id  3 | task 0 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 2
+slot update_slots: id  3 | task 0 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  3 | task 0 | prompt processing progress, n_tokens = 2, batch.n_tokens = 2, progress = 1.000000
+slot update_slots: id  3 | task 0 | prompt done, n_tokens = 2, batch.n_tokens = 2
+slot print_timing: id  3 | task 0 | 
+prompt eval time =      63.88 ms /     2 tokens (   31.94 ms per token,    31.31 tokens per second)
+       eval time =       0.00 ms /     1 tokens (    0.00 ms per token, 1000000.00 tokens per second)
+      total time =      63.88 ms /     3 tokens
+slot      release: id  3 | task 0 | stop processing: n_tokens = 2, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  2 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  2 | task 2 | processing task
+slot update_slots: id  2 | task 2 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 298
+slot update_slots: id  2 | task 2 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  2 | task 2 | prompt processing progress, n_tokens = 298, batch.n_tokens = 298, progress = 1.000000
+slot update_slots: id  2 | task 2 | prompt done, n_tokens = 298, batch.n_tokens = 298
+slot print_timing: id  2 | task 2 | 
+prompt eval time =    2872.21 ms /   298 tokens (    9.64 ms per token,   103.75 tokens per second)
+       eval time =    6098.77 ms /   102 tokens (   59.79 ms per token,    16.72 tokens per second)
+      total time =    8970.98 ms /   400 tokens
+slot      release: id  2 | task 2 | stop processing: n_tokens = 399, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+
+============================================================
+[2025-12-21 14:01:52] Starting llama.cpp server
+Command: C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\llama-server.exe --model C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf --port 8081 --host 127.0.0.1 --ctx-size 2048 --threads 9 --n-gpu-layers 99 --flash-attn on --mlock --batch-size 512 --cont-batching
+============================================================
+load_backend: loaded RPC backend from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\ggml-rpc.dll
+load_backend: loaded CPU backend from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_bin\ggml-cpu-skylakex.dll
+main: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true
+build: 7486 (74e05131e) with Clang 19.1.5 for Windows x86_64
+system info: n_threads = 9, n_threads_batch = 9, total_threads = 20
+
+system_info: n_threads = 9 (n_threads_batch = 9) / 20 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+
+init: using 19 threads for HTTP server
+start: binding port with default address family
+main: loading model
+srv    load_model: loading model 'C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf'
+common_init_result: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on
+llama_params_fit_impl: no devices with dedicated memory found
+llama_params_fit: successfully fit params to free device memory
+llama_params_fit: fitting params to free memory took 0.43 seconds
+srv  log_server_r: request: GET /health 127.0.0.1 503
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+llama_model_loader: loaded meta data with 36 key-value pairs and 255 tensors from C:\Users\kolyw\Desktop\AI-Assistant-v2\wyzer\llm_models\model.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = llama
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = Llama-3.2-3B-Instruct
+llama_model_loader: - kv   3:                           general.finetune str              = Instruct
+llama_model_loader: - kv   4:                           general.basename str              = Llama-3.2-3B-Instruct
+llama_model_loader: - kv   5:                       general.quantized_by str              = Unsloth
+llama_model_loader: - kv   6:                         general.size_label str              = 3B
+llama_model_loader: - kv   7:                           general.repo_url str              = https://huggingface.co/unsloth
+llama_model_loader: - kv   8:                          llama.block_count u32              = 28
+llama_model_loader: - kv   9:                       llama.context_length u32              = 131072
+llama_model_loader: - kv  10:                     llama.embedding_length u32              = 3072
+llama_model_loader: - kv  11:                  llama.feed_forward_length u32              = 8192
+llama_model_loader: - kv  12:                 llama.attention.head_count u32              = 24
+llama_model_loader: - kv  13:              llama.attention.head_count_kv u32              = 8
+llama_model_loader: - kv  14:                       llama.rope.freq_base f32              = 500000.000000
+llama_model_loader: - kv  15:     llama.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  16:                 llama.attention.key_length u32              = 128
+llama_model_loader: - kv  17:               llama.attention.value_length u32              = 128
+llama_model_loader: - kv  18:                           llama.vocab_size u32              = 128256
+llama_model_loader: - kv  19:                 llama.rope.dimension_count u32              = 128
+llama_model_loader: - kv  20:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  21:                         tokenizer.ggml.pre str              = llama-bpe
+llama_model_loader: - kv  22:                      tokenizer.ggml.tokens arr[str,128256]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  23:                  tokenizer.ggml.token_type arr[i32,128256]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  24:                      tokenizer.ggml.merges arr[str,280147]  = ["Ġ Ġ", "Ġ ĠĠĠ", "ĠĠ ĠĠ", "...
+llama_model_loader: - kv  25:                tokenizer.ggml.bos_token_id u32              = 128000
+llama_model_loader: - kv  26:                tokenizer.ggml.eos_token_id u32              = 128009
+llama_model_loader: - kv  27:            tokenizer.ggml.padding_token_id u32              = 128004
+llama_model_loader: - kv  28:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  29:                    tokenizer.chat_template str              = {{- bos_token }}\n{%- if custom_tools ...
+llama_model_loader: - kv  30:               general.quantization_version u32              = 2
+llama_model_loader: - kv  31:                          general.file_type u32              = 15
+llama_model_loader: - kv  32:                      quantize.imatrix.file str              = Llama-3.2-3B-Instruct-GGUF/imatrix_un...
+llama_model_loader: - kv  33:                   quantize.imatrix.dataset str              = unsloth_calibration_Llama-3.2-3B-Inst...
+llama_model_loader: - kv  34:             quantize.imatrix.entries_count i32              = 196
+llama_model_loader: - kv  35:              quantize.imatrix.chunks_count i32              = 689
+llama_model_loader: - type  f32:   58 tensors
+llama_model_loader: - type q4_K:  168 tensors
+llama_model_loader: - type q6_K:   29 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_K - Medium
+print_info: file size   = 1.87 GiB (5.01 BPW) 
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+load: printing all EOG tokens:
+load:   - 128001 ('<|end_of_text|>')
+load:   - 128008 ('<|eom_id|>')
+load:   - 128009 ('<|eot_id|>')
+load: special tokens cache size = 256
+load: token to piece cache size = 0.7999 MB
+print_info: arch             = llama
+print_info: vocab_only       = 0
+print_info: no_alloc         = 0
+print_info: n_ctx_train      = 131072
+print_info: n_embd           = 3072
+print_info: n_embd_inp       = 3072
+print_info: n_layer          = 28
+print_info: n_head           = 24
+print_info: n_head_kv        = 8
+print_info: n_rot            = 128
+print_info: n_swa            = 0
+print_info: is_swa_any       = 0
+print_info: n_embd_head_k    = 128
+print_info: n_embd_head_v    = 128
+print_info: n_gqa            = 3
+print_info: n_embd_k_gqa     = 1024
+print_info: n_embd_v_gqa     = 1024
+print_info: f_norm_eps       = 0.0e+00
+print_info: f_norm_rms_eps   = 1.0e-05
+print_info: f_clamp_kqv      = 0.0e+00
+print_info: f_max_alibi_bias = 0.0e+00
+print_info: f_logit_scale    = 0.0e+00
+print_info: f_attn_scale     = 0.0e+00
+print_info: n_ff             = 8192
+print_info: n_expert         = 0
+print_info: n_expert_used    = 0
+print_info: n_expert_groups  = 0
+print_info: n_group_used     = 0
+print_info: causal attn      = 1
+print_info: pooling type     = 0
+print_info: rope type        = 0
+print_info: rope scaling     = linear
+print_info: freq_base_train  = 500000.0
+print_info: freq_scale_train = 1
+print_info: n_ctx_orig_yarn  = 131072
+print_info: rope_yarn_log_mul= 0.0000
+print_info: rope_finetuned   = unknown
+print_info: model type       = 3B
+print_info: model params     = 3.21 B
+print_info: general.name     = Llama-3.2-3B-Instruct
+print_info: vocab type       = BPE
+print_info: n_vocab          = 128256
+print_info: n_merges         = 280147
+print_info: BOS token        = 128000 '<|begin_of_text|>'
+print_info: EOS token        = 128009 '<|eot_id|>'
+print_info: EOT token        = 128009 '<|eot_id|>'
+print_info: EOM token        = 128008 '<|eom_id|>'
+print_info: PAD token        = 128004 '<|finetune_right_pad_id|>'
+print_info: LF token         = 198 'Ċ'
+print_info: EOG token        = 128001 '<|end_of_text|>'
+print_info: EOG token        = 128008 '<|eom_id|>'
+print_info: EOG token        = 128009 '<|eot_id|>'
+print_info: max token length = 256
+load_tensors: loading model tensors, this can take a while... (mmap = true)
+load_tensors: offloading output layer to GPU
+load_tensors: offloading 27 repeating layers to GPU
+load_tensors: offloaded 29/29 layers to GPU
+load_tensors:   CPU_Mapped model buffer size =  1904.85 MiB
+load_tensors:   CPU_REPACK model buffer size =  1299.38 MiB
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+....srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+....srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+...srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+.......................................srv  log_server_r: request: POST /v1/completions 127.0.0.1 503
+..................................
+common_init_result: added <|end_of_text|> logit bias = -inf
+common_init_result: added <|eom_id|> logit bias = -inf
+common_init_result: added <|eot_id|> logit bias = -inf
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 4
+llama_context: n_ctx         = 2048
+llama_context: n_ctx_seq     = 2048
+llama_context: n_batch       = 512
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = enabled
+llama_context: kv_unified    = true
+llama_context: freq_base     = 500000.0
+llama_context: freq_scale    = 1
+llama_context: n_ctx_seq (2048) < n_ctx_train (131072) -- the full capacity of the model will not be utilized
+llama_context:        CPU  output buffer size =     1.96 MiB
+llama_kv_cache:        CPU KV buffer size =   224.00 MiB
+llama_kv_cache: size =  224.00 MiB (  2048 cells,  28 layers,  4/1 seqs), K (f16):  112.00 MiB, V (f16):  112.00 MiB
+llama_context:        CPU compute buffer size =   280.51 MiB
+llama_context: graph nodes  = 875
+llama_context: graph splits = 1
+common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+srv          init: initializing slots, n_slots = 4
+slot         init: id  0 | task -1 | new slot, n_ctx = 2048
+slot         init: id  1 | task -1 | new slot, n_ctx = 2048
+slot         init: id  2 | task -1 | new slot, n_ctx = 2048
+slot         init: id  3 | task -1 | new slot, n_ctx = 2048
+srv          init: prompt cache is enabled, size limit: 8192 MiB
+srv          init: use `--cache-ram 0` to disable the prompt cache
+srv          init: for more info see https://github.com/ggml-org/llama.cpp/pull/16391
+srv          init: thinking = 0
+init: chat template, chat_template: {{- bos_token }}
+{%- if custom_tools is defined %}
+    {%- set tools = custom_tools %}
+{%- endif %}
+{%- if not tools_in_user_message is defined %}
+    {%- set tools_in_user_message = true %}
+{%- endif %}
+{%- if not date_string is defined %}
+    {%- if strftime_now is defined %}
+        {%- set date_string = strftime_now("%d %b %Y") %}
+    {%- else %}
+        {%- set date_string = "26 Jul 2024" %}
+    {%- endif %}
+{%- endif %}
+{%- if not tools is defined %}
+    {%- set tools = none %}
+{%- endif %}
+
+{#- This block extracts the system message, so we can slot it into the right place. #}
+{%- if messages[0]['role'] == 'system' %}
+    {%- set system_message = messages[0]['content']|trim %}
+    {%- set messages = messages[1:] %}
+{%- else %}
+    {%- set system_message = "" %}
+{%- endif %}
+
+{#- System message #}
+{{- "<|start_header_id|>system<|end_header_id|>\n\n" }}
+{%- if tools is not none %}
+    {{- "Environment: ipython\n" }}
+{%- endif %}
+{{- "Cutting Knowledge Date: December 2023\n" }}
+{{- "Today Date: " + date_string + "\n\n" }}
+{%- if tools is not none and not tools_in_user_message %}
+    {{- "You have access to the following functions. To call a function, please respond with JSON for a function call." }}
+    {{- 'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.' }}
+    {{- "Do not use variables.\n\n" }}
+    {%- for t in tools %}
+        {{- t | tojson(indent=4) }}
+        {{- "\n\n" }}
+    {%- endfor %}
+{%- endif %}
+{{- system_message }}
+{{- "<|eot_id|>" }}
+
+{#- Custom tools are passed in a user message with some extra guidance #}
+{%- if tools_in_user_message and not tools is none %}
+    {#- Extract the first user message so we can plug it in here #}
+    {%- if messages | length != 0 %}
+        {%- set first_user_message = messages[0]['content']|trim %}
+        {%- set messages = messages[1:] %}
+    {%- else %}
+        {{- raise_exception("Cannot put tools in the first user message when there's no first user message!") }}
+{%- endif %}
+    {{- '<|start_header_id|>user<|end_header_id|>\n\n' -}}
+    {{- "Given the following functions, please respond with a JSON for a function call " }}
+    {{- "with its proper arguments that best answers the given prompt.\n\n" }}
+    {{- 'Respond in the format {"name": function name, "parameters": dictionary of argument name and its value}.' }}
+    {{- "Do not use variables.\n\n" }}
+    {%- for t in tools %}
+        {{- t | tojson(indent=4) }}
+        {{- "\n\n" }}
+    {%- endfor %}
+    {{- first_user_message + "<|eot_id|>"}}
+{%- endif %}
+
+{%- for message in messages %}
+    {%- if not (message.role == 'ipython' or message.role == 'tool' or 'tool_calls' in message) %}
+        {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'+ message['content'] | trim + '<|eot_id|>' }}
+    {%- elif 'tool_calls' in message %}
+        {%- if not message.tool_calls|length == 1 %}
+            {{- raise_exception("This model only supports single tool-calls at once!") }}
+        {%- endif %}
+        {%- set tool_call = message.tool_calls[0].function %}
+        {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' -}}
+        {{- '{"name": "' + tool_call.name + '", ' }}
+        {{- '"parameters": ' }}
+        {{- tool_call.arguments | tojson }}
+        {{- "}" }}
+        {{- "<|eot_id|>" }}
+    {%- elif message.role == "tool" or message.role == "ipython" %}
+        {{- "<|start_header_id|>ipython<|end_header_id|>\n\n" }}
+        {%- if message.content is mapping or message.content is iterable %}
+            {{- message.content | tojson }}
+        {%- else %}
+            {{- message.content }}
+        {%- endif %}
+        {{- "<|eot_id|>" }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|start_header_id|>assistant<|end_header_id|>\n\n' }}
+{%- endif %}
+, example_format: '<|start_header_id|>system<|end_header_id|>
+
+Cutting Knowledge Date: December 2023
+Today Date: 21 Dec 2025
+
+You are a helpful assistant<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+Hello<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+Hi there<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+How are you?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+'
+main: model loaded
+main: server is listening on http://127.0.0.1:8081
+main: starting the main loop...
+srv  update_slots: all slots are idle
+slot get_availabl: id  3 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  3 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  3 | task 0 | processing task
+slot update_slots: id  3 | task 0 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 2
+slot update_slots: id  3 | task 0 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  3 | task 0 | prompt processing progress, n_tokens = 2, batch.n_tokens = 2, progress = 1.000000
+slot update_slots: id  3 | task 0 | prompt done, n_tokens = 2, batch.n_tokens = 2
+slot print_timing: id  3 | task 0 | 
+prompt eval time =      61.98 ms /     2 tokens (   30.99 ms per token,    32.27 tokens per second)
+       eval time =       0.00 ms /     1 tokens (    0.00 ms per token, 1000000.00 tokens per second)
+      total time =      61.98 ms /     3 tokens
+slot      release: id  3 | task 0 | stop processing: n_tokens = 2, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  2 | task -1 | selected slot by LRU, t_last = -1
+slot launch_slot_: id  2 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  2 | task 2 | processing task
+slot update_slots: id  2 | task 2 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 621
+slot update_slots: id  2 | task 2 | n_tokens = 0, memory_seq_rm [0, end)
+slot update_slots: id  2 | task 2 | prompt processing progress, n_tokens = 512, batch.n_tokens = 512, progress = 0.824477
+slot update_slots: id  2 | task 2 | n_tokens = 512, memory_seq_rm [512, end)
+slot update_slots: id  2 | task 2 | prompt processing progress, n_tokens = 621, batch.n_tokens = 109, progress = 1.000000
+slot update_slots: id  2 | task 2 | prompt done, n_tokens = 621, batch.n_tokens = 109
+slot print_timing: id  2 | task 2 | 
+prompt eval time =    6196.14 ms /   621 tokens (    9.98 ms per token,   100.22 tokens per second)
+       eval time =     903.83 ms /    17 tokens (   53.17 ms per token,    18.81 tokens per second)
+      total time =    7099.97 ms /   638 tokens
+slot      release: id  2 | task 2 | stop processing: n_tokens = 637, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
+srv  log_server_r: request: GET /v1/models 127.0.0.1 200
+srv  params_from_: Chat format: Content-only
+slot get_availabl: id  2 | task -1 | selected slot by LCP similarity, sim_best = 0.262 (> 0.100 thold), f_keep = 0.061
+srv  get_availabl: updating prompt cache
+srv   prompt_save:  - saving prompt with length 637, total state size = 69.680 MiB
+srv          load:  - looking for better prompt, base f_keep = 0.061, sim = 0.262
+srv        update:  - cache state: 1 prompts, 69.680 MiB (limits: 8192.000 MiB, 2048 tokens, 74889 est)
+srv        update:    - prompt 0000025E363AB820:     637 tokens, checkpoints:  0,    69.680 MiB
+srv  get_availabl: prompt cache update took 23.59 ms
+slot launch_slot_: id  2 | task -1 | sampler chain: logits -> penalties -> dry -> top-n-sigma -> top-k -> typical -> top-p -> min-p -> xtc -> temp-ext -> dist 
+slot launch_slot_: id  2 | task 21 | processing task
+slot update_slots: id  2 | task 21 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 149
+slot update_slots: id  2 | task 21 | n_tokens = 39, memory_seq_rm [39, end)
+slot update_slots: id  2 | task 21 | prompt processing progress, n_tokens = 149, batch.n_tokens = 110, progress = 1.000000
+slot update_slots: id  2 | task 21 | prompt done, n_tokens = 149, batch.n_tokens = 110
+slot print_timing: id  2 | task 21 | 
+prompt eval time =    1014.20 ms /   110 tokens (    9.22 ms per token,   108.46 tokens per second)
+       eval time =    2272.50 ms /    46 tokens (   49.40 ms per token,    20.24 tokens per second)
+      total time =    3286.70 ms /   156 tokens
+slot      release: id  2 | task 21 | stop processing: n_tokens = 194, truncated = 0
+srv  update_slots: all slots are idle
+srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200

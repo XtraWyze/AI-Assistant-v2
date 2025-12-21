@@ -1,5 +1,7 @@
 # Weather Bypass Implementation with Hybrid Scoring
 
+> *Last Updated: December 2025*
+
 ## Summary
 Implemented weather/temperature/forecast query detection to bypass LLM and route directly to the `get_weather_forecast` tool using hybrid scoring, similar to how "open" commands are handled.
 

@@ -1,5 +1,7 @@
 # Complete Guide: Adding New Tools to Wyzer AI Assistant
 
+> *Last Updated: December 2025*
+
 ## Overview
 
 This guide walks you through **every step** required to add a new tool to Wyzer, from creating the tool class to ensuring proper routing and user-friendly responses.
@@ -51,7 +53,8 @@ User Speech
 │              │                               ▼                 │
 │              │                    ┌─────────────────┐          │
 │              │                    │  LLM Routing    │          │
-│              │                    │  (Ollama)       │          │
+│              │                    │ (llama.cpp/     │          │
+│              │                    │  Ollama)        │          │
 │              │                    └────────┬────────┘          │
 │              └───────────────┬─────────────┘                   │
 │                              ▼                                  │

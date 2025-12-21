@@ -1,5 +1,7 @@
 # Multi-Intent Command Support - Complete Implementation
 
+> *Last Updated: December 2025*
+
 ## Summary
 Implemented full support for multi-intent commands combining time, weather, and window management operations. Users can now compose multiple independent operations in a single query using natural separators.
 
@@ -195,9 +197,34 @@ Orchestrator executes all three tools in sequence
 - **Overall:** Negligible overhead compared to LLM inference (500-2000ms)
 - **No LLM inference required** for multi-intent commands with valid patterns
 
+## Implicit Multi-Intent (No Separators)
+
+Commands without explicit separators are now detected via verb boundary detection:
+
+```
+Input: "close chrome open spotify"
+  ↓
+Verb boundary detection: 2 action verbs found at positions 0, 14
+  ↓
+Split by verb boundaries: ["close chrome", "open spotify"]
+  ↓
+Parse clause 1: close_window with title="chrome" (confidence: 0.85)
+Parse clause 2: open_target with query="spotify" (confidence: 0.90)
+  ↓
+Return: [
+  {"tool": "close_window", "args": {"title": "chrome"}, "continue_on_error": false},
+  {"tool": "open_target", "args": {"query": "spotify"}, "continue_on_error": false}
+]
+Confidence: 0.85 * 0.95 = 0.8075
+```
+
+### Supported Action Verbs for Implicit Detection
+`open`, `launch`, `start`, `close`, `quit`, `exit`, `minimize`, `shrink`, `maximize`, `fullscreen`, `expand`, `move`, `send`, `play`, `pause`, `resume`, `mute`, `unmute`, `scan`
+
 ## Backward Compatibility
 
 - ✓ Single-intent commands unchanged
 - ✓ All existing hybrid routing patterns preserved
 - ✓ LLM fallback for unparseable combinations
 - ✓ No breaking changes to tool interfaces
+- ✓ Implicit multi-intent adds support, doesn't break existing

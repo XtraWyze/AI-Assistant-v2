@@ -1,5 +1,7 @@
 # Implicit Multi-Intent Parsing Fix
 
+> *Last Updated: December 2025*
+
 ## Problem
 Commands without explicit separators like "close chrome open spotify" were not being parsed as multi-intent commands. Instead, they were being treated as a single command to close "chrome open spotify", which failed.
 

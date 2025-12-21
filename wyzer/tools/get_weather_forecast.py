@@ -72,24 +72,75 @@ def _weather_code_to_text(code: Optional[int]) -> Optional[str]:
 
 
 def _geocode_location(name: str, timeout_sec: float = 8.0) -> Dict[str, Any]:
+    """Geocode a location name to lat/lon.
+    
+    If the location contains qualifiers (state, country), fetches multiple results
+    and filters to find the best match.
+    """
+    original_name = name.strip()
+    
+    # Parse location parts for filtering
+    parts = [p.strip().lower() for p in original_name.split(",")]
+    city_hint = parts[0] if parts else ""
+    state_hint = parts[1] if len(parts) > 1 else ""
+    country_hint = parts[2] if len(parts) > 2 else ""
+    
+    # Use just the city name for search, but fetch multiple results to filter
+    search_term = city_hint if city_hint else original_name
+    
     q = urllib.parse.urlencode(
         {
-            "name": name,
-            "count": 1,
+            "name": search_term,
+            "count": 10,  # Fetch more results to filter
             "language": "en",
             "format": "json",
         }
     )
     url = f"https://geocoding-api.open-meteo.com/v1/search?{q}"
-    payload = _fetch_json(url, timeout_sec=timeout_sec)
+    
+    try:
+        payload = _fetch_json(url, timeout_sec=timeout_sec)
+    except Exception:
+        return {
+            "error": {
+                "type": "network_error",
+                "message": f"Could not reach geocoding service",
+            }
+        }
+    
     results = payload.get("results") or []
     if not results:
         return {
             "error": {
                 "type": "not_found",
-                "message": f"Could not find location '{name}'",
+                "message": f"Could not find location '{original_name}'",
             }
         }
+    
+    # If we have state/country hints, try to find a matching result
+    if state_hint or country_hint:
+        for r in results:
+            admin1 = (r.get("admin1") or "").lower()
+            country = (r.get("country") or "").lower()
+            
+            # Check if state matches (admin1 field)
+            state_match = not state_hint or state_hint in admin1 or admin1 in state_hint
+            # Check if country matches
+            country_match = not country_hint or country_hint in country or country in country_hint
+            
+            if state_match and country_match:
+                return {
+                    "name": r.get("name"),
+                    "admin1": r.get("admin1"),
+                    "country": r.get("country"),
+                    "timezone": r.get("timezone"),
+                    "latitude": r.get("latitude"),
+                    "longitude": r.get("longitude"),
+                    "source": "open-meteo-geocoding",
+                    "approximate": False,
+                }
+    
+    # No specific match found, return first result
     r0 = results[0]
     return {
         "name": r0.get("name"),

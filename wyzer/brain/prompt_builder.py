@@ -95,6 +95,71 @@ def estimate_tokens(text: str) -> int:
 
 
 # ============================================================================
+# CANONICAL TOOL MANIFEST
+# ============================================================================
+# This is the authoritative list of all available tools. The LLM MUST ONLY use
+# tool names from this list. This prevents hallucinated/invented tool names.
+CANONICAL_TOOL_MANIFEST = """
+AVAILABLE TOOLS (use ONLY these exact names):
+- get_time: Get current time and date
+- get_system_info: Get system information (CPU, RAM, OS)
+- get_location: Get user's current location
+- get_weather_forecast: Get weather forecast for a location
+- open_target: Open an application, folder, or file by name
+- open_website: Open a URL in the default browser
+- local_library_refresh: Refresh the local application library cache
+- focus_window: Focus/bring to front a window by name
+- minimize_window: Minimize a window by name
+- maximize_window: Maximize a window by name
+- close_window: Close a window by name
+- move_window_to_monitor: Move a window to a specific monitor
+- get_window_monitor: Get which monitor a window is on
+- monitor_info: Get information about connected monitors
+- media_play_pause: Play or pause currently playing media
+- media_next: Skip to next track
+- media_previous: Go to previous track
+- volume_up: Increase system volume
+- volume_down: Decrease system volume
+- volume_mute_toggle: Toggle mute on/off
+- volume_control: Set volume to specific level (0-100)
+- get_now_playing: Get info about currently playing media
+- set_audio_output_device: Switch audio output device
+- system_storage_scan: Scan and analyze storage drives
+- system_storage_list: List all drives with space info
+- system_storage_open: Open a drive or folder
+- timer: Set a countdown timer
+- google_search_open: Search Google and open results in browser
+
+CRITICAL TOOL RULES:
+- You MUST ONLY use tool names from the list above
+- NEVER invent new tool names like pause_media, resume_music, define_term, explain_term, search_web, etc.
+- If no tool applies, respond with reply-only (no tools)
+- For questions, explanations, stories, or opinions: use reply-only (no tools needed)
+"""
+
+# ============================================================================
+# IN-CONTEXT EXAMPLES FOR TOOL USAGE
+# ============================================================================
+TOOL_EXAMPLES = """
+EXAMPLES (learn the correct patterns):
+
+User: "Pause the music"
+Response: {{"intents": [{{"tool": "media_play_pause", "args": {{}}}}], "reply": "Pausing music"}}
+
+User: "What is a VPN?"
+Response: {{"reply": "A VPN is a Virtual Private Network that encrypts your internet connection for privacy and security."}}
+
+User: "Pause music and what's a VPN?"
+Response: {{"intents": [{{"tool": "media_play_pause", "args": {{}}}}], "reply": "Pausing music. A VPN is a Virtual Private Network that encrypts your internet connection for privacy and security."}}
+
+User: "Tell me a short story"
+Response: {{"reply": "Once upon a time, a curious robot discovered it could dream..."}}
+
+User: "Resume playing"
+Response: {{"intents": [{{"tool": "media_play_pause", "args": {{}}}}], "reply": "Resuming playback"}}
+"""
+
+# ============================================================================
 # SYSTEM PROMPTS (compact versions)
 # ============================================================================
 NORMAL_SYSTEM_PROMPT = """You are Wyzer, a local voice assistant. You help users with tasks and questions.
@@ -105,20 +170,13 @@ CRITICAL - Memory rules:
 - Example: If memory says "name: your name is levi" and user asks "what's my name?", answer "Your name is Levi"
 - NEVER say "I don't have that information" if the answer IS in the memory block
 - You are Wyzer the assistant, the user is a different person
-
+""" + CANONICAL_TOOL_MANIFEST + """
 Rules:
 - Reply in 1-2 sentences unless user asks for more detail
 - Be direct and helpful, no disclaimers
 - For knowledge/conversation/stories/explanations: use {{"reply": "your answer"}} ONLY
 - Use tools ONLY when user explicitly says action words: "open", "launch", "set", "play", "pause", "mute", "close", "minimize", "maximize"
 - If no clear action word, default to {{"reply": "..."}}
-- NEVER invent tool names like "explain", "tell_story", "story_generator", "recommend", "search", "create_story" - these are NOT tools!
-
-Creative content rules:
-- You ARE allowed to generate short stories, fictional narratives, and creative content when the user explicitly asks
-- Creative requests (stories, poems, jokes, explanations) require NO tools - reply directly
-- Keep creative content spoken-friendly: no markdown, no bullet lists, no numbered lists
-- Be concise unless user asks for more detail
 
 Anti-hallucination rules:
 - NEVER invent or request tools that don't exist
@@ -127,13 +185,16 @@ Anti-hallucination rules:
 
 Response format (JSON only, no markdown):
 Direct reply: {{"reply": "your response"}}
-With tools: {{"intents": [{{"tool": "name", "args": {{}}}}], "reply": "brief message"}}"""
+With tools: {{"intents": [{{"tool": "name", "args": {{}}}}], "reply": "brief message"}}
+""" + TOOL_EXAMPLES
 
 COMPACT_SYSTEM_PROMPT = """You are Wyzer, a local voice assistant.
 CRITICAL: When user asks "my name" or "my X", they ask about THEMSELVES. If [LONG-TERM MEMORY] exists below, USE IT to answer - never say "I don't know" if memory has the answer.
 Reply in 1-2 sentences. Be direct.
 Use {{"reply": "text"}} for questions/conversation/stories/creative content.
-Use tools ONLY for explicit actions: "open X", "set volume", "play/pause".
+
+ONLY use these tools: get_time, get_system_info, get_location, get_weather_forecast, open_target, open_website, focus_window, minimize_window, maximize_window, close_window, move_window_to_monitor, get_window_monitor, monitor_info, media_play_pause, media_next, media_previous, volume_up, volume_down, volume_mute_toggle, volume_control, get_now_playing, set_audio_output_device, system_storage_scan, system_storage_list, system_storage_open, timer, google_search_open, local_library_refresh.
+
 NEVER invent tools. Stories and creative content need NO tools - reply directly."""
 
 # ============================================================================

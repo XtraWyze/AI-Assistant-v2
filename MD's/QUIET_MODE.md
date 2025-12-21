@@ -1,5 +1,7 @@
 # Quiet Mode - User Interface Configuration
 
+> *Last Updated: December 2025*
+
 ## Overview
 
 Quiet Mode provides a cleaner user experience by hiding internal debug information like heartbeats, worker pool status, and other technical logging that isn't relevant to end users.
