@@ -12,3 +12,4 @@
 /wyzer/core/__pycache__
 *.json
 *.json
+/wyzer/tools/__pycache__
