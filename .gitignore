@@ -13,3 +13,4 @@
 *.json
 *.json
 /wyzer/tools/__pycache__
+wyzer/llm_bin/cublasLt64_13.dll
