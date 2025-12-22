@@ -154,9 +154,9 @@ Examples:
     parser.add_argument(
         "--llm",
         type=str,
-        default="ollama",
-        choices=["ollama", "llamacpp", "off"],
-        help="LLM mode: ollama, llamacpp, or off (default: ollama)"
+        default="llamacpp",
+        choices=["llamacpp", "ollama", "off"],
+        help="LLM mode: llamacpp, ollama, or off (default: llamacpp)"
     )
     
     parser.add_argument(
