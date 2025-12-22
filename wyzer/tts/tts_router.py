@@ -69,6 +69,53 @@ class TTSRouter:
         # Initialize audio player
         self.player = AudioPlayer(device=output_device)
     
+    def synthesize(self, text: str) -> Optional[str]:
+        """
+        Synthesize text to WAV file without playing.
+        
+        Args:
+            text: Text to synthesize
+            
+        Returns:
+            Path to generated WAV file, or None on error
+        """
+        if not self.enabled or not self.engine:
+            self.logger.debug("TTS not available for synthesis")
+            return None
+        
+        if not text or not text.strip():
+            self.logger.debug("Empty text for synthesis")
+            return None
+        
+        self.logger.debug(f"Synthesizing: {text[:50]}...")
+        wav_path = self.engine.synthesize_to_wav(text)
+        
+        if not wav_path:
+            self.logger.error("Synthesis failed")
+            return None
+        
+        return wav_path
+    
+    def play_wav(self, wav_path: str, stop_event: threading.Event) -> bool:
+        """
+        Play a WAV file.
+        
+        Args:
+            wav_path: Path to WAV file to play
+            stop_event: Event to signal stop
+            
+        Returns:
+            True if completed, False if interrupted or error
+        """
+        if not self.enabled or not self.player:
+            return False
+        
+        try:
+            return self.player.play_wav(wav_path, stop_event)
+        except Exception as e:
+            self.logger.error(f"Playback error: {e}")
+            return False
+    
     def speak(self, text: str, stop_event: threading.Event) -> bool:
         """
         Synthesize and speak text

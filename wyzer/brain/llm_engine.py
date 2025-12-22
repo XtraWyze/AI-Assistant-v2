@@ -38,7 +38,9 @@ _STORY_CREATIVE_RE = re.compile(
     r"write(?:\s+me)?\s+(?:a\s+)?(?:story|poem|song|essay|letter|script)|"
     r"(?:compose|create)(?:\s+me)?\s+(?:a\s+)?(?:poem|song|story|narrative)|"
     r"continue\s+(?:the\s+)?story|make\s+up\s+a\s+story|"
-    r"explain\s+in\s+detail|give\s+(?:me\s+)?(?:a\s+)?(?:full|detailed|long)\s+(?:explanation|description)|"
+    r"explain\s+in\s+detail|(?:explain|describe|tell\s+me\s+about).*\s+in\s+(?:detail|depth)|"
+    r"in\s+depth\s+(?:explanation|description)|"
+    r"give\s+(?:me\s+)?(?:a\s+)?(?:full|detailed|long|in-depth)\s+(?:explanation|description)|"
     r"write(?:\s+me)?\s+(?:a\s+)?(?:long|detailed))\b",
     re.IGNORECASE
 )

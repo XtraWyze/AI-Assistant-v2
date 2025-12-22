@@ -1156,7 +1156,7 @@ def handle_user_text_streaming(
     Returns:
         Dict with "reply", "latency_ms", and "meta" keys
     """
-    from wyzer.brain.stream_tts import accumulate_full_reply
+    from wyzer.brain.tts_stream_buffer import TTSStreamBuffer, now_ms as buffer_now_ms
     from wyzer.brain.ollama_client import OllamaClient
     
     start_time = time.perf_counter()
@@ -1177,51 +1177,43 @@ def handle_user_text_streaming(
     logger.info("[STREAM_TTS] Using streaming TTS path")
     
     try:
-        # Build the same prompt as _call_llm_reply_only
-        session_context = ""
+        # Build reply-only prompt (no JSON, plain text output for streaming TTS)
+        # This mirrors _call_llm_reply_only but outputs plain text instead of JSON
+        ctx = _gather_context_blocks(text, max_session_turns=2)
+        
+        # Check for smalltalk directive
+        smalltalk_directive = ""
         try:
-            from wyzer.brain.prompt import get_session_context_block
-            session_context = get_session_context_block()
+            from wyzer.brain.llm_engine import _is_smalltalk_request, SMALLTALK_SYSTEM_DIRECTIVE
+            if _is_smalltalk_request(text):
+                smalltalk_directive = f"\n{SMALLTALK_SYSTEM_DIRECTIVE}\n"
         except Exception:
             pass
         
-        promoted_context = ""
+        # Check if user wants detailed/long response (story, "in depth", "in detail", etc.)
+        is_detail_request = False
         try:
-            from wyzer.brain.prompt import get_promoted_memory_block
-            promoted_context = get_promoted_memory_block()
+            from wyzer.brain.llm_engine import _is_story_creative_request
+            is_detail_request = _is_story_creative_request(text)
         except Exception:
             pass
         
-        redaction_context = ""
-        try:
-            from wyzer.brain.prompt import get_redaction_block
-            redaction_context = get_redaction_block()
-        except Exception:
-            pass
-        
-        all_memories_context = ""
-        try:
-            from wyzer.brain.prompt import get_all_memories_block
-            all_memories_context = get_all_memories_block()
-        except Exception:
-            pass
+        # Adjust length instruction based on request type
+        if is_detail_request:
+            length_instruction = "Provide a thorough, detailed response."
+            logger.debug("[STREAM_TTS] Detail/story request detected - allowing longer response")
+        else:
+            length_instruction = "Reply in 1-2 sentences. Be direct and concise."
         
         prompt = f"""You are Wyzer, a local voice assistant.
-
-No tools are available for this request.
-Write a natural response to the user.
-You ARE allowed to generate stories, poems, jokes, and creative content when the user asks.
-Keep creative content spoken-friendly: no markdown, no bullet lists.
-{session_context}{promoted_context}{redaction_context}{all_memories_context}
-
-CONVERSATIONAL CONTEXT:
-- If the user says something vague like "tell me more", "can you elaborate", "go on", "what else", or "continue", check the recent conversation context above.
-- When a follow-up references a previous topic, continue discussing THAT topic in detail. Do NOT ask "what would you like to know?" - instead, provide more information about the last discussed subject.
-- Use the session context to maintain topic continuity across turns.
+{ctx['session']}{ctx['promoted']}{ctx['redaction']}{ctx['memories']}{smalltalk_directive}
+{length_instruction}
+You ARE allowed to generate stories, poems, jokes, and creative content when asked - keep those spoken-friendly: no markdown, no bullet lists.
 
 User: {text}
 
 Wyzer:"""
+        logger.debug(f"[STREAM_TTS] Using reply-only prompt (plain text)")
         
         # Get appropriate LLM client based on mode (supports Ollama and llamacpp)
         client = _get_llm_client()
@@ -1236,11 +1228,14 @@ Wyzer:"""
                     logger.error(f"[STREAM_TTS] TTS callback error: {e}")
             return result
         
+        # Use higher num_predict for detail requests
+        num_predict = Config.VOICE_FAST_STORY_MAX_TOKENS if is_detail_request else Config.OLLAMA_NUM_PREDICT
+        
         options = {
-            "temperature": 0.4,
-            "top_p": 0.9,
-            "num_ctx": 4096,
-            "num_predict": 150
+            "temperature": Config.OLLAMA_TEMPERATURE,
+            "top_p": Config.OLLAMA_TOP_P,
+            "num_ctx": Config.OLLAMA_NUM_CTX,
+            "num_predict": num_predict
         }
         
         # Apply voice-fast preset overrides (smalltalk detection, story mode, etc.)
@@ -1253,19 +1248,6 @@ Wyzer:"""
                 for key, value in voice_fast_opts.items():
                     if not key.startswith("_"):
                         options[key] = value
-                # Inject smalltalk directive into prompt if present
-                if voice_fast_opts.get("_smalltalk_directive"):
-                    prompt = f"""You are Wyzer, a local voice assistant.
-
-{voice_fast_opts["_smalltalk_directive"]}
-
-No tools are available for this request.
-Write a natural response to the user.
-{session_context}{promoted_context}{redaction_context}{all_memories_context}
-
-User: {text}
-
-Wyzer:"""
         except Exception as e:
             logger.debug(f"[STREAM_TTS] voice_fast_options error: {e}")
         
@@ -1278,16 +1260,60 @@ Wyzer:"""
             options=options
         )
         
-        # Process stream: emit TTS segments, accumulate full reply
-        min_chars = getattr(Config, 'STREAM_TTS_BUFFER_CHARS', 150)
-        reply = accumulate_full_reply(
-            token_stream=token_stream,
-            on_segment=on_segment,
-            min_chars=min_chars,
-            cancel_check=cancel_check
+        # Process stream using sentence-gated buffer for best UX
+        # This accumulates text and only flushes on sentence boundaries
+        buffer = TTSStreamBuffer(
+            min_chars=getattr(Config, 'TTS_STREAM_MIN_CHARS', 60),
+            min_words=getattr(Config, 'TTS_STREAM_MIN_WORDS', 10),
+            max_wait_ms=getattr(Config, 'TTS_STREAM_MAX_WAIT_MS', 900),
+            boundaries=getattr(Config, 'TTS_STREAM_BOUNDARIES', '.!?:'),
         )
         
-        reply = reply.strip()
+        full_reply_parts = []
+        segment_count = 0
+        cancelled = False
+        
+        try:
+            for token in token_stream:
+                # Check for cancellation (barge-in)
+                if cancel_check and cancel_check():
+                    logger.debug("[STREAM_TTS] Cancelled by cancel_check (barge-in)")
+                    cancelled = True
+                    break
+                
+                # Accumulate full reply for logging/display
+                full_reply_parts.append(token)
+                
+                # Feed to sentence-gated buffer
+                chunks = buffer.add_text(token, buffer_now_ms())
+                
+                # Send any ready chunks to TTS
+                for chunk in chunks:
+                    segment_count += 1
+                    if on_segment:
+                        try:
+                            on_segment(chunk)
+                        except Exception as seg_err:
+                            logger.error(f"[STREAM_TTS] on_segment callback error: {seg_err}")
+            
+            # Flush remaining buffer at end of stream (unless cancelled)
+            if not cancelled:
+                final_chunks = buffer.flush_final()
+                for chunk in final_chunks:
+                    segment_count += 1
+                    if on_segment:
+                        try:
+                            on_segment(chunk)
+                        except Exception as seg_err:
+                            logger.error(f"[STREAM_TTS] on_segment callback error (final): {seg_err}")
+            
+            logger.debug(f"[STREAM_TTS] Emitted {segment_count} segments total")
+            
+        except Exception as stream_err:
+            logger.error(f"[STREAM_TTS] Stream processing error: {stream_err}")
+            raise
+        
+        reply = "".join(full_reply_parts).strip()
         
         end_time = time.perf_counter()
         latency_ms = int((end_time - start_time) * 1000)

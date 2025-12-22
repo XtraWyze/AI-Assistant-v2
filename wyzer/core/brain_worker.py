@@ -16,7 +16,7 @@ import queue
 import threading
 import time
 import traceback
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -131,6 +131,15 @@ def _read_wav_to_float32(wav_path: str) -> np.ndarray:
 
 
 class _TTSController:
+    """
+    TTS Controller with prefetch support.
+    
+    Implements "synth ahead" pattern for smoother streaming:
+    - While segment N is playing, segment N+1 is synthesized in background
+    - When playback completes, next segment is ready to play immediately
+    - Single playback at a time, but synthesis can overlap with playback
+    """
+    
     def __init__(self, tts: Optional[TTSRouter], brain_to_core_q, simulate: bool = False):
         self._tts = tts
         self._simulate = simulate
@@ -138,23 +147,72 @@ class _TTSController:
         self._queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         self._lock = threading.Lock()
         self._running = True
+        self._brain_to_core_q = brain_to_core_q
+        
+        # Prefetch state
+        self._prefetch_lock = threading.Lock()
+        self._prefetch_wav: Optional[str] = None  # Path to prefetched WAV
+        self._prefetch_meta: Optional[Dict[str, Any]] = None  # Meta for prefetched item
+        self._prefetch_text: Optional[str] = None  # Text that was prefetched
+        self._prefetch_thread: Optional[threading.Thread] = None
+        self._is_playing = False  # Track if we're currently playing audio
+        
+        # Track pending show_followup_prompt for streaming TTS
+        self._pending_followup_prompt: bool = False
+        
         self._thread = threading.Thread(target=self._loop, name="BrainTTS", daemon=True)
         self._thread.start()
-        self._brain_to_core_q = brain_to_core_q
 
     def enqueue(self, text: str, meta: Optional[Dict[str, Any]] = None) -> None:
+        meta = meta or {}
+        # Handle stream-end marker: just update pending followup flag, don't queue
+        if meta.get("_stream_end"):
+            self._pending_followup_prompt = meta.get("show_followup_prompt", False)
+            return
         if not text:
             return
-        self._queue.put({"text": text, "meta": meta or {}})
+        self._queue.put({"text": text, "meta": meta})
+        
+        # Trigger prefetch if we're currently playing and no prefetch is running
+        self._maybe_start_prefetch()
+
+    def _maybe_start_prefetch(self) -> None:
+        """Start prefetching if conditions are right (playing, no current prefetch)."""
+        # Only prefetch if we're currently playing something
+        if not self._is_playing:
+            return
+        
+        # Check if prefetch is already done or in progress
+        with self._prefetch_lock:
+            if self._prefetch_wav is not None:
+                return  # Already have a prefetched item
+            if self._prefetch_thread and self._prefetch_thread.is_alive():
+                return  # Prefetch already in progress
+        
+        # Try to start prefetch
+        self._start_prefetch()
 
     def interrupt(self) -> None:
         with self._lock:
             self._stop_event.set()
+            self._pending_followup_prompt = False  # Reset on interrupt
+            self._is_playing = False
             try:
                 while True:
                     self._queue.get_nowait()
             except queue.Empty:
                 pass
+        
+        # Clear any prefetched audio
+        with self._prefetch_lock:
+            if self._prefetch_wav:
+                try:
+                    os.unlink(self._prefetch_wav)
+                except:
+                    pass
+            self._prefetch_wav = None
+            self._prefetch_meta = None
+            self._prefetch_text = None
 
     def clear_stop(self) -> None:
         with self._lock:
@@ -169,6 +227,9 @@ class _TTSController:
         self.interrupt()
         self._queue.put({"text": "", "meta": {"_shutdown": True}})
         self._thread.join(timeout=1.0)
+        # Clean up prefetch thread if running
+        if self._prefetch_thread and self._prefetch_thread.is_alive():
+            self._prefetch_thread.join(timeout=0.5)
 
     def _simulate_speak(self, duration_sec: float) -> bool:
         end = time.time() + max(0.0, duration_sec)
@@ -177,11 +238,151 @@ class _TTSController:
                 return False
             time.sleep(0.05)
         return True
+    
+    def _do_prefetch(self, text: str, meta: Dict[str, Any]) -> None:
+        """Background thread to prefetch (synthesize) next segment."""
+        logger = get_logger()
+        
+        if self._stop_event.is_set():
+            return
+        
+        if not self._tts:
+            return
+        
+        try:
+            logger.debug(f"[TTS_PREFETCH] Synthesizing ahead: {text[:50]}...")
+            wav_path = self._tts.synthesize(text)
+            if wav_path and not self._stop_event.is_set():
+                with self._prefetch_lock:
+                    self._prefetch_wav = wav_path
+                    self._prefetch_meta = meta
+                    self._prefetch_text = text
+                logger.debug(f"[TTS_PREFETCH] Ready: {text[:30]}...")
+        except Exception as e:
+            logger.error(f"[TTS_PREFETCH] Prefetch error: {e}")
+    
+    def _start_prefetch(self) -> None:
+        """Start prefetching the next item in queue if available."""
+        logger = get_logger()
+        
+        # Don't prefetch if stopped
+        if self._stop_event.is_set():
+            return
+        
+        # Check if there's something to prefetch
+        try:
+            next_item = self._queue.get_nowait()
+        except queue.Empty:
+            return
+        
+        text = (next_item.get("text") or "").strip()
+        meta = next_item.get("meta") or {}
+        
+        if not text or meta.get("_shutdown"):
+            # Put it back
+            self._queue.put(next_item)
+            return
+        
+        # Clear any old prefetch
+        with self._prefetch_lock:
+            if self._prefetch_wav:
+                try:
+                    os.unlink(self._prefetch_wav)
+                except:
+                    pass
+                self._prefetch_wav = None
+        
+        # Start prefetch in background thread
+        self._prefetch_thread = threading.Thread(
+            target=self._do_prefetch,
+            args=(text, meta),
+            name="BrainTTS-Prefetch",
+            daemon=True
+        )
+        self._prefetch_thread.start()
+    
+    def _get_prefetched(self) -> Optional[Tuple[str, Dict[str, Any], str]]:
+        """Get prefetched WAV if available. Returns (wav_path, meta, text) or None."""
+        with self._prefetch_lock:
+            if self._prefetch_wav and os.path.exists(self._prefetch_wav):
+                wav = self._prefetch_wav
+                meta = self._prefetch_meta or {}
+                text = self._prefetch_text or ""
+                self._prefetch_wav = None
+                self._prefetch_meta = None
+                self._prefetch_text = None
+                return (wav, meta, text)
+        return None
 
     def _loop(self) -> None:
         logger = get_logger()
         while self._running:
-            item = self._queue.get()
+            # First check if we have a prefetched segment ready
+            prefetched = self._get_prefetched()
+            
+            if prefetched:
+                wav_path, meta, text = prefetched
+                
+                if meta.get("_shutdown"):
+                    try:
+                        os.unlink(wav_path)
+                    except:
+                        pass
+                    return
+                
+                # Mark as playing BEFORE we start - this allows enqueue() to trigger prefetch
+                self._is_playing = True
+                
+                # Try to start prefetching next segment
+                self._maybe_start_prefetch()
+                
+                # Play the prefetched audio
+                safe_put(self._brain_to_core_q, {"type": "LOG", "level": "DEBUG", "msg": "tts_started"})
+                
+                ok = False
+                try:
+                    if self._simulate:
+                        ok = self._simulate_speak(2.0)
+                    elif self._tts:
+                        self.clear_stop()
+                        ok = self._tts.play_wav(wav_path, self._stop_event)
+                except Exception as e:
+                    logger.error(f"TTS playback error: {e}")
+                    ok = False
+                finally:
+                    self._is_playing = False
+                    
+                    # Clean up WAV file
+                    try:
+                        os.unlink(wav_path)
+                    except:
+                        pass
+                    
+                    # Determine show_followup_prompt
+                    is_streaming = meta.get("_streaming", False)
+                    if is_streaming and self._queue.empty() and not self._prefetch_wav:
+                        show_followup = self._pending_followup_prompt
+                        self._pending_followup_prompt = False
+                    else:
+                        show_followup = meta.get("show_followup_prompt", False)
+                    
+                    safe_put(
+                        self._brain_to_core_q,
+                        {
+                            "type": "LOG",
+                            "level": "DEBUG",
+                            "msg": "tts_finished" if ok else "tts_interrupted",
+                            "meta": {"show_followup_prompt": show_followup},
+                        },
+                    )
+                continue
+            
+            # No prefetch available, get from queue normally
+            try:
+                item = self._queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            
             meta = item.get("meta") or {}
             if meta.get("_shutdown"):
                 return
@@ -189,6 +390,10 @@ class _TTSController:
             text = (item.get("text") or "").strip()
             if not text:
                 continue
+
+            # Mark as playing BEFORE synthesis starts - allows enqueue() to trigger prefetch
+            # for items that arrive during synthesis+playback
+            self._is_playing = True
 
             safe_put(self._brain_to_core_q, {"type": "LOG", "level": "DEBUG", "msg": "tts_started"})
 
@@ -205,13 +410,26 @@ class _TTSController:
                 logger.error(f"TTS error: {e}")
                 ok = False
             finally:
+                self._is_playing = False
+                
+                # Determine show_followup_prompt:
+                # - For non-streaming: use meta directly
+                # - For streaming: use pending flag if this is the last segment (queue empty)
+                is_streaming = meta.get("_streaming", False)
+                if is_streaming and self._queue.empty() and not self._prefetch_wav:
+                    # Last streaming segment - use pending followup flag
+                    show_followup = self._pending_followup_prompt
+                    self._pending_followup_prompt = False  # Reset for next response
+                else:
+                    show_followup = meta.get("show_followup_prompt", False)
+                
                 safe_put(
                     self._brain_to_core_q,
                     {
                         "type": "LOG",
                         "level": "DEBUG",
                         "msg": "tts_finished" if ok else "tts_interrupted",
-                        "meta": {"show_followup_prompt": meta.get("show_followup_prompt", False)},
+                        "meta": {"show_followup_prompt": show_followup},
                     },
                 )
 
@@ -666,7 +884,13 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                 tts_text = None
             elif result_streamed:
                 # Already enqueued TTS segments during streaming - don't enqueue again
+                # BUT we need to send the show_followup_prompt flag for the last segment
                 tts_text = None
+                # Send a stream-end marker so TTS controller knows to trigger followup
+                tts_controller.enqueue("", meta={
+                    "_stream_end": True,
+                    "show_followup_prompt": show_followup_prompt,
+                })
 
             # Enqueue speech (non-blocking)
             if tts_text:

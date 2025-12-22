@@ -104,12 +104,20 @@ class Config:
     OLLAMA_STREAM: bool = os.environ.get("WYZER_OLLAMA_STREAM", "true").lower() in ("true", "1", "yes")
     # Stream-to-TTS: progressively feed LLM tokens into TTS for faster perceived response
     # This is separate from OLLAMA_STREAM; when enabled, chunks are spoken as they arrive.
-    # Default OFF. Set WYZER_STREAM_TTS=1 to enable.
-    OLLAMA_STREAM_TTS: bool = os.environ.get("WYZER_STREAM_TTS", "false").lower() in ("true", "1", "yes")
+    # Default ON. Set WYZER_STREAM_TTS=0 to disable.
+    OLLAMA_STREAM_TTS: bool = os.environ.get("WYZER_STREAM_TTS", "true").lower() in ("true", "1", "yes")
     # Minimum buffer size before emitting a TTS segment (if no sentence boundary found)
     STREAM_TTS_BUFFER_CHARS: int = int(os.environ.get("WYZER_STREAM_TTS_BUFFER_CHARS", "150"))
     # First-emit optimization: emit first TTS segment sooner for lower perceived latency
     STREAM_TTS_FIRST_EMIT_CHARS: int = int(os.environ.get("WYZER_STREAM_TTS_FIRST_EMIT_CHARS", "32"))
+    
+    # Sentence-gated TTS streaming buffer settings (for best-UX streaming)
+    # These settings control the new sentence-boundary-aware chunking
+    TTS_STREAM_MIN_CHARS: int = int(os.environ.get("WYZER_TTS_STREAM_MIN_CHARS", "60"))
+    TTS_STREAM_MIN_WORDS: int = int(os.environ.get("WYZER_TTS_STREAM_MIN_WORDS", "10"))
+    TTS_STREAM_MAX_WAIT_MS: int = int(os.environ.get("WYZER_TTS_STREAM_MAX_WAIT_MS", "900"))
+    TTS_STREAM_BOUNDARIES: str = os.environ.get("WYZER_TTS_STREAM_BOUNDARIES", ".!?:")
+    
     OLLAMA_TEMPERATURE: float = float(os.environ.get("WYZER_OLLAMA_TEMPERATURE", "0.4"))
     OLLAMA_TOP_P: float = float(os.environ.get("WYZER_OLLAMA_TOP_P", "0.9"))
     OLLAMA_NUM_CTX: int = int(os.environ.get("WYZER_OLLAMA_NUM_CTX", "4096"))
