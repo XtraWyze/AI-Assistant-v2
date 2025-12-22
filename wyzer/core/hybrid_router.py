@@ -156,6 +156,23 @@ _REASONING_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Conversational questions about past actions/history - route to LLM, not tools
+# These are questions asking about what has been done, not requests to do something
+_HISTORY_QUESTION_RE = re.compile(
+    r"(?:"
+    r"^have\s+(?:i|you|we)\s+|"                    # "have I...", "have you...", "have we..."
+    r"^did\s+(?:i|you|we)\s+|"                     # "did I...", "did you...", "did we..."
+    r"^has\s+(?:anything|something|it)\s+|"        # "has anything...", "has something..."
+    r"^(?:what|which)\s+(?:have|did)\s+(?:i|you|we)\s+|"  # "what have I...", "what did you..."
+    r"^(?:when|where)\s+did\s+(?:i|you|we)\s+|"    # "when did I...", "where did you..."
+    r"^(?:how\s+many|how\s+much)\s+(?:have|did)\s+|"  # "how many have...", "how much did..."
+    r"\byet\s*\??\s*$|"                            # ends with "yet?" - usually asking about past
+    r"\balready\b.*\?|"                            # contains "already" with question mark
+    r"\bso\s+far\b.*\?"                            # "so far" with question mark
+    r")",
+    re.IGNORECASE,
+)
+
 # Creative content patterns: stories, poems, jokes, narratives
 # These should ALWAYS route to LLM reply-only, never attempt tool execution
 _CREATIVE_CONTENT_RE = re.compile(
@@ -213,6 +230,9 @@ def needs_reasoning(text: str) -> bool:
     # Now playing queries should never need reasoning
     if _is_now_playing_query(tl):
         return False
+    # History/past-action questions need LLM conversational response
+    if _HISTORY_QUESTION_RE.search(tl):
+        return True
     return bool(_REASONING_RE.search(tl))
 
 

@@ -47,15 +47,30 @@ def _split_comma_separated_list(text: str) -> List[str]:
       "open spotify, chrome, and notepad"
     becoming:
       ["open spotify", "open chrome", "open notepad"]
+      
+    Also handles sentence boundaries like:
+      "what's a VPN? Pause music"
+    becoming:
+      ["what's a VPN", "Pause music"]
     """
     text = (text or "").strip()
     if not text:
         return []
     
-    # Split by commas and "and" preserving structure
-    # Pattern: split by ", and " or ", " or " and "
-    parts = re.split(r'\s*,\s*(?:and\s+)?|\s+and\s+', text)
-    return [p.strip() for p in parts if p and p.strip()]
+    # First, split on sentence boundaries (? or . followed by space and capital letter)
+    # This handles cases like "what's a VPN? Pause music"
+    sentence_pattern = r'(?<=[.?!])\s+(?=[A-Z])'
+    sentence_parts = re.split(sentence_pattern, text)
+    
+    # Then split each sentence part by commas and "and"
+    all_parts = []
+    for sentence in sentence_parts:
+        # Split by commas and "and" preserving structure
+        # Pattern: split by ", and " or ", " or " and "
+        parts = re.split(r'\s*,\s*(?:and\s+)?|\s+and\s+', sentence)
+        all_parts.extend([p.strip() for p in parts if p and p.strip()])
+    
+    return all_parts
 
 
 def _infer_missing_verb(clause: str, previous_clauses: List[str]) -> str:
@@ -224,19 +239,23 @@ def try_parse_multi_intent(text: str) -> Optional[Tuple[List[Dict[str, Any]], fl
         if len(clauses) < 2:
             continue
         
-        # If we split by " and " or " , ", also check if any clause contains commas
+        # Expand clauses: handle comma-separated lists AND sentence boundaries
         # This handles cases like "open spotify, chrome, and notepad"
-        # which splits by " and " to ["open spotify, chrome", "notepad"]
-        # then we need to further split "open spotify, chrome" by commas
+        # AND cases like "what's a VPN? Pause music" within a single clause
         expanded_clauses = []
         for clause in clauses:
-            # Check if this clause contains a comma-separated list
-            if ',' in clause and sep_pattern != r"\s*,\s*":
-                # Split by comma and infer verbs
+            # Always apply sentence boundary splitting (handles "question? Command" patterns)
+            # For non-comma separators, also do comma expansion
+            if sep_pattern != r"\s*,\s*":
+                # Full expansion including commas and sentence boundaries
                 comma_parts = _split_comma_separated_list(clause)
                 expanded_clauses.extend(comma_parts)
             else:
-                expanded_clauses.append(clause)
+                # For comma separator, just do sentence boundary splitting
+                sentence_pattern = r'(?<=[.?!])\s+(?=[A-Z])'
+                import re
+                sentence_parts = re.split(sentence_pattern, clause)
+                expanded_clauses.extend([p.strip() for p in sentence_parts if p and p.strip()])
         
         # Use expanded clauses if we got more of them
         if len(expanded_clauses) > len(clauses):
@@ -281,40 +300,44 @@ def try_parse_multi_intent(text: str) -> Optional[Tuple[List[Dict[str, Any]], fl
             return (parsed_intents, min_confidence * 0.95)  # Slight confidence penalty for multi-intent
     
     # Try verb boundary splitting as last resort (for "close chrome open spotify" style)
-    verb_boundary_clauses = _split_by_verb_boundaries(raw_text)
-    if len(verb_boundary_clauses) >= 2 and len(verb_boundary_clauses) <= 7:
-        parsed_intents = []
-        min_confidence = 1.0
-        all_succeeded = True
-        processed_clauses = []
-        
-        for clause in verb_boundary_clauses:
-            clause = clause.strip()
-            if not clause:
-                continue
+    # ONLY use this if there are NO explicit separators (commas, "and", "then", etc.)
+    # If we have commas or "and", the separator-based splitting is more accurate
+    has_explicit_separators = any(sep in raw_text.lower() for sep in [',', ' and ', ' then ', ';'])
+    if not has_explicit_separators:
+        verb_boundary_clauses = _split_by_verb_boundaries(raw_text)
+        if len(verb_boundary_clauses) >= 2 and len(verb_boundary_clauses) <= 7:
+            parsed_intents = []
+            min_confidence = 1.0
+            all_succeeded = True
+            processed_clauses = []
             
-            # Try to infer missing verb from previous clauses
-            enhanced_clause = _infer_missing_verb(clause, processed_clauses)
-            processed_clauses.append(enhanced_clause)
+            for clause in verb_boundary_clauses:
+                clause = clause.strip()
+                if not clause:
+                    continue
+                
+                # Try to infer missing verb from previous clauses
+                enhanced_clause = _infer_missing_verb(clause, processed_clauses)
+                processed_clauses.append(enhanced_clause)
+                
+                # Use hybrid_router's single-clause decision
+                decision = _decide_single_clause(enhanced_clause)
+                
+                # If any clause can't be handled deterministically, bail out
+                if decision.mode == "llm" or decision.confidence < 0.7:
+                    all_succeeded = False
+                    break
+                
+                # Collect the intents
+                if decision.intents:
+                    parsed_intents.extend(decision.intents)
+                
+                # Track minimum confidence across all clauses
+                min_confidence = min(min_confidence, decision.confidence)
             
-            # Use hybrid_router's single-clause decision
-            decision = _decide_single_clause(enhanced_clause)
-            
-            # If any clause can't be handled deterministically, bail out
-            if decision.mode == "llm" or decision.confidence < 0.7:
-                all_succeeded = False
-                break
-            
-            # Collect the intents
-            if decision.intents:
-                parsed_intents.extend(decision.intents)
-            
-            # Track minimum confidence across all clauses
-            min_confidence = min(min_confidence, decision.confidence)
-        
-        # If all clauses parsed successfully, return the result
-        if all_succeeded and parsed_intents:
-            return (parsed_intents, min_confidence * 0.95)  # Slight confidence penalty for multi-intent
+            # If all clauses parsed successfully, return the result
+            if all_succeeded and parsed_intents:
+                return (parsed_intents, min_confidence * 0.95)  # Slight confidence penalty for multi-intent
     
     # No successful parse
     return None
@@ -371,14 +394,18 @@ def parse_multi_intent_partial(text: str) -> Optional[Tuple[List[Dict[str, Any]]
         if len(clauses) < 2:
             continue
         
-        # Expand comma-separated lists
+        # Expand clauses: handle comma-separated lists AND sentence boundaries
         expanded_clauses = []
         for clause in clauses:
-            if ',' in clause and sep_pattern != r"\s*,\s*":
+            if sep_pattern != r"\s*,\s*":
+                # Full expansion including commas and sentence boundaries
                 comma_parts = _split_comma_separated_list(clause)
                 expanded_clauses.extend(comma_parts)
             else:
-                expanded_clauses.append(clause)
+                # For comma separator, just do sentence boundary splitting
+                sentence_pattern = r'(?<=[.?!])\s+(?=[A-Z])'
+                sentence_parts = re.split(sentence_pattern, clause)
+                expanded_clauses.extend([p.strip() for p in sentence_parts if p and p.strip()])
         
         if len(expanded_clauses) > len(clauses):
             clauses = expanded_clauses
