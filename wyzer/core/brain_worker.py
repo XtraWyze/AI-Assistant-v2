@@ -825,7 +825,7 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             # commands go through the tool path, not the streaming reply-only path.
             # NOTE: We preserve original_user_text for display - user should see what
             # they actually said, not the resolved version.
-            from wyzer.core.reference_resolver import resolve_references
+            from wyzer.core.reference_resolver import resolve_references, is_replay_sentinel
             from wyzer.context.world_state import get_world_state
             
             original_user_text = user_text  # Preserve for display
@@ -834,9 +834,18 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                 logger.info(f'[REF_RESOLVE] "{user_text}" → "{resolved_text}"')
                 user_text = resolved_text  # Use resolved for routing
 
+            # =========================================================================
+            # PHASE 10.1: REPLAY SENTINEL CHECK (before streaming decision)
+            # =========================================================================
+            # If reference resolver returned the replay sentinel, ALWAYS go through
+            # non-streaming path so handle_user_text can execute the deterministic replay.
+            # This prevents the sentinel from being treated as a conversational query.
+            force_non_streaming = is_replay_sentinel(user_text)
+
             # Check if we should use streaming TTS for this request
             # Streaming is ONLY for conversational/reply-only queries, NOT for tool commands
-            use_streaming_tts = should_use_streaming_tts(user_text)
+            # Phase 10.1: Also skip streaming if this is a replay request
+            use_streaming_tts = should_use_streaming_tts(user_text) and not force_non_streaming
             result_streamed = False
             
             if use_streaming_tts:

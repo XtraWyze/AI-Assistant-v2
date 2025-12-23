@@ -1,16 +1,19 @@
 """wyzer.core.reference_resolver
 
 Phase 10 - Reference Resolution for Continuity.
+Phase 10.1 - Deterministic Replay (replay_last_action).
 
 Deterministically rewrites vague follow-up phrases like:
 - "close it" → "close <last_target>"
 - "open it again" → "open <last_target>"
-- "do that again" → repeat last_tool + last_target
+- "do that again" → __REPLAY_LAST_ACTION__ (triggers deterministic replay)
 
 HARD RULES:
 - NO LLM-based guessing
 - If resolution is uncertain, return original text unchanged
 - All logic must be deterministic and testable
+- Phase 10.1: "do that again" returns sentinel for deterministic replay,
+  NOT reconstructed text
 
 This module enables natural follow-ups without introducing autonomy.
 """
@@ -52,6 +55,26 @@ _REPEAT_RE = re.compile(
     r"^(?:do\s+(?:that|it|this)\s+again|repeat\s+(?:that|it|this|the\s+last\s+(?:action|command))|again)\.?$",
     re.IGNORECASE
 )
+
+# Phase 10.1: Extended replay phrases for deterministic replay
+# These phrases trigger __REPLAY_LAST_ACTION__ sentinel
+# Supports optional prefixes like "can you", "could you", "please", etc.
+_REPLAY_PREFIX_RE = r"(?:(?:can|could|would)\s+you\s+(?:please\s+)?|please\s+)?"
+_REPLAY_PHRASES_RE = re.compile(
+    r"^" + _REPLAY_PREFIX_RE + r"(?:"
+    r"do\s+(?:that|it|this)\s+again|"
+    r"repeat\s+(?:that|it|this|the\s+last\s+(?:action|command))|"
+    r"do\s+it\s+again|"
+    r"same\s+(?:thing|as\s+(?:last\s+time|before))|"
+    r"again|"
+    r"one\s+more\s+time|"
+    r"repeat"
+    r")\.?\??$",
+    re.IGNORECASE
+)
+
+# Sentinel string returned when replay_last_action should be triggered
+REPLAY_LAST_ACTION_SENTINEL = "__REPLAY_LAST_ACTION__"
 
 # "mute it", "unmute it" (for volume)
 _MUTE_IT_RE = re.compile(
@@ -233,13 +256,24 @@ def _try_resolve_window_action_it(text: str, ws: WorldState) -> Optional[str]:
 
 def _try_resolve_repeat(text: str, ws: WorldState) -> Optional[str]:
     """
-    Resolve "do that again" → full command reconstruction.
+    Resolve "do that again" / "repeat that" etc.
     
-    Only works when we have both last_tool and last_target.
+    Phase 10.1: Returns REPLAY_LAST_ACTION_SENTINEL when structured last_action
+    is available, enabling deterministic replay without re-routing through text.
+    
+    Falls back to text-based command reconstruction when last_action is not available
+    but last_tool/last_target are (legacy behavior).
     """
-    if not _REPEAT_RE.match(text):
+    # Check if this matches any replay phrase
+    if not _REPLAY_PHRASES_RE.match(text):
         return None
     
+    # Phase 10.1: Prefer structured last_action for deterministic replay
+    if ws.has_replay_action():
+        # Return sentinel - orchestrator will handle deterministic replay
+        return REPLAY_LAST_ACTION_SENTINEL
+    
+    # Fallback: Legacy text-based reconstruction (for backwards compatibility)
     if not ws.has_last_action():
         return None
     
@@ -351,6 +385,37 @@ def _clean_target(target: str) -> str:
     return target.strip()
 
 
+def is_replay_request(text: str) -> bool:
+    """
+    Check if text is a replay/repeat request.
+    
+    Phase 10.1: Used by orchestrator to detect replay requests before routing.
+    
+    Args:
+        text: User's input text
+        
+    Returns:
+        True if text matches replay phrases like "do that again", "repeat that", etc.
+    """
+    return bool(_REPLAY_PHRASES_RE.match((text or "").strip()))
+
+
+def is_replay_sentinel(text: str) -> bool:
+    """
+    Check if text is the replay sentinel.
+    
+    Phase 10.1: Used by orchestrator to detect when reference resolver
+    returned the replay sentinel.
+    
+    Args:
+        text: Resolved text from reference resolver
+        
+    Returns:
+        True if text is the __REPLAY_LAST_ACTION__ sentinel
+    """
+    return text == REPLAY_LAST_ACTION_SENTINEL
+
+
 def get_resolution_context(ws: Optional[WorldState] = None) -> dict:
     """
     Get debug info about current resolution context.
@@ -374,4 +439,5 @@ def get_resolution_context(ws: Optional[WorldState] = None) -> dict:
         "active_window_title": ws.active_window_title,
         "age_seconds": ws.get_age_seconds(),
         "has_last_action": ws.has_last_action(),
+        "has_replay_action": ws.has_replay_action(),
     }

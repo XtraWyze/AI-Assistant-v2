@@ -24,6 +24,34 @@ from typing import Optional
 
 
 @dataclass
+class LastAction:
+    """
+    Structured representation of the last successful tool execution.
+    
+    Used by Phase 10.1 replay_last_action for deterministic replays.
+    
+    Fields:
+        tool: Name of the tool that was executed
+        args: Original arguments passed to the tool
+        resolved: Resolved/canonical target info from result (e.g., UWP path, matched window)
+        ts: Unix timestamp when the action was executed
+    """
+    tool: str
+    args: dict
+    resolved: Optional[dict] = None
+    ts: float = field(default_factory=time.time)
+    
+    def to_dict(self) -> dict:
+        """Convert to dict for logging/debugging."""
+        return {
+            "tool": self.tool,
+            "args": self.args,
+            "resolved": self.resolved,
+            "ts": self.ts,
+        }
+
+
+@dataclass
 class WorldState:
     """
     In-RAM world state for reference resolution.
@@ -38,6 +66,7 @@ class WorldState:
         active_app: Currently focused application (from Phase 9)
         active_window_title: Current window title (from Phase 9)
         last_updated_ts: Unix timestamp of last update
+        last_action: Phase 10.1 - Structured last action for deterministic replay
     """
     last_tool: Optional[str] = None
     last_target: Optional[str] = None
@@ -45,6 +74,7 @@ class WorldState:
     active_app: Optional[str] = None
     active_window_title: Optional[str] = None
     last_updated_ts: float = field(default_factory=time.time)
+    last_action: Optional[LastAction] = None
     
     def clear(self) -> None:
         """Reset all state fields."""
@@ -54,10 +84,15 @@ class WorldState:
         self.active_app = None
         self.active_window_title = None
         self.last_updated_ts = time.time()
+        self.last_action = None
     
     def has_last_action(self) -> bool:
         """Check if there's a valid last action for reference."""
         return self.last_tool is not None and self.last_target is not None
+    
+    def has_replay_action(self) -> bool:
+        """Check if there's a structured last_action available for replay."""
+        return self.last_action is not None
     
     def get_age_seconds(self) -> float:
         """Get seconds since last update."""
@@ -146,18 +181,260 @@ def update_from_tool_execution(
     if tool_result and isinstance(tool_result, dict) and "error" in tool_result:
         return
     
-    # Extract target from tool args (best effort)
-    target = _extract_target_from_args(tool_name, tool_args)
+    # Extract target - prefer resolved name from result, fall back to args
+    target = _extract_target_from_result(tool_name, tool_result)
+    if not target:
+        target = _extract_target_from_args(tool_name, tool_args)
+    
+    # Format target for nice display
+    if target:
+        target = _format_target_name(target)
     
     # Extract result summary (best effort)
     summary = _extract_result_summary(tool_name, tool_result)
     
-    # Update state
-    update_world_state(
-        last_tool=tool_name,
-        last_target=target,
-        last_result_summary=summary,
+    # ===========================================================================
+    # Phase 10.1: Store structured last_action for deterministic replay
+    # ===========================================================================
+    resolved_info = _extract_resolved_info_for_replay(tool_name, tool_result)
+    
+    from wyzer.core.logger import get_logger
+    logger = get_logger()
+    
+    last_action = LastAction(
+        tool=tool_name,
+        args=dict(tool_args) if tool_args else {},
+        resolved=resolved_info,
+        ts=time.time(),
     )
+    
+    # Log the last_action capture
+    resolved_summary = _summarize_resolved(resolved_info) if resolved_info else "None"
+    logger.info(f"[WORLD_STATE] last_action tool={tool_name} resolved={resolved_summary}")
+    
+    # Update state (including last_action)
+    ws = get_world_state()
+    with _world_state_lock:
+        if tool_name:
+            ws.last_tool = tool_name
+        if target:
+            ws.last_target = target
+        if summary:
+            ws.last_result_summary = summary
+        ws.last_action = last_action
+        ws.last_updated_ts = time.time()
+
+
+def _extract_resolved_info_for_replay(tool_name: str, result: dict) -> Optional[dict]:
+    """
+    Extract resolved/canonical target info for deterministic replay.
+    
+    Phase 10.1: This extracts the stable launch target (e.g., UWP path, exe path,
+    matched window info) so replays don't need to re-resolve.
+    
+    Args:
+        tool_name: Name of the tool
+        result: Tool result dict
+        
+    Returns:
+        Dict with replay-stable resolved info, or None
+    """
+    if not result or not isinstance(result, dict):
+        return None
+    
+    resolved_info = {}
+    
+    # For open_target: extract resolved dict with type, path, launch info
+    if tool_name == "open_target":
+        resolved = result.get("resolved")
+        if resolved and isinstance(resolved, dict):
+            # Copy key fields needed for stable replay
+            resolved_info["type"] = resolved.get("type")
+            resolved_info["path"] = resolved.get("path")
+            resolved_info["matched_name"] = resolved.get("matched_name")
+            # For games/UWP, include launch info
+            launch = resolved.get("launch")
+            if launch and isinstance(launch, dict):
+                resolved_info["launch"] = dict(launch)
+            # Include game_name/app_name if present
+            if result.get("game_name"):
+                resolved_info["game_name"] = result.get("game_name")
+            if result.get("app_name"):
+                resolved_info["app_name"] = result.get("app_name")
+            return resolved_info if resolved_info.get("type") else None
+    
+    # For close_window/focus_window: extract matched window info
+    if tool_name in ("close_window", "focus_window", "minimize_window", "maximize_window"):
+        matched = result.get("matched")
+        if matched and isinstance(matched, dict):
+            resolved_info["title"] = matched.get("title")
+            resolved_info["process"] = matched.get("process")
+            resolved_info["hwnd"] = matched.get("hwnd")  # May be useful for some replays
+            return resolved_info if resolved_info.get("process") or resolved_info.get("title") else None
+    
+    # For other tools, try to extract generic resolved/matched info
+    if result.get("resolved") and isinstance(result.get("resolved"), dict):
+        return dict(result["resolved"])
+    if result.get("matched") and isinstance(result.get("matched"), dict):
+        return dict(result["matched"])
+    
+    return None
+
+
+def _summarize_resolved(resolved: Optional[dict]) -> str:
+    """Create a short summary of resolved info for logging."""
+    if not resolved:
+        return "None"
+    
+    parts = []
+    if resolved.get("type"):
+        parts.append(f"type={resolved['type']}")
+    if resolved.get("matched_name"):
+        parts.append(f"name={resolved['matched_name']}")
+    elif resolved.get("app_name"):
+        parts.append(f"name={resolved['app_name']}")
+    elif resolved.get("game_name"):
+        parts.append(f"name={resolved['game_name']}")
+    elif resolved.get("process"):
+        parts.append(f"process={resolved['process']}")
+    elif resolved.get("title"):
+        title = resolved['title'][:30] + "..." if len(resolved.get('title', '')) > 30 else resolved.get('title', '')
+        parts.append(f"title={title}")
+    
+    if resolved.get("launch") and isinstance(resolved.get("launch"), dict):
+        launch_type = resolved["launch"].get("type")
+        if launch_type:
+            parts.append(f"launch={launch_type}")
+    
+    return " ".join(parts) if parts else str(resolved)[:50]
+
+
+def _extract_target_from_result(tool_name: str, result: dict) -> Optional[str]:
+    """
+    Extract the canonical target name from tool result.
+    
+    Prefers resolved/matched names over raw query strings.
+    This ensures aliases and fuzzy matches resolve to canonical names.
+    
+    Args:
+        tool_name: Name of the tool
+        result: Tool result dict
+        
+    Returns:
+        Canonical target name or None
+    """
+    if not result or not isinstance(result, dict):
+        return None
+    
+    # For open_target: use resolved.matched_name
+    resolved = result.get("resolved")
+    if resolved and isinstance(resolved, dict):
+        matched_name = resolved.get("matched_name")
+        if matched_name and isinstance(matched_name, str):
+            return matched_name.strip()
+        # Fall back to path basename for files/folders
+        path = resolved.get("path")
+        if path and isinstance(path, str):
+            import os
+            basename = os.path.basename(path)
+            if basename:
+                # Remove .exe extension for apps
+                if basename.lower().endswith(".exe"):
+                    basename = basename[:-4]
+                return basename.strip()
+    
+    # For close_window/focus_window: use matched window info
+    matched = result.get("matched")
+    if matched and isinstance(matched, dict):
+        # Prefer process name (cleaner than full title)
+        process = matched.get("process")
+        if process and isinstance(process, str):
+            # Remove .exe extension
+            if process.lower().endswith(".exe"):
+                process = process[:-4]
+            return process.strip()
+        # Fall back to title
+        title = matched.get("title")
+        if title and isinstance(title, str):
+            return title.strip()
+    
+    # For other tools, check common result fields
+    target_keys = ["target", "name", "app", "window", "matched_name"]
+    for key in target_keys:
+        value = result.get(key)
+        if value and isinstance(value, str):
+            return value.strip()
+    
+    return None
+
+
+def _format_target_name(target: str) -> str:
+    """
+    Format target name for nice display.
+    
+    Maps executable names to friendly display names.
+    Handles casing and common patterns.
+    
+    Args:
+        target: Raw target name
+        
+    Returns:
+        Formatted display name
+    """
+    if not target:
+        return target
+    
+    # Common app name mappings (lowercase key -> display name)
+    app_display_names = {
+        "chrome": "Chrome",
+        "firefox": "Firefox",
+        "edge": "Edge",
+        "msedge": "Edge",
+        "spotify": "Spotify",
+        "discord": "Discord",
+        "slack": "Slack",
+        "code": "VS Code",
+        "notepad": "Notepad",
+        "notepad++": "Notepad++",
+        "explorer": "File Explorer",
+        "windowsterminal": "Windows Terminal",
+        "wt": "Windows Terminal",
+        "cmd": "Command Prompt",
+        "powershell": "PowerShell",
+        "pwsh": "PowerShell",
+        "steam": "Steam",
+        "vlc": "VLC",
+        "obs64": "OBS",
+        "obs": "OBS",
+        "word": "Word",
+        "excel": "Excel",
+        "outlook": "Outlook",
+        "teams": "Teams",
+        "zoom": "Zoom",
+        "gimp": "GIMP",
+        "audacity": "Audacity",
+        "blender": "Blender",
+        "photoshop": "Photoshop",
+        "premiere": "Premiere",
+        "aftereffects": "After Effects",
+    }
+    
+    # Check for exact match (case-insensitive)
+    lower = target.lower().strip()
+    if lower in app_display_names:
+        return app_display_names[lower]
+    
+    # If it looks like an executable, try without .exe
+    if lower.endswith(".exe"):
+        base = lower[:-4]
+        if base in app_display_names:
+            return app_display_names[base]
+    
+    # Title case for unknown apps (but preserve if already looks good)
+    if target.islower() or target.isupper():
+        return target.title()
+    
+    return target
 
 
 def _extract_target_from_args(tool_name: str, args: dict) -> Optional[str]:

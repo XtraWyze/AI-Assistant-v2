@@ -602,7 +602,7 @@ def handle_user_text(text: str) -> Dict[str, Any]:
     # Resolve vague follow-up phrases BEFORE any other processing.
     # "close it" → "close Chrome", "do that again" → repeat last action, etc.
     # This runs FIRST because it needs to transform the text before routing.
-    from wyzer.core.reference_resolver import resolve_references
+    from wyzer.core.reference_resolver import resolve_references, is_replay_sentinel, REPLAY_LAST_ACTION_SENTINEL
     from wyzer.context.world_state import get_world_state
     
     original_text = text
@@ -610,6 +610,14 @@ def handle_user_text(text: str) -> Dict[str, Any]:
     if resolved_text != text:
         logger.info(f'[REF_RESOLVE] "{text}" → "{resolved_text}"')
         text = resolved_text
+    
+    # =========================================================================
+    # PHASE 10.1: REPLAY_LAST_ACTION (deterministic replay)
+    # =========================================================================
+    # If reference resolver returned the replay sentinel, execute deterministic
+    # replay of the last successful action without re-routing through LLM.
+    if is_replay_sentinel(text):
+        return _handle_replay_last_action(original_text, start_time)
     
     # =========================================================================
     # CONTINUATION PHRASE PRE-PASS (deterministic topic continuity)
@@ -2832,6 +2840,231 @@ def _update_world_state_from_result(tool_name: str, tool_args: Dict[str, Any], r
         pass
 
 
+def _handle_replay_last_action(original_text: str, start_time: float) -> Dict[str, Any]:
+    """
+    Handle deterministic replay of the last successful action.
+    
+    Phase 10.1: This is the core replay mechanism. When user says "do that again",
+    "repeat that", etc., this function replays the exact last tool execution
+    without re-routing through the LLM.
+    
+    Args:
+        original_text: The original user text (for logging/meta)
+        start_time: Start time for latency calculation
+        
+    Returns:
+        Dict with reply, latency_ms, and execution_summary
+    """
+    logger = get_logger_instance()
+    
+    from wyzer.context.world_state import get_world_state
+    ws = get_world_state()
+    
+    # Check if there's a last action to replay
+    if not ws.has_replay_action() or ws.last_action is None:
+        logger.info("[REPLAY] no last_action; asking user")
+        end_time = time.perf_counter()
+        latency_ms = int((end_time - start_time) * 1000)
+        return {
+            "reply": "What should I repeat?",
+            "latency_ms": latency_ms,
+            "meta": {"replay": True, "no_last_action": True, "original_text": original_text},
+        }
+    
+    last_action = ws.last_action
+    tool_name = last_action.tool
+    original_args = last_action.args
+    resolved_info = last_action.resolved
+    
+    # Build replay args - prefer resolved info for stable replays
+    replay_args = _build_replay_args(tool_name, original_args, resolved_info)
+    
+    # Log the replay
+    resolved_summary = _summarize_resolved_for_log(resolved_info)
+    logger.info(f"[REPLAY] tool={tool_name} args={replay_args} resolved={resolved_summary}")
+    
+    # Execute the replay
+    try:
+        registry = get_registry()
+        result = _execute_tool(registry, tool_name, replay_args)
+        
+        # Determine success/failure
+        has_error = "error" in result
+        
+        # Format reply
+        if has_error:
+            error_msg = result.get("error", {}).get("message", "Unknown error")
+            reply = f"I couldn't repeat that: {error_msg}"
+        else:
+            reply = _format_replay_success_reply(tool_name, replay_args, result)
+        
+        end_time = time.perf_counter()
+        latency_ms = int((end_time - start_time) * 1000)
+        
+        return {
+            "reply": reply,
+            "latency_ms": latency_ms,
+            "execution_summary": {
+                "replayed_tool": tool_name,
+                "replayed_args": replay_args,
+                "success": not has_error,
+                "result": result,
+            },
+            "meta": {"replay": True, "original_text": original_text},
+        }
+        
+    except Exception as e:
+        logger.error(f"[REPLAY] Exception during replay: {e}")
+        end_time = time.perf_counter()
+        latency_ms = int((end_time - start_time) * 1000)
+        return {
+            "reply": "I couldn't repeat that action.",
+            "latency_ms": latency_ms,
+            "meta": {"replay": True, "error": str(e), "original_text": original_text},
+        }
+
+
+def _build_replay_args(tool_name: str, original_args: dict, resolved_info: Optional[dict]) -> dict:
+    """
+    Build the arguments for replaying a tool.
+    
+    Phase 10.1: For stable replays, we prefer using resolved info when available.
+    This avoids re-searching/re-resolving and ensures deterministic behavior.
+    
+    Special cases:
+    - open_target with UWP: Use the resolved UWP app ID path for direct launch
+    - open_target with game: Use the resolved launch target
+    - close_window/focus_window: Use resolved process/title
+    
+    Args:
+        tool_name: The tool to replay
+        original_args: Original args used in the first execution
+        resolved_info: Resolved/canonical info from the result
+        
+    Returns:
+        Args dict to use for replay
+    """
+    # Start with original args as fallback
+    replay_args = dict(original_args) if original_args else {}
+    
+    if not resolved_info:
+        return replay_args
+    
+    # Special handling for open_target - use stable launch target
+    if tool_name == "open_target":
+        resolved_type = resolved_info.get("type")
+        
+        if resolved_type == "uwp":
+            # UWP apps: use the app ID path for stable launch
+            uwp_path = resolved_info.get("path")
+            if uwp_path:
+                # Keep the query but add internal resolved hint
+                replay_args["_resolved_uwp_path"] = uwp_path
+        
+        elif resolved_type == "game":
+            # Games: store launch info for stable replay
+            launch = resolved_info.get("launch")
+            if launch and isinstance(launch, dict):
+                replay_args["_resolved_launch"] = launch
+        
+        elif resolved_type in ("app", "file", "folder"):
+            # For regular apps/files/folders, use path if available
+            resolved_path = resolved_info.get("path")
+            if resolved_path:
+                replay_args["_resolved_path"] = resolved_path
+    
+    # Special handling for window tools - use stable process/title
+    elif tool_name in ("close_window", "focus_window", "minimize_window", "maximize_window"):
+        # Prefer process over title for stability
+        process = resolved_info.get("process")
+        if process:
+            replay_args["process"] = process
+            # Remove title if we have process (more stable)
+            if "title" in replay_args and replay_args.get("title"):
+                pass  # Keep both for redundancy
+        else:
+            # Fall back to title
+            title = resolved_info.get("title")
+            if title:
+                replay_args["title"] = title
+    
+    return replay_args
+
+
+def _summarize_resolved_for_log(resolved: Optional[dict]) -> str:
+    """Create a short summary of resolved info for logging."""
+    if not resolved:
+        return "None"
+    
+    parts = []
+    if resolved.get("type"):
+        parts.append(f"type={resolved['type']}")
+    if resolved.get("matched_name"):
+        parts.append(f"name={resolved['matched_name']}")
+    elif resolved.get("app_name"):
+        parts.append(f"name={resolved['app_name']}")
+    elif resolved.get("game_name"):
+        parts.append(f"name={resolved['game_name']}")
+    elif resolved.get("process"):
+        parts.append(f"process={resolved['process']}")
+    elif resolved.get("title"):
+        title = resolved['title'][:30] + "..." if len(resolved.get('title', '')) > 30 else resolved.get('title', '')
+        parts.append(f"title={title}")
+    
+    return " ".join(parts) if parts else str(resolved)[:50]
+
+
+def _format_replay_success_reply(tool_name: str, args: dict, result: dict) -> str:
+    """Format a success reply for a replayed action."""
+    # Get a friendly target name
+    target = None
+    
+    # Check result for target info
+    resolved = result.get("resolved", {})
+    matched = result.get("matched", {})
+    
+    if resolved.get("matched_name"):
+        target = resolved["matched_name"]
+    elif result.get("app_name"):
+        target = result["app_name"]
+    elif result.get("game_name"):
+        target = result["game_name"]
+    elif matched.get("process"):
+        target = matched["process"]
+        if target and target.lower().endswith(".exe"):
+            target = target[:-4]
+    elif args.get("query"):
+        target = args["query"]
+    elif args.get("process"):
+        target = args["process"]
+    elif args.get("title"):
+        target = args["title"]
+    
+    # Format based on tool
+    if tool_name == "open_target":
+        if target:
+            return f"Opened {target} again."
+        return "Done."
+    elif tool_name == "close_window":
+        if target:
+            return f"Closed {target} again."
+        return "Closed the window again."
+    elif tool_name == "focus_window":
+        if target:
+            return f"Focused {target} again."
+        return "Focused the window again."
+    elif tool_name == "minimize_window":
+        if target:
+            return f"Minimized {target} again."
+        return "Minimized the window again."
+    elif tool_name == "maximize_window":
+        if target:
+            return f"Maximized {target} again."
+        return "Maximized the window again."
+    else:
+        return "Done."
+
+
 def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a tool with validation and logging (pool-aware)"""
     logger = get_logger_instance()
@@ -2846,14 +3079,26 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
             }
         }
     
-    # Normalize + validate arguments
+    # Normalize arguments
     tool_args = _normalize_tool_args(tool_name, tool_args or {})
-    is_valid, error = validate_args(tool.args_schema, tool_args)
+    
+    # Phase 10.1: Separate internal replay keys (prefixed with _) from regular args
+    # Internal keys are used for deterministic replay but should not be validated
+    # against the tool's public schema.
+    internal_args = {k: v for k, v in tool_args.items() if k.startswith("_")}
+    public_args = {k: v for k, v in tool_args.items() if not k.startswith("_")}
+    
+    # Validate only public arguments against schema
+    is_valid, error = validate_args(tool.args_schema, public_args)
     if not is_valid:
         return {"error": error}
     
+    # Merge internal args back for the tool to use
+    # (tools like open_target check for _resolved_* keys)
+    full_args = {**public_args, **internal_args}
+    
     # Log BEFORE execution
-    logger.info(f"[TOOLS] Executing {tool_name} args={tool_args}")
+    logger.info(f"[TOOLS] Executing {tool_name} args={full_args}")
     
     # Try to use worker pool if enabled
     pool = _tool_pool
@@ -2863,14 +3108,14 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
             request_id = str(uuid.uuid4())
             
             # Submit job to pool
-            if pool.submit_job(job_id, request_id, tool_name, tool_args):
+            if pool.submit_job(job_id, request_id, tool_name, full_args):
                 # Wait for result with timeout
                 result_obj = pool.wait_for_result(job_id, timeout=Config.TOOL_POOL_TIMEOUT_SEC)
                 if result_obj is not None:
                     result = result_obj.result
                     logger.info(f"[TOOLS] Pool result {result}")
                     # Phase 10: Update world state for reference resolution
-                    _update_world_state_from_result(tool_name, tool_args, result)
+                    _update_world_state_from_result(tool_name, full_args, result)
                     return result
                 else:
                     # Timeout, fall back to in-process
@@ -2884,13 +3129,13 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
     
     # Fall back to in-process execution
     try:
-        result = tool.run(**tool_args)
+        result = tool.run(**full_args)
         
         # Log AFTER execution
         logger.info(f"[TOOLS] Result {result}")
         
         # Phase 10: Update world state for reference resolution
-        _update_world_state_from_result(tool_name, tool_args, result)
+        _update_world_state_from_result(tool_name, full_args, result)
         
         return result
     except Exception as e:

@@ -27,11 +27,15 @@ def validate_args(schema: Dict[str, Any], args: Dict[str, Any]) -> Tuple[bool, O
             }
     
     # Check for unknown fields (unless additionalProperties is True)
+    # Phase 10.1: Keys starting with "_" are internal replay keys and should be ignored
     properties = schema.get("properties", {})
     additional_allowed = schema.get("additionalProperties", False)
     
     if not additional_allowed:
         for key in args:
+            # Skip internal keys (used for deterministic replay)
+            if key.startswith("_"):
+                continue
             if key not in properties:
                 return False, {
                     "error": "unknown_field",
