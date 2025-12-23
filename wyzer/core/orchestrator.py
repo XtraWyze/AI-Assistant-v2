@@ -597,11 +597,25 @@ def handle_user_text(text: str) -> Dict[str, Any]:
     logger = get_logger_instance()
     
     # =========================================================================
+    # PHASE 10: REFERENCE RESOLUTION (deterministic rewrite)
+    # =========================================================================
+    # Resolve vague follow-up phrases BEFORE any other processing.
+    # "close it" → "close Chrome", "do that again" → repeat last action, etc.
+    # This runs FIRST because it needs to transform the text before routing.
+    from wyzer.core.reference_resolver import resolve_references
+    from wyzer.context.world_state import get_world_state
+    
+    original_text = text
+    resolved_text = resolve_references(text, get_world_state())
+    if resolved_text != text:
+        logger.info(f'[REF_RESOLVE] "{text}" → "{resolved_text}"')
+        text = resolved_text
+    
+    # =========================================================================
     # CONTINUATION PHRASE PRE-PASS (deterministic topic continuity)
     # =========================================================================
     # If user says "tell me more" etc., rewrite to include the last topic.
     # This ensures continuity even if session context is short/truncated.
-    original_text = text
     is_continuation = is_continuation_phrase(text)
     explicit_topic = is_explicit_continuation(text)  # "tell me more about X" -> X
     is_info_query = is_informational_query(text)  # "tell me about X", "what is Y"
@@ -2799,6 +2813,25 @@ def _rewrite_open_website_intents(user_text: str, intents) -> None:
             intent.args = {"query": phrase}
 
 
+def _update_world_state_from_result(tool_name: str, tool_args: Dict[str, Any], result: Dict[str, Any]) -> None:
+    """
+    Update WorldState after successful tool execution.
+    
+    Phase 10: Called after ANY tool successfully runs to enable reference resolution.
+    Fails silently if update cannot be performed.
+    """
+    try:
+        # Only update on successful execution (no error in result)
+        if "error" in result:
+            return
+        
+        from wyzer.context.world_state import update_from_tool_execution
+        update_from_tool_execution(tool_name, tool_args, result)
+    except Exception:
+        # Fail silently - world state updates are best-effort
+        pass
+
+
 def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a tool with validation and logging (pool-aware)"""
     logger = get_logger_instance()
@@ -2836,6 +2869,8 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
                 if result_obj is not None:
                     result = result_obj.result
                     logger.info(f"[TOOLS] Pool result {result}")
+                    # Phase 10: Update world state for reference resolution
+                    _update_world_state_from_result(tool_name, tool_args, result)
                     return result
                 else:
                     # Timeout, fall back to in-process
@@ -2853,6 +2888,9 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
         
         # Log AFTER execution
         logger.info(f"[TOOLS] Result {result}")
+        
+        # Phase 10: Update world state for reference resolution
+        _update_world_state_from_result(tool_name, tool_args, result)
         
         return result
     except Exception as e:

@@ -381,7 +381,7 @@ def main():
     
     # Print startup banner
     print("\n" + "=" * 60)
-    print("  Wyzer AI Assistant - Phase 8")
+    print("  Wyzer AI Assistant - Phase 10")
     print("=" * 60)
     print(f"  Whisper Model: {args.model}")
     print(f"  Whisper Device: {args.whisper_device}")

@@ -816,6 +816,24 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             llm_start = now_ms()
             from wyzer.core.orchestrator import handle_user_text, should_use_streaming_tts, handle_user_text_streaming
 
+            # =========================================================================
+            # PHASE 10: REFERENCE RESOLUTION (before routing decision)
+            # =========================================================================
+            # Resolve vague follow-up phrases BEFORE checking streaming/routing.
+            # "close it" → "close Chrome", "do that again" → repeat last action, etc.
+            # This MUST happen before should_use_streaming_tts() to ensure resolved
+            # commands go through the tool path, not the streaming reply-only path.
+            # NOTE: We preserve original_user_text for display - user should see what
+            # they actually said, not the resolved version.
+            from wyzer.core.reference_resolver import resolve_references
+            from wyzer.context.world_state import get_world_state
+            
+            original_user_text = user_text  # Preserve for display
+            resolved_text = resolve_references(user_text, get_world_state())
+            if resolved_text != user_text:
+                logger.info(f'[REF_RESOLVE] "{user_text}" → "{resolved_text}"')
+                user_text = resolved_text  # Use resolved for routing
+
             # Check if we should use streaming TTS for this request
             # Streaming is ONLY for conversational/reply-only queries, NOT for tool commands
             use_streaming_tts = should_use_streaming_tts(user_text)
@@ -858,10 +876,11 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                     tool_ms = 0
 
             # Record this turn in session memory (after successful orchestrator response)
+            # Use original_user_text so conversation history reflects what user actually said
             from wyzer.memory.memory_manager import get_memory_manager
             mem_mgr = get_memory_manager()
-            if user_text and reply:
-                mem_mgr.add_session_turn(user_text, reply)
+            if original_user_text and reply:
+                mem_mgr.add_session_turn(original_user_text, reply)
 
             tts_text: Optional[str] = reply
             tts_start_ms: Optional[int] = None
@@ -918,7 +937,8 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                             "total_ms": total_ms,
                         },
                         "tts_interrupted": tts_interrupted,
-                        "user_text": user_text,
+                        "user_text": original_user_text,  # Display what user actually said
+                        "resolved_text": user_text if user_text != original_user_text else None,  # For debugging
                         "is_followup": meta.get("is_followup", False),  # Preserve followup flag
                         "followup_chain": meta.get("followup_chain"),  # Preserve chain count
                         "show_followup_prompt": show_followup_prompt,  # Whether to show prompt
