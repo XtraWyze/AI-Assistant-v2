@@ -1,0 +1,133 @@
+Wyzer Roadmap v3 (Canonical)
+Phase 0 — Non-negotiables (locked)
+
+Local-first, offline
+
+Always-listening hotword
+
+Modular tools
+
+Headless first
+
+Voice → Brain → Tools → Voice
+
+No cloud dependency required 
+
+to keep in mind
+
+Core Engine (already done)
+Phase 1 — Skeleton
+
+Project structure, boot logs, clean entrypoint. 
+
+to keep in mind
+
+Phase 2 — Audio pipeline stability
+
+Mic stream, VAD, hotword, state machine: IDLE→LISTENING→THINKING→SPEAKING. 
+
+to keep in mind
+
+ 
+
+WYZER_DOCUMENTATION
+
+Phase 3 — STT (single engine)
+
+Faster-Whisper routing, silence timeouts, clean transcribe() contract. 
+
+WYZER_DOCUMENTATION
+
+Phase 4 — Brain (LLM)
+
+Ollama + llama.cpp backend support, streaming responses, timeouts. 
+
+WYZER_DOCUMENTATION
+
+Phase 5 — TTS
+
+Piper, interruptible barge-in, optional streaming TTS. 
+
+WYZER_DOCUMENTATION
+
+Phase 6 — Tools + Multi-intent
+
+Stateless tools, JSON outputs, tool worker pool, multi-intent parser. 
+
+WYZER_DOCUMENTATION
+
+Phase 7 — Memory (controlled)
+
+Explicit remember/forget/list, session memory, long-term storage + injection toggle. 
+
+WYZER_DOCUMENTATION
+
+Phase 8 — Performance + Reliability hardening
+
+llama.cpp server management, GPU layers/threads tuning, watchdogs, “never stuck” behavior.
+(You’ve already been working in this zone.) 
+
+WYZER_DOCUMENTATION
+
+Jarvis Feel Layer (next)
+Phase 9 — Screen Awareness (NO OCR, read-only)
+
+Goal: answer “what am I looking at” safely.
+
+Foreground app/process + window title
+
+Optional explicit screenshot capture only if you want it (still no OCR)
+
+Inject “Visual Context (read-only)” text block into LLM prompts
+
+Exit criteria
+
+“What am I looking at?” answers using window title/app reliably.
+
+Phase 10 — Continuity & Reference Resolver
+
+Goal: follow-ups feel natural.
+
+“close it”, “do that again”, “open that”, “the other one”
+
+Use last_tool / last_target / active_app from a small world-state store
+
+Exit criteria
+
+“Open Chrome” → “close it” works.
+
+Phase 11 — Opt-in Autonomy (confidence-driven)
+
+Goal: stop asking when obvious, but stay safe.
+
+Autonomy modes: off/low/normal/high
+
+Thresholds decide: act vs ask vs defer to chat
+
+Exit criteria
+
+High-confidence commands execute instantly; unclear ones ask 1 question.
+
+Phase 12 — Declarative Automations (rules, still safe)
+
+Goal: “When X happens, do Y” without UI automation.
+
+Time-based and internal-state-based rules first
+
+Examples: scheduled reminders, “when I start speaking mute music”
+
+Exit criteria
+
+User can create/disable/list rules reliably.
+
+Phase 13 — UI / Tray + Observability
+
+Goal: usability + trust.
+
+Tray icon, quick toggles (hotword, TTS, autonomy, suggestions)
+
+Logs viewer, “why did you do that” audit trail
+
+Exit criteria
+
+Non-technical user can operate Wyzer without terminal.

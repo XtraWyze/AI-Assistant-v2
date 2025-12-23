@@ -129,6 +129,7 @@ AVAILABLE TOOLS (use ONLY these exact names):
 - system_storage_open: Open a drive or folder
 - timer: Set a countdown timer
 - google_search_open: Search Google and open results in browser
+- get_window_context: Get info about the current foreground window/app (read-only)
 
 CRITICAL TOOL RULES:
 - You MUST ONLY use tool names from the list above
@@ -199,7 +200,7 @@ CRITICAL: When user asks "my name" or "my X", they ask about THEMSELVES. If [LON
 Reply in 1-2 sentences. Be direct.
 Use {{"reply": "text"}} for questions/conversation/stories/creative content.
 
-ONLY use these tools: get_time, get_system_info, get_location, get_weather_forecast, open_target, open_website, focus_window, minimize_window, maximize_window, close_window, move_window_to_monitor, get_window_monitor, monitor_info, media_play_pause, media_next, media_previous, volume_up, volume_down, volume_mute_toggle, volume_control, get_now_playing, set_audio_output_device, system_storage_scan, system_storage_list, system_storage_open, timer, google_search_open, local_library_refresh.
+ONLY use these tools: get_time, get_system_info, get_location, get_weather_forecast, open_target, open_website, focus_window, minimize_window, maximize_window, close_window, move_window_to_monitor, get_window_monitor, get_window_context, monitor_info, media_play_pause, media_next, media_previous, volume_up, volume_down, volume_mute_toggle, volume_control, get_now_playing, set_audio_output_device, system_storage_scan, system_storage_list, system_storage_open, timer, google_search_open, local_library_refresh.
 
 NEVER invent tools. Stories and creative content need NO tools - reply directly."""
 
@@ -229,6 +230,7 @@ class PromptBuilder:
         promoted_context: str = "",
         redaction_context: str = "",
         memories_context: str = "",
+        visual_context: str = "",
     ):
         """
         Initialize prompt builder.
@@ -239,12 +241,14 @@ class PromptBuilder:
             promoted_context: User-approved memory context
             redaction_context: Forgotten facts block
             memories_context: Smart-selected memories
+            visual_context: Phase 9 screen awareness context (read-only)
         """
         self.user_text = user_text
         self.session_context = session_context
         self.promoted_context = promoted_context
         self.redaction_context = redaction_context
         self.memories_context = memories_context
+        self.visual_context = visual_context
         self.logger = get_logger()
     
     def build(self) -> Tuple[str, str]:
@@ -301,6 +305,13 @@ class PromptBuilder:
             if memories:
                 parts.append(memories)
                 components.append(f"memories({self._count_memory_items(memories)})")
+        
+        # Phase 9: Add visual context (screen awareness) - always informational, read-only
+        if self.visual_context and self.visual_context.strip():
+            # Cap to 200 chars to keep prompt lean
+            visual = self.visual_context.strip()[:200]
+            parts.append(visual)
+            components.append("visual")
         
         # Add minimal examples (just 2)
         parts.append(self._get_minimal_examples())
@@ -508,6 +519,7 @@ def build_llm_prompt(
     promoted_context: str = "",
     redaction_context: str = "",
     memories_context: str = "",
+    visual_context: str = "",
 ) -> Tuple[str, str]:
     """
     Convenience function to build an LLM prompt.
@@ -518,6 +530,7 @@ def build_llm_prompt(
         promoted_context: User-approved memory context
         redaction_context: Forgotten facts block
         memories_context: Smart-selected memories
+        visual_context: Phase 9 screen awareness context (read-only)
         
     Returns:
         Tuple of (prompt_text, mode) where mode is "normal" or "compact"
@@ -528,5 +541,6 @@ def build_llm_prompt(
         promoted_context=promoted_context,
         redaction_context=redaction_context,
         memories_context=memories_context,
+        visual_context=visual_context,
     )
     return builder.build()

@@ -322,6 +322,24 @@ _LOCATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 9: Window context patterns - "what am I looking at", "what's the active window"
+# Screen awareness (READ-ONLY) - NO OCR, NO screenshots, NO automation
+# ═══════════════════════════════════════════════════════════════════════════
+_WINDOW_CONTEXT_RE = re.compile(
+    r"^(?:"
+    r"what\s+(?:am\s+i|are\s+you)\s+looking\s+at|"          # "what am I looking at"
+    r"what(?:'?s|\s+is)\s+(?:the\s+)?(?:active|current|foreground)\s+(?:window|app|application|program)|"  # "what's the active window"
+    r"what\s+(?:window|app|application|program)\s+is\s+(?:this|active|open|focused)|"  # "what window is this"
+    r"which\s+(?:window|app|application|program)\s+(?:is\s+)?(?:active|focused|open)|"  # "which app is active"
+    r"what\s+(?:app|application|program)\s+(?:am\s+i\s+(?:in|using|on)|is\s+(?:this|active))|"  # "what app am I in"
+    r"what(?:'?s|\s+is)\s+(?:this\s+)?(?:window|app|application)|"  # "what's this window"
+    r"tell\s+me\s+(?:about\s+)?(?:the\s+)?(?:active|current|foreground)\s+(?:window|app)|"  # "tell me the active window"
+    r"(?:current|active|focused)\s+(?:window|app|application)(?:\s+info)?"  # "active window", "current app"
+    r")\??$",
+    re.IGNORECASE,
+)
+
 # Anchored open/launch/start.
 _OPEN_RE = re.compile(r"^(open|launch|start)\s+(.+)$", re.IGNORECASE)
 
@@ -722,6 +740,18 @@ def _decide_single_clause(text: str) -> HybridDecision:
             intents=[{"tool": "get_location", "args": {}, "continue_on_error": False}],
             reply="",
             confidence=0.9,
+        )
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # Phase 9: Window context queries - "what am I looking at", "what app is active"
+    # Screen awareness (READ-ONLY) - NO OCR, NO screenshots, NO automation
+    # ═══════════════════════════════════════════════════════════════════════
+    if _WINDOW_CONTEXT_RE.match(clause):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "get_window_context", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.95,
         )
 
     # Get window monitor queries: "what monitor is X on"

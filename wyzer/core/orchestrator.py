@@ -2242,6 +2242,27 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
                 return f"I found {app_name} but couldn't determine which monitor it's on."
             return "Here's the window monitor information."
 
+        # Phase 9: Screen Awareness - get_window_context
+        if tool == "get_window_context":
+            app = result.get("app", "").replace(".exe", "") if result.get("app") else None
+            title = result.get("title")
+            
+            # Format a natural response
+            if app and title:
+                app_name = app.capitalize()
+                # Truncate title if too long for speech
+                if len(title) > 60:
+                    title = title[:57] + "..."
+                return f"You're looking at {app_name}. The window title is: {title}."
+            elif app:
+                app_name = app.capitalize()
+                return f"You're looking at {app_name}."
+            elif title:
+                if len(title) > 60:
+                    title = title[:57] + "..."
+                return f"The active window is: {title}."
+            return "I couldn't detect the active window."
+
         if tool == "get_location":
             city = result.get("city")
             region = result.get("region")
@@ -2886,6 +2907,14 @@ def _call_llm(user_text: str, registry) -> Dict[str, Any]:
     except Exception:
         pass
     
+    # Phase 9: Get visual context (screen awareness, read-only)
+    visual_context = ""
+    try:
+        from wyzer.vision.window_context import get_visual_context_block
+        visual_context = get_visual_context_block()
+    except Exception:
+        pass
+    
     # Build token-budgeted prompt
     prompt, mode = build_llm_prompt(
         user_text=user_text,
@@ -2893,6 +2922,7 @@ def _call_llm(user_text: str, registry) -> Dict[str, Any]:
         promoted_context=promoted_context,
         redaction_context=redaction_context,
         memories_context=memories_context,
+        visual_context=visual_context,
     )
     
     return _ollama_request(prompt)

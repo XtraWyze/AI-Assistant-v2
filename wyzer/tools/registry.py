@@ -117,6 +117,9 @@ def build_default_registry() -> ToolRegistry:
     # Google search tool
     from wyzer.tools.google_search_open import GoogleSearchOpenTool
     
+    # Phase 9 - Screen Awareness (READ-ONLY)
+    from wyzer.tools.get_window_context import GetWindowContextTool
+    
     registry = ToolRegistry()
     
     # Register default tools
@@ -170,5 +173,8 @@ def build_default_registry() -> ToolRegistry:
     
     # Register Google search tool
     registry.register(GoogleSearchOpenTool())
+    
+    # Register Phase 9 - Screen Awareness tool (READ-ONLY)
+    registry.register(GetWindowContextTool())
     
     return registry
