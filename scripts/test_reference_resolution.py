@@ -216,9 +216,11 @@ class TestReferenceResolver:
         assert result == "shut Chrome"
     
     def test_close_it_no_last_target(self):
-        """'close it' unchanged when no last_target."""
-        result = resolve_references("close it")
-        assert result == "close it"  # Unchanged
+        """'close it' unchanged when no last_target (mocked to prevent real window detection)."""
+        from unittest.mock import patch
+        with patch('wyzer.vision.window_context.get_foreground_window', return_value={"app": None, "title": None, "pid": None}):
+            result = resolve_references("close it")
+            assert result == "close it"  # Unchanged
     
     def test_close_it_with_active_app_fallback(self):
         """'close it' falls back to active_app when no app tool was last."""
@@ -304,7 +306,8 @@ class TestReferenceResolver:
     
     def test_case_insensitive(self):
         """Patterns are case-insensitive."""
-        update_world_state(last_tool="open_app", last_target="Chrome")
+        # Set active_app so it's found by priority 1 (foreground)
+        update_world_state(last_tool="open_app", last_target="Chrome", active_app="Chrome")
         
         assert resolve_references("CLOSE IT") == "close Chrome"
         assert resolve_references("Close It") == "close Chrome"
@@ -312,7 +315,8 @@ class TestReferenceResolver:
     
     def test_trailing_punctuation(self):
         """Trailing punctuation is handled."""
-        update_world_state(last_tool="open_app", last_target="Chrome")
+        # Set active_app so it's found by priority 1 (foreground)
+        update_world_state(last_tool="open_app", last_target="Chrome", active_app="Chrome")
         
         assert resolve_references("close it.") == "close Chrome"
     
@@ -328,19 +332,23 @@ class TestReferenceResolverWithTools:
     """Tests for reference resolution with specific tool types."""
     
     def test_close_after_close_window(self):
-        """'close it' after close_window uses that target."""
+        """'close it' after close_window uses that target (when it's focused)."""
+        # Set active_app to Notepad (foreground priority)
         update_world_state(
             last_tool="close_window",
-            last_target="Notepad"
+            last_target="Notepad",
+            active_app="Notepad"
         )
         result = resolve_references("close it")
         assert result == "close Notepad"
     
     def test_focus_after_focus_window(self):
-        """'focus on it' after focus_window uses that target."""
+        """'focus on it' after focus_window uses that target (when it's focused)."""
+        # Set active_app to VS Code (foreground priority)
         update_world_state(
             last_tool="focus_window",
-            last_target="VS Code"
+            last_target="VS Code",
+            active_app="VS Code"
         )
         result = resolve_references("focus on it")
         assert result == "focus VS Code"
@@ -414,6 +422,8 @@ class TestIntegrationFlow:
             tool_args={"app": "Chrome"},
             tool_result={"success": True, "message": "Opened Chrome"}
         )
+        # After opening, Chrome is the focused window
+        update_world_state(active_app="Chrome")
         
         # Verify state was updated
         ws = get_world_state()
@@ -431,7 +441,7 @@ class TestIntegrationFlow:
         Flow:
         1. User: "open Chrome" → tool runs, state updates
         2. User: "open Notepad" → tool runs, state updates
-        3. User: "close it" → should resolve to "close Notepad" (most recent)
+        3. User: "close it" → should resolve to "close Notepad" (most recent/focused)
         """
         # First command
         update_from_tool_execution(
@@ -439,6 +449,7 @@ class TestIntegrationFlow:
             tool_args={"app": "Chrome"},
             tool_result={"success": True}
         )
+        update_world_state(active_app="Chrome")
         
         # Second command
         update_from_tool_execution(
@@ -446,8 +457,10 @@ class TestIntegrationFlow:
             tool_args={"app": "Notepad"},
             tool_result={"success": True}
         )
+        # Notepad is now focused
+        update_world_state(active_app="Notepad")
         
-        # Third command - should reference most recent
+        # Third command - should reference current focused (Notepad)
         result = resolve_references("close it")
         assert result == "close Notepad"  # Not Chrome
     
@@ -458,7 +471,7 @@ class TestIntegrationFlow:
         Flow:
         1. User: "open Chrome" → success, state updates
         2. User: "open BadApp" → error, state should NOT change
-        3. User: "close it" → should still resolve to Chrome
+        3. User: "close it" → should still resolve to Chrome (still focused)
         """
         # First command succeeds
         update_from_tool_execution(
@@ -466,6 +479,7 @@ class TestIntegrationFlow:
             tool_args={"app": "Chrome"},
             tool_result={"success": True}
         )
+        update_world_state(active_app="Chrome")
         
         # Second command fails
         update_from_tool_execution(
@@ -473,8 +487,9 @@ class TestIntegrationFlow:
             tool_args={"app": "BadApp"},
             tool_result={"error": {"type": "not_found", "message": "App not found"}}
         )
+        # Chrome is still focused since BadApp failed
         
-        # Should still reference Chrome (last successful)
+        # Should still reference Chrome (current focused)
         result = resolve_references("close it")
         assert result == "close Chrome"
 

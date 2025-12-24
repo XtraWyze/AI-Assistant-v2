@@ -76,6 +76,241 @@ _REPLAY_PHRASES_RE = re.compile(
 # Sentinel string returned when replay_last_action should be triggered
 REPLAY_LAST_ACTION_SENTINEL = "__REPLAY_LAST_ACTION__"
 
+# Deictic pronouns that refer to the current/focused window
+_DEICTIC_PRONOUNS = {"it", "this", "that", "the app", "the window", "the application"}
+
+
+# ============================================================================
+# DEICTIC RESOLUTION HELPERS
+# ============================================================================
+
+def _extract_deictic_pronoun(text: str) -> str:
+    """
+    Extract the deictic pronoun from a command text.
+    
+    Examples:
+        "close it" -> "it"
+        "minimize that" -> "that"
+        "close the window" -> "the window"
+    """
+    lower = text.lower()
+    for pronoun in _DEICTIC_PRONOUNS:
+        if pronoun in lower:
+            return pronoun
+    return "it"  # Default
+
+
+def _get_foreground_target(ws: "WorldState") -> tuple:
+    """
+    Get the current foreground window target for deictic resolution.
+    
+    Priority order:
+    1. focused_window (from Phase 12 Window Watcher - most fresh)
+    2. last_active_window (from Phase 10 - slightly less fresh)
+    3. active_app (legacy Phase 9 field)
+    4. Call get_window_context tool if all else fails and state is stale
+    
+    Returns:
+        Tuple of (target_name, source) where source describes where target came from.
+        Returns (None, None) if no foreground context available.
+    """
+    import time
+    
+    # Check staleness - if window context is older than 5 seconds, refresh it
+    STALENESS_THRESHOLD_S = 5.0
+    
+    # Priority 1: focused_window from Window Watcher (Phase 12)
+    if ws.focused_window:
+        # Check if it's fresh enough
+        age = time.time() - ws.last_window_snapshot_ts
+        if age < STALENESS_THRESHOLD_S:
+            process = ws.focused_window.get("process")
+            if process:
+                return _format_process_name(process), "active_app"
+    
+    # Priority 2: last_active_window (Phase 10)
+    if ws.last_active_window:
+        app_name = ws.last_active_window.get("app_name")
+        if app_name:
+            return app_name, "active_app"
+    
+    # Priority 3: active_app (legacy Phase 9 field)
+    if ws.active_app:
+        return ws.active_app, "active_app"
+    
+    # Priority 4: Try to get fresh window context on-demand
+    # Only do this if we have no context at all (avoid calling for every command)
+    try:
+        from wyzer.vision.window_context import get_foreground_window
+        fresh = get_foreground_window()
+        if fresh and fresh.get("app"):
+            process = fresh.get("app")
+            # Update world state with fresh context for subsequent commands
+            _update_active_app_from_fresh(ws, fresh)
+            return _format_process_name(process), "active_app"
+    except Exception:
+        pass
+    
+    return None, None
+
+
+def _format_process_name(process: str) -> str:
+    """
+    Format a process name for display (remove .exe suffix).
+    
+    Examples:
+        "chrome.exe" -> "Chrome"
+        "Discord.exe" -> "Discord"
+        "notepad.exe" -> "Notepad"
+    """
+    if not process:
+        return ""
+    name = process
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    # Title case for nicer display
+    return name.title() if name.islower() else name
+
+
+def _update_active_app_from_fresh(ws: "WorldState", fresh: dict) -> None:
+    """
+    Update world state with fresh foreground window info.
+    
+    Called when we had to fetch fresh window context because state was stale.
+    """
+    try:
+        from wyzer.context.world_state import update_last_active_window
+        update_last_active_window(
+            app_name=_format_process_name(fresh.get("app", "")),
+            window_title=fresh.get("title"),
+            pid=fresh.get("pid"),
+        )
+    except Exception:
+        pass
+
+
+def _infer_target_from_last_tool(ws: "WorldState") -> Optional[str]:
+    """
+    Try to infer a window target from the last tool execution.
+    
+    Only returns a target if the last tool implies a single obvious window.
+    For example, if last tool was open_target with query="Chrome", return "Chrome".
+    
+    Returns:
+        Target name or None if no inference possible.
+    """
+    if not ws.last_tool or not ws.last_action:
+        return None
+    
+    # Only infer from tools that create/focus a single window
+    inferrable_tools = {
+        "open_target", "open_app", "launch_app", "focus_window", "open_website"
+    }
+    
+    if ws.last_tool not in inferrable_tools:
+        return None
+    
+    # Check resolved info first (most reliable)
+    if ws.last_action.resolved:
+        resolved = ws.last_action.resolved
+        # Check for app/game name
+        for key in ("app_name", "game_name", "matched_name", "process"):
+            if resolved.get(key):
+                return resolved.get(key)
+    
+    # Fall back to last_target
+    if ws.last_target:
+        return ws.last_target
+    
+    return None
+
+
+def resolve_deictic_window_target(
+    action: str,
+    ws: Optional["WorldState"] = None,
+) -> dict:
+    """
+    Resolve deictic pronoun to a window target for close/minimize/maximize/focus actions.
+    
+    This is the main entry point for resolving "close it", "minimize this", etc.
+    
+    Priority order:
+    1. active_app (current foreground window) - what user is looking at
+    2. last_target (from recent tool execution) - fallback if no foreground
+    3. last_tool implication - only if it implies a single obvious window
+    4. None (caller should ask clarifying question)
+    
+    Args:
+        action: The action being performed (close, minimize, maximize, focus)
+        ws: WorldState instance (if None, uses global singleton)
+        
+    Returns:
+        Dict with:
+        - target_type: "window"
+        - process: Process name (e.g., "chrome.exe" or "Chrome")
+        - title: Window title (if available)
+        - source: Where the target came from ("active_app", "last_target", "last_tool")
+        - resolved: True if a target was found
+        
+        If unresolved:
+        - resolved: False
+        - clarification: Question to ask user
+    """
+    if ws is None:
+        from wyzer.context.world_state import get_world_state
+        ws = get_world_state()
+    
+    logger = get_logger()
+    
+    # Priority 1: Active app from window context (foreground window)
+    target, source = _get_foreground_target(ws)
+    if target:
+        logger.debug(f'[REF] deictic action="{action}" resolved_to="{target}" source="{source}"')
+        return {
+            "target_type": "window",
+            "process": target,
+            "title": ws.active_window_title,
+            "source": source,
+            "resolved": True,
+        }
+    
+    # Priority 2: Last target from recent app/window tool
+    if ws.last_target and ws.last_tool in _APP_TOOLS:
+        target = _clean_target(ws.last_target)
+        logger.debug(f'[REF] deictic action="{action}" resolved_to="{target}" source="last_target"')
+        return {
+            "target_type": "window",
+            "process": target,
+            "title": None,
+            "source": "last_target",
+            "resolved": True,
+        }
+    
+    # Priority 3: Check last_tool if it implies a single obvious window target
+    target = _infer_target_from_last_tool(ws)
+    if target:
+        target = _clean_target(target)
+        logger.debug(f'[REF] deictic action="{action}" resolved_to="{target}" source="last_tool"')
+        return {
+            "target_type": "window",
+            "process": target,
+            "title": None,
+            "source": "last_tool",
+            "resolved": True,
+        }
+    
+    # Can't resolve - need clarification
+    logger.debug(f'[REF] deictic action="{action}" resolved_to=None source="unresolved"')
+    return {
+        "target_type": "window",
+        "process": None,
+        "title": None,
+        "source": "unresolved",
+        "resolved": False,
+        "clarification": "Which app or window should I " + action + "?",
+    }
+
+
 # "mute it", "unmute it" (for volume)
 _MUTE_IT_RE = re.compile(
     r"^(?:mute|unmute)\s+(?:it|that|this)\.?$",
@@ -181,27 +416,46 @@ def _try_resolve_close_it(text: str, ws: WorldState) -> Optional[str]:
     """
     Resolve "close it" → "close <target>".
     
-    Only resolves if:
-    - Last tool was an app/window tool (we know what "it" refers to)
-    - Or there's an active app in window context
+    Priority order for deictic resolution:
+    1. active_app (current foreground window) - what user is looking at
+    2. last_target (from recent tool execution) - fallback if no foreground
+    3. last_tool implication - only if it implies a single obvious window
+    
+    This ensures "close it" closes what the user is currently focused on,
+    not something they opened earlier.
     """
     if not _CLOSE_IT_RE.match(text):
         return None
     
-    # Extract the action verb
-    action = text.split()[0].lower()
+    logger = get_logger()
     
-    # Priority 1: Last target from recent app/window tool
+    # Extract the action verb and deictic pronoun
+    action = text.split()[0].lower()
+    deictic = _extract_deictic_pronoun(text)
+    
+    # Priority 1: Active app from window context (foreground window)
+    # This is what the user is currently looking at/focused on
+    target, source = _get_foreground_target(ws)
+    if target:
+        target = _clean_target(target)
+        logger.debug(f'[REF] deictic="{deictic}" action="{action}" resolved_to="{target}" source="{source}"')
+        return f"{action} {target}"
+    
+    # Priority 2: Last target from recent app/window tool
     if ws.last_target and ws.last_tool in _APP_TOOLS:
         target = _clean_target(ws.last_target)
+        logger.debug(f'[REF] deictic="{deictic}" action="{action}" resolved_to="{target}" source="last_target"')
         return f"{action} {target}"
     
-    # Priority 2: Active app from window context
-    if ws.active_app:
-        target = _clean_target(ws.active_app)
+    # Priority 3: Check last_tool if it implies a single obvious window target
+    target = _infer_target_from_last_tool(ws)
+    if target:
+        target = _clean_target(target)
+        logger.debug(f'[REF] deictic="{deictic}" action="{action}" resolved_to="{target}" source="last_tool"')
         return f"{action} {target}"
     
-    # Can't resolve - return None to fall through
+    # Can't resolve - return None to fall through (will prompt clarification)
+    logger.debug(f'[REF] deictic="{deictic}" action="{action}" resolved_to=None source="unresolved"')
     return None
 
 
@@ -228,9 +482,16 @@ def _try_resolve_open_it(text: str, ws: WorldState) -> Optional[str]:
 def _try_resolve_window_action_it(text: str, ws: WorldState) -> Optional[str]:
     """
     Resolve "minimize it" → "minimize <target>".
+    
+    Priority order for deictic resolution:
+    1. active_app (current foreground window) - what user is looking at
+    2. last_target (from recent tool execution) - fallback if no foreground
+    3. last_tool implication - only if it implies a single obvious window
     """
     if not _WINDOW_ACTION_IT_RE.match(text):
         return None
+    
+    logger = get_logger()
     
     # Extract the action (may be multi-word like "focus on")
     lower = text.lower()
@@ -241,16 +502,30 @@ def _try_resolve_window_action_it(text: str, ws: WorldState) -> Optional[str]:
     else:
         action = text.split()[0].lower()
     
-    # Priority 1: Last target from recent tool
+    # Extract deictic pronoun for logging
+    deictic = _extract_deictic_pronoun(text)
+    
+    # Priority 1: Active app from window context (foreground window)
+    target, source = _get_foreground_target(ws)
+    if target:
+        target = _clean_target(target)
+        logger.debug(f'[REF] deictic="{deictic}" action="{action}" resolved_to="{target}" source="{source}"')
+        return f"{action} {target}"
+    
+    # Priority 2: Last target from recent tool
     if ws.last_target and ws.last_tool in _APP_TOOLS:
         target = _clean_target(ws.last_target)
+        logger.debug(f'[REF] deictic="{deictic}" action="{action}" resolved_to="{target}" source="last_target"')
         return f"{action} {target}"
     
-    # Priority 2: Active app
-    if ws.active_app:
-        target = _clean_target(ws.active_app)
+    # Priority 3: Check last_tool if it implies a single obvious window target
+    target = _infer_target_from_last_tool(ws)
+    if target:
+        target = _clean_target(target)
+        logger.debug(f'[REF] deictic="{deictic}" action="{action}" resolved_to="{target}" source="last_tool"')
         return f"{action} {target}"
     
+    logger.debug(f'[REF] deictic="{deictic}" action="{action}" resolved_to=None source="unresolved"')
     return None
 
 
@@ -516,6 +791,11 @@ def resolve_pronoun_target(
     
     Phase 10: Deterministically resolves pronouns based on world state.
     
+    Priority order for deictic resolution:
+    1. active_app (current foreground window) - what user is looking at
+    2. last_target (from recent tool execution) - fallback if no foreground
+    3. last_tool implication - only if it implies a single obvious window
+    
     Args:
         text: Text that may contain a pronoun (e.g., "close it")
         ws: WorldState instance
@@ -539,7 +819,14 @@ def resolve_pronoun_target(
     
     logger.debug(f"[REF] detected pattern=pronoun text=\"{text}\"")
     
-    # Priority 1: Last target from a recent tool execution (within 5 minutes)
+    # Priority 1: Active app from window context (foreground window)
+    # This is what the user is currently looking at/focused on
+    target, source = _get_foreground_target(ws)
+    if target:
+        logger.debug(f"[REF] resolved target={target} reason={source}")
+        return target, f"Resolved from {source}"
+    
+    # Priority 2: Last target from a recent tool execution (within 5 minutes)
     if ws.last_target and ws.get_age_seconds() < 300:
         # Check if the last tool is relevant to the current command
         tool_type = _infer_tool_type_from_text(text)
@@ -561,19 +848,7 @@ def resolve_pronoun_target(
             logger.debug(f"[REF] resolved target={ws.last_target} reason=last_target_default")
             return ws.last_target, f"Resolved from last target ({ws.last_tool})"
     
-    # Priority 2: Last active window (from window watcher)
-    if ws.last_active_window:
-        app_name = ws.last_active_window.get("app_name")
-        if app_name:
-            logger.debug(f"[REF] resolved target={app_name} reason=last_active_window")
-            return app_name, "Resolved from active window"
-    
-    # Priority 3: Active app from legacy field
-    if ws.active_app:
-        logger.debug(f"[REF] resolved target={ws.active_app} reason=active_app")
-        return ws.active_app, "Resolved from active app"
-    
-    # Priority 4: Check last_targets ring buffer
+    # Priority 3: Check last_targets ring buffer
     from wyzer.context.world_state import get_last_targets
     targets = get_last_targets(1)
     if targets:

@@ -59,7 +59,7 @@ def clean_world_state():
 
 @pytest.fixture
 def chrome_opened_state():
-    """State after user opened Chrome."""
+    """State after user opened Chrome (Chrome is now focused)."""
     update_from_tool_execution(
         tool_name="open_target",
         tool_args={"query": "Chrome"},
@@ -73,12 +73,14 @@ def chrome_opened_state():
         },
     )
     update_last_intents([{"tool": "open_target", "args": {"query": "Chrome"}}])
+    # After opening Chrome, it should be the focused window
+    update_last_active_window(app_name="Chrome", window_title="New Tab - Google Chrome")
     return get_world_state()
 
 
 @pytest.fixture
 def chrome_and_notepad_state():
-    """State after opening Chrome, then Notepad."""
+    """State after opening Chrome, then Notepad (Notepad is now focused)."""
     # First, open Chrome
     update_from_tool_execution(
         tool_name="open_target",
@@ -104,12 +106,14 @@ def chrome_and_notepad_state():
         },
     )
     update_last_intents([{"tool": "open_target", "args": {"query": "Notepad"}}])
+    # Notepad is the most recently opened, so it should be focused
+    update_last_active_window(app_name="Notepad", window_title="Untitled - Notepad")
     return get_world_state()
 
 
 @pytest.fixture
 def focused_window_state():
-    """State after focusing a window."""
+    """State after focusing a window (Discord is now focused)."""
     update_from_tool_execution(
         tool_name="focus_window",
         tool_args={"query": "Discord"},
@@ -123,6 +127,8 @@ def focused_window_state():
         },
     )
     update_last_intents([{"tool": "focus_window", "args": {"query": "Discord"}}])
+    # Discord is now the focused window
+    update_last_active_window(app_name="Discord", window_title="Discord", pid=5678)
     return get_world_state()
 
 
@@ -149,16 +155,200 @@ class TestCloseItAfterOpenChrome:
         assert result == "shut Chrome"
     
     def test_close_it_no_context_unchanged(self):
-        """'close it' unchanged when no context exists."""
-        result = resolve_references("close it")
-        # Returns unchanged since there's no target to resolve to
-        assert result == "close it"
+        """'close it' unchanged when no context exists (mocked to prevent real window detection)."""
+        from unittest.mock import patch
+        # Mock get_foreground_window at its source module to return no window
+        with patch('wyzer.vision.window_context.get_foreground_window', return_value={"app": None, "title": None, "pid": None}):
+            result = resolve_references("close it")
+            # Returns unchanged since there's no target to resolve to
+            assert result == "close it"
     
     def test_pronoun_resolution_returns_chrome(self, chrome_opened_state):
         """resolve_pronoun_target returns Chrome for 'close it'."""
         target, reason = resolve_pronoun_target("close it", chrome_opened_state)
         assert target == "Chrome"
         assert reason is not None
+
+
+# ============================================================================
+# TEST: Deictic Resolution - Foreground Window Priority
+# ============================================================================
+
+class TestDeicticForegroundPriority:
+    """
+    Exit criterion: "close it/this/that" should close the CURRENT FOREGROUND window,
+    not the previously opened/last_target app.
+    
+    Priority order: active_app > last_target > last_tool > ask
+    """
+    
+    def test_foreground_notepad_overrides_last_target_chrome(self):
+        """
+        If Chrome was last opened (last_target=Chrome) but Notepad is now focused,
+        'close it' should resolve to Notepad, not Chrome.
+        """
+        # Setup: User opened Chrome, then manually switched to Notepad (focused)
+        update_from_tool_execution(
+            tool_name="open_target",
+            tool_args={"query": "Chrome"},
+            tool_result={
+                "success": True,
+                "resolved": {"type": "app", "matched_name": "Chrome"},
+            },
+        )
+        # Simulate Notepad being the current foreground window (via Window Watcher)
+        update_last_active_window(
+            app_name="Notepad",
+            window_title="Untitled - Notepad",
+            pid=9999,
+        )
+        
+        # Now "close it" should resolve to Notepad (foreground), NOT Chrome (last_target)
+        result = resolve_references("close it")
+        assert result == "close Notepad", f"Expected 'close Notepad' but got '{result}'"
+    
+    def test_minimize_it_uses_foreground_over_last_target(self):
+        """'minimize it' should minimize the foreground window, not last_target."""
+        # Setup: Opened Discord, but VS Code is now focused
+        update_from_tool_execution(
+            tool_name="open_target",
+            tool_args={"query": "Discord"},
+            tool_result={"success": True, "resolved": {"type": "app", "matched_name": "Discord"}},
+        )
+        update_last_active_window(app_name="VS Code", window_title="main.py - VS Code")
+        
+        result = resolve_references("minimize it")
+        assert "VS Code" in result, f"Expected VS Code but got '{result}'"
+    
+    def test_maximize_that_uses_foreground(self):
+        """'maximize that' should maximize the foreground window."""
+        update_last_active_window(app_name="Explorer", window_title="Documents")
+        
+        result = resolve_references("maximize that")
+        assert "Explorer" in result, f"Expected Explorer but got '{result}'"
+    
+    def test_focus_it_uses_foreground(self):
+        """'focus on it' should target the foreground window."""
+        update_last_active_window(app_name="Firefox", window_title="Mozilla Firefox")
+        
+        result = resolve_references("focus on it")
+        assert "Firefox" in result, f"Expected Firefox but got '{result}'"
+    
+    def test_fallback_to_last_target_when_no_foreground(self, chrome_opened_state):
+        """
+        When no foreground window info is available,
+        fall back to last_target from recent tool execution.
+        """
+        from unittest.mock import patch
+        
+        # Clear foreground window info
+        ws = get_world_state()
+        ws.active_app = None
+        ws.last_active_window = None
+        ws.focused_window = None
+        
+        # Mock get_foreground_window to return no window (prevent real window detection)
+        with patch('wyzer.vision.window_context.get_foreground_window', return_value={"app": None, "title": None, "pid": None}):
+            # Should fall back to Chrome (from chrome_opened_state fixture's last_target)
+            result = resolve_references("close it")
+            assert result == "close Chrome", f"Expected 'close Chrome' (fallback) but got '{result}'"
+    
+    def test_fallback_returns_unchanged_when_no_context(self):
+        """
+        When neither foreground nor last_target is available,
+        'close it' should remain unchanged (to trigger clarification).
+        """
+        from unittest.mock import patch
+        
+        # Mock get_foreground_window to return no window (prevent real window detection)
+        with patch('wyzer.vision.window_context.get_foreground_window', return_value={"app": None, "title": None, "pid": None}):
+            # Fresh state with no context
+            result = resolve_references("close it")
+            assert result == "close it", f"Expected unchanged 'close it' but got '{result}'"
+
+
+class TestDeicticResolutionAPI:
+    """Test the resolve_deictic_window_target API function."""
+    
+    def test_resolve_returns_foreground_target(self):
+        """resolve_deictic_window_target returns foreground window first."""
+        from wyzer.core.reference_resolver import resolve_deictic_window_target
+        
+        update_last_active_window(app_name="Notepad", window_title="Untitled - Notepad")
+        
+        result = resolve_deictic_window_target("close")
+        assert result["resolved"] is True
+        assert result["process"] == "Notepad"
+        assert result["source"] == "active_app"
+    
+    def test_resolve_returns_last_target_fallback(self, chrome_opened_state):
+        """resolve_deictic_window_target falls back to last_target."""
+        from unittest.mock import patch
+        from wyzer.core.reference_resolver import resolve_deictic_window_target
+        
+        # Clear foreground context
+        ws = get_world_state()
+        ws.active_app = None
+        ws.last_active_window = None
+        ws.focused_window = None
+        
+        # Mock get_foreground_window to prevent real window detection
+        with patch('wyzer.vision.window_context.get_foreground_window', return_value={"app": None, "title": None, "pid": None}):
+            result = resolve_deictic_window_target("close")
+            assert result["resolved"] is True
+            assert result["process"] == "Chrome"
+            assert result["source"] == "last_target"
+    
+    def test_resolve_returns_clarification_when_unresolved(self):
+        """resolve_deictic_window_target returns clarification when no context."""
+        from unittest.mock import patch
+        from wyzer.core.reference_resolver import resolve_deictic_window_target
+        
+        # Mock get_foreground_window to prevent real window detection
+        with patch('wyzer.vision.window_context.get_foreground_window', return_value={"app": None, "title": None, "pid": None}):
+            result = resolve_deictic_window_target("close")
+            assert result["resolved"] is False
+            assert "clarification" in result
+            assert "close" in result["clarification"]
+
+
+class TestMultiIntentDeicticResolution:
+    """Test deictic resolution in multi-intent scenarios."""
+    
+    def test_open_chrome_then_close_it_when_chrome_focused(self):
+        """
+        'open chrome then close it' - if Chrome becomes focused after opening,
+        'close it' should close Chrome.
+        """
+        # Simulate: "open chrome" executed, Chrome is now focused
+        update_from_tool_execution(
+            tool_name="open_target",
+            tool_args={"query": "Chrome"},
+            tool_result={"success": True, "resolved": {"type": "app", "matched_name": "Chrome"}},
+        )
+        # Chrome is now the active window
+        update_last_active_window(app_name="Chrome", window_title="New Tab - Google Chrome")
+        
+        result = resolve_references("close it")
+        assert result == "close Chrome"
+    
+    def test_open_chrome_then_close_it_when_different_window_focused(self):
+        """
+        'open chrome then close it' - if user switched to Notepad after Chrome opened,
+        'close it' should close Notepad (current foreground), not Chrome.
+        """
+        # Simulate: "open chrome" executed
+        update_from_tool_execution(
+            tool_name="open_target",
+            tool_args={"query": "Chrome"},
+            tool_result={"success": True, "resolved": {"type": "app", "matched_name": "Chrome"}},
+        )
+        # But user clicked on Notepad, making it the active window
+        update_last_active_window(app_name="Notepad", window_title="Untitled - Notepad")
+        
+        result = resolve_references("close it")
+        # Should close Notepad (foreground), not Chrome (last_target)
+        assert result == "close Notepad", f"Expected 'close Notepad' but got '{result}'"
 
 
 # ============================================================================
@@ -381,12 +571,16 @@ class TestAmbiguousRequiresClarification:
     
     def test_no_context_asks_clarification(self):
         """When no context exists, resolution asks clarification."""
-        ws = get_world_state()
-        intent = {"tool": "close_window", "args": {"query": "it"}}
-        _, clarification = resolve_intent_args(intent, ws)
-        # Should ask since there's no target to resolve to
-        assert clarification is not None
-        assert "which" in clarification.lower() or "mean" in clarification.lower()
+        from unittest.mock import patch
+        
+        # Mock get_foreground_window to prevent real window detection
+        with patch('wyzer.vision.window_context.get_foreground_window', return_value={"app": None, "title": None, "pid": None}):
+            ws = get_world_state()
+            intent = {"tool": "close_window", "args": {"query": "it"}}
+            _, clarification = resolve_intent_args(intent, ws)
+            # Should ask since there's no target to resolve to
+            assert clarification is not None
+            assert "which" in clarification.lower() or "mean" in clarification.lower()
 
 
 # ============================================================================
