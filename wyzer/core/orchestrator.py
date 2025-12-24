@@ -3,6 +3,7 @@ Orchestrator for Wyzer AI Assistant - Phase 7/8
 Coordinates LLM reasoning and tool execution.
 Supports multi-intent commands (Phase 6 enhancement).
 Phase 8: Added llamacpp mode support.
+Phase 11.5: Added LLM behavior governance (speech gating, observability).
 """
 import json
 import time
@@ -29,6 +30,23 @@ from wyzer.core.intent_plan import (
     normalize_tool_aliases,
     ExecutionResult,
     ExecutionSummary
+)
+
+# Phase 11.5: LLM behavior governance imports
+from wyzer.policy.llm_observability import (
+    log_llm_invocation,
+    log_tool_execution,
+    log_speech_gate,
+    LLMInvocationLog,
+)
+from wyzer.policy.silence_is_success import (
+    should_be_silent,
+    suppress_llm_chatter,
+    get_minimal_reply,
+)
+from wyzer.policy.autonomy_justification import (
+    record_decision as record_autonomy_decision,
+    get_last_decision_brief,
 )
 
 
@@ -1979,6 +1997,9 @@ def execute_tool_plan_with_autonomy(
         f"reason=\"{decision['reason'][:60]}...\""
     )
     
+    # Phase 11.5: Record decision via autonomy justification module
+    record_autonomy_decision(decision, mode, intents)
+    
     # Store decision for "why did you do that" command
     set_last_autonomy_decision(
         mode=mode,
@@ -2108,7 +2129,9 @@ def _execute_intents(intents, registry) -> ExecutionSummary:
         logger.info(f"[INTENT {idx + 1}/{len(intents)}] Executing: {intent.tool}")
         
         # Execute the tool
+        tool_start = time.perf_counter()
         tool_result = _execute_tool(registry, intent.tool, intent.args)
+        tool_latency = int((time.perf_counter() - tool_start) * 1000)
         
         # Check if execution was successful
         has_error = "error" in tool_result
@@ -2119,6 +2142,14 @@ def _execute_intents(intents, registry) -> ExecutionSummary:
                 error_type = (tool_result.get("error") or {}).get("type")
             except Exception:
                 error_type = None
+        
+        # Phase 11.5: Log tool execution via observability
+        log_tool_execution(
+            tool_name=intent.tool,
+            success=not has_error,
+            latency_ms=tool_latency,
+            error=str(tool_result.get("error", ""))[:50] if has_error else None,
+        )
         
         # Create execution result
         exec_result = ExecutionResult(
@@ -4000,9 +4031,21 @@ def _call_llm_reply_only(user_text: str) -> Dict[str, Any]:
     
     When voice_fast is active and identity/smalltalk query detected,
     uses fast-lane prompt for minimal token count.
+    
+    Phase 11.5: Logs LLM invocation via observability.
     """
     logger = get_logger_instance()
     llm_mode = getattr(Config, "LLM_MODE", "ollama")
+    llm_start = time.perf_counter()
+    
+    # Phase 11.5: Log LLM invocation
+    log_llm_invocation(LLMInvocationLog(
+        invocation_reason="reply_only_query",
+        speech_allowed=True,
+        autonomy_involved=False,
+        outcome="spoke",
+        user_text=user_text[:100] if user_text else "",
+    ))
     
     # Check if we should use fast-lane prompt (llamacpp + identity/smalltalk)
     use_fastlane = False
