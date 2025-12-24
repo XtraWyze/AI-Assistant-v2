@@ -100,7 +100,10 @@ class FollowupManager:
         self._window_start_time: float = 0.0
         self._last_speech_time: float = 0.0
         self._chain_count: int = 0
-        self._grace_period_duration: float = 1.5  # 1.5 seconds to let TTS prompt finish
+        # Grace period to ignore residual TTS echo picked up by microphone.
+        # TTS playback is already complete when FOLLOWUP starts, so this only
+        # needs to cover potential echo/reverb - 0.3s should be sufficient.
+        self._grace_period_duration: float = 0.3
     
     def start_followup_window(self) -> None:
         """
@@ -163,6 +166,40 @@ class FollowupManager:
         current_time = time.time()
         time_since_start = current_time - self._window_start_time
         return time_since_start < self._grace_period_duration
+    
+    def check_no_speech_timeout(self) -> bool:
+        """
+        Check if FOLLOWUP window has timed out waiting for speech to start.
+        
+        This handles the case where the user speaks during grace period (audio is
+        ignored to avoid TTS echo) but doesn't speak again after grace period ends.
+        Without this check, FOLLOWUP would listen indefinitely.
+        
+        The timeout is: grace_period + FOLLOWUP_TIMEOUT_SEC from window start.
+        
+        Returns:
+            True if timed out waiting for speech, False otherwise
+        """
+        if not self.is_followup_active():
+            return False
+        
+        # Only check after grace period has ended
+        if self.is_in_grace_period():
+            return False
+        
+        current_time = time.time()
+        # Total allowed time = grace period + followup timeout
+        max_wait_time = self._grace_period_duration + Config.FOLLOWUP_TIMEOUT_SEC
+        time_since_start = current_time - self._window_start_time
+        
+        if time_since_start >= max_wait_time:
+            self.logger.info(
+                f"[STATE] FOLLOWUP: no speech detected after {time_since_start:.2f}s"
+            )
+            self._followup_active = False
+            return True
+        
+        return False
     
     def is_exit_phrase(self, text: str) -> bool:
         """

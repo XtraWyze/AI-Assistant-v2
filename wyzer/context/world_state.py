@@ -1,11 +1,13 @@
 """wyzer.context.world_state
 
 Phase 10 - World State Store (in-RAM only).
+Phase 11 - Extended for Autonomy Policy.
 
 Provides a singleton WorldState dataclass that tracks:
 - Last executed tool and target
 - Active application and window title (from Phase 9 screen awareness)
 - Timestamp of last update
+- Autonomy mode and pending confirmations (Phase 11)
 
 HARD RULES:
 - Readable from anywhere
@@ -20,7 +22,10 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from wyzer.policy.autonomy_policy import AutonomyDecision
 
 
 @dataclass
@@ -52,6 +57,76 @@ class LastAction:
 
 
 @dataclass
+class PendingConfirmation:
+    """
+    Phase 11 - Pending confirmation for high-risk autonomy actions.
+    
+    When autonomy mode != off and a high-risk action is detected,
+    the orchestrator stores a pending confirmation here instead of
+    executing immediately.
+    
+    Fields:
+        plan: The tool plan waiting for confirmation
+        expires_ts: Unix timestamp when the confirmation window expires
+        prompt: The confirmation question spoken to user
+        decision: The autonomy decision that triggered this
+    """
+    plan: List[Dict[str, Any]]
+    expires_ts: float
+    prompt: str
+    decision: Optional[Dict[str, Any]] = None
+    
+    def is_expired(self) -> bool:
+        """Check if confirmation window has expired."""
+        return time.time() > self.expires_ts
+    
+    def to_dict(self) -> dict:
+        """Convert to dict for logging/debugging."""
+        return {
+            "plan_tools": [p.get("tool", "?") for p in self.plan] if self.plan else [],
+            "expires_in": max(0.0, self.expires_ts - time.time()),
+            "prompt": self.prompt,
+        }
+
+
+@dataclass
+class LastAutonomyDecision:
+    """
+    Phase 11 - Record of the last autonomy policy decision.
+    
+    Used by "why did you do that" command to explain the last decision.
+    
+    Fields:
+        mode: Autonomy mode at time of decision
+        confidence: Router confidence value
+        risk: Risk classification
+        action: Decision action (execute/ask/deny)
+        reason: Explanation of why this decision was made
+        plan_summary: Short summary of the tool plan
+        ts: Unix timestamp of decision
+    """
+    mode: str
+    confidence: float
+    risk: str
+    action: str  # execute|ask|deny
+    reason: str
+    plan_summary: str
+    ts: float = field(default_factory=time.time)
+    
+    def to_dict(self) -> dict:
+        """Convert to dict for logging/debugging."""
+        return {
+            "mode": self.mode,
+            "confidence": self.confidence,
+            "risk": self.risk,
+            "action": self.action,
+            "reason": self.reason,
+            "plan_summary": self.plan_summary,
+            "ts": self.ts,
+        }
+
+
+@dataclass
 class WorldState:
     """
     In-RAM world state for reference resolution.
@@ -67,6 +142,11 @@ class WorldState:
         active_window_title: Current window title (from Phase 9)
         last_updated_ts: Unix timestamp of last update
         last_action: Phase 10.1 - Structured last action for deterministic replay
+        
+        # Phase 11 - Autonomy fields
+        autonomy_mode: Current autonomy mode (off|low|normal|high)
+        pending_confirmation: Pending high-risk confirmation, if any
+        last_autonomy_decision: Last autonomy policy decision for "why" command
     """
     last_tool: Optional[str] = None
     last_target: Optional[str] = None
@@ -75,6 +155,11 @@ class WorldState:
     active_window_title: Optional[str] = None
     last_updated_ts: float = field(default_factory=time.time)
     last_action: Optional[LastAction] = None
+    
+    # Phase 11 - Autonomy fields
+    autonomy_mode: str = "off"  # off|low|normal|high
+    pending_confirmation: Optional[PendingConfirmation] = None
+    last_autonomy_decision: Optional[LastAutonomyDecision] = None
     
     def clear(self) -> None:
         """Reset all state fields."""
@@ -85,6 +170,9 @@ class WorldState:
         self.active_window_title = None
         self.last_updated_ts = time.time()
         self.last_action = None
+        # Don't reset autonomy_mode on clear (user preference)
+        self.pending_confirmation = None
+        self.last_autonomy_decision = None
     
     def has_last_action(self) -> bool:
         """Check if there's a valid last action for reference."""
@@ -109,6 +197,7 @@ def get_world_state() -> WorldState:
     Get the singleton WorldState instance.
     
     Thread-safe. Creates instance on first access.
+    Initializes autonomy_mode from config on first creation.
     
     Returns:
         The global WorldState instance
@@ -117,6 +206,11 @@ def get_world_state() -> WorldState:
     with _world_state_lock:
         if _world_state is None:
             _world_state = WorldState()
+            # Initialize autonomy_mode from config
+            from wyzer.core.config import Config
+            default_mode = getattr(Config, "AUTONOMY_DEFAULT", "off")
+            if default_mode in {"off", "low", "normal", "high"}:
+                _world_state.autonomy_mode = default_mode
         return _world_state
 
 
@@ -531,3 +625,165 @@ def clear_world_state() -> None:
     ws = get_world_state()
     with _world_state_lock:
         ws.clear()
+
+
+# ============================================================================
+# PHASE 11: AUTONOMY STATE FUNCTIONS
+# ============================================================================
+
+def get_autonomy_mode() -> str:
+    """
+    Get the current autonomy mode.
+    
+    Returns:
+        Current mode: "off", "low", "normal", or "high"
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        return ws.autonomy_mode
+
+
+def set_autonomy_mode(mode: str) -> str:
+    """
+    Set the autonomy mode.
+    
+    Args:
+        mode: One of "off", "low", "normal", "high"
+        
+    Returns:
+        The new mode (normalized)
+    """
+    mode = mode.lower().strip() if mode else "off"
+    valid_modes = {"off", "low", "normal", "high"}
+    if mode not in valid_modes:
+        mode = "off"
+    
+    ws = get_world_state()
+    with _world_state_lock:
+        ws.autonomy_mode = mode
+        # Clear any pending confirmation when mode changes
+        ws.pending_confirmation = None
+    
+    return mode
+
+
+def set_pending_confirmation(
+    plan: List[Dict[str, Any]],
+    prompt: str,
+    timeout_sec: float = 45.0,
+    decision: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Set a pending confirmation for a high-risk action.
+    
+    Args:
+        plan: The tool plan waiting for confirmation
+        prompt: The confirmation question to speak
+        timeout_sec: Seconds until confirmation expires (default 45s)
+        decision: The autonomy decision that triggered this
+    """
+    from wyzer.core.logger import get_logger
+    logger = get_logger()
+    
+    ws = get_world_state()
+    with _world_state_lock:
+        ws.pending_confirmation = PendingConfirmation(
+            plan=plan,
+            expires_ts=time.time() + timeout_sec,
+            prompt=prompt,
+            decision=decision,
+        )
+    
+    # Log the pending plan setup
+    tool_names = [p.get("tool", "?") for p in plan] if plan else []
+    logger.info(f"[CONFIRM] pending_plan set expires_in={timeout_sec:.1f}s tools={tool_names}")
+
+
+def get_pending_confirmation() -> Optional[PendingConfirmation]:
+    """
+    Get the pending confirmation, if any and not expired.
+    
+    Returns:
+        PendingConfirmation or None if none exists or expired
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        pending = ws.pending_confirmation
+        if pending is None:
+            return None
+        if pending.is_expired():
+            ws.pending_confirmation = None
+            return None
+        return pending
+
+
+def clear_pending_confirmation() -> None:
+    """Clear any pending confirmation."""
+    ws = get_world_state()
+    with _world_state_lock:
+        ws.pending_confirmation = None
+
+
+def consume_pending_confirmation() -> Optional[List[Dict[str, Any]]]:
+    """
+    Consume and return the pending confirmation plan.
+    
+    Used when user confirms with "yes" - returns the plan and clears it.
+    
+    Returns:
+        The tool plan or None if no valid pending confirmation
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        pending = ws.pending_confirmation
+        if pending is None:
+            return None
+        if pending.is_expired():
+            ws.pending_confirmation = None
+            return None
+        plan = pending.plan
+        ws.pending_confirmation = None
+        return plan
+
+
+def set_last_autonomy_decision(
+    mode: str,
+    confidence: float,
+    risk: str,
+    action: str,
+    reason: str,
+    plan_summary: str,
+) -> None:
+    """
+    Record the last autonomy policy decision.
+    
+    Used by "why did you do that" command.
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        ws.last_autonomy_decision = LastAutonomyDecision(
+            mode=mode,
+            confidence=confidence,
+            risk=risk,
+            action=action,
+            reason=reason,
+            plan_summary=plan_summary,
+            ts=time.time(),
+        )
+
+
+def get_last_autonomy_decision() -> Optional[LastAutonomyDecision]:
+    """
+    Get the last autonomy decision for "why did you do that" command.
+    
+    Returns:
+        LastAutonomyDecision or None if no decision has been made
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        return ws.last_autonomy_decision
+
+
+def has_pending_confirmation() -> bool:
+    """Check if there's a valid (non-expired) pending confirmation."""
+    return get_pending_confirmation() is not None

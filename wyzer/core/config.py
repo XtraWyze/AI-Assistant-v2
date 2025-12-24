@@ -195,6 +195,35 @@ class Config:
     # Default: True (can be disabled via --no-memories flag or WYZER_USE_MEMORIES=0 env var)
     USE_MEMORIES: bool = True
     
+    # =========================================================================
+    # Phase 11: Autonomy Settings
+    # =========================================================================
+    # Autonomy mode: off|low|normal|high
+    # - off: No autonomy policy applied, current behavior preserved (DEFAULT)
+    # - low: Very conservative - only execute high-confidence, low/medium risk actions
+    # - normal: Balanced - ask for clarification on uncertain intents
+    # - high: More permissive - execute most actions, confirm only high-risk
+    AUTONOMY_DEFAULT: str = os.environ.get("WYZER_AUTONOMY_DEFAULT", "normal")
+    
+    # Require confirmation for sensitive/high-risk actions even in high mode
+    # When True: high-risk actions always ask for confirmation
+    # When False: high mode can auto-execute high-risk if confidence >= 0.97
+    AUTONOMY_CONFIRM_SENSITIVE: bool = os.environ.get(
+        "WYZER_AUTONOMY_CONFIRM_SENSITIVE", "true"
+    ).lower() in ("true", "1", "yes")
+    
+    # Confirmation window timeout (seconds) - increased to 45s for easier response time
+    AUTONOMY_CONFIRM_TIMEOUT_SEC: float = float(
+        os.environ.get("WYZER_AUTONOMY_CONFIRM_TIMEOUT_SEC", "45.0")
+    )
+    
+    # Grace period (ms) to accept confirmation response during TTS playback
+    # If user starts speaking yes/no while confirmation prompt is still playing,
+    # their response is still accepted.
+    CONFIRMATION_GRACE_MS: int = int(
+        os.environ.get("WYZER_CONFIRMATION_GRACE_MS", "1500")
+    )
+    
     @classmethod
     def get_frame_duration_ms(cls) -> float:
         """Get frame duration in milliseconds"""

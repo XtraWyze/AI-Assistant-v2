@@ -669,14 +669,199 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             else:
                 user_text = str(msg.get("text") or "")
 
+            # =========================================================================
+            # PHASE 11: PENDING CONFIRMATION CHECK (BEFORE exit phrase detection!)
+            # =========================================================================
+            # If there's a pending confirmation, handle yes/no/cancel BEFORE exit phrase
+            # detection. This prevents "no, cancel that" from being caught by exit phrases.
+            is_followup = meta.get("is_followup", False)
+            if user_text:
+                from wyzer.policy.pending_confirmation import (
+                    resolve_pending,
+                    get_pending_prompt,
+                    has_active_pending,
+                )
+                
+                # Define speak function for "Okay, cancelled" TTS
+                def _speak_confirmation(text: str) -> None:
+                    if tts_enabled and tts_router and text:
+                        tts_controller.enqueue(text, meta={"_confirmation": True})
+                
+                # Define executor that uses the orchestrator's execute_tool_plan
+                def _execute_confirmed_plan(plan):
+                    from wyzer.tools.registry import build_default_registry
+                    from wyzer.core.intent_plan import Intent
+                    from wyzer.core.orchestrator import _execute_intents
+                    
+                    registry = build_default_registry()
+                    # plan is a list of dicts: [{"tool": "...", "args": {...}}]
+                    intents = []
+                    for p in plan:
+                        if isinstance(p, dict) and p.get("tool"):
+                            intents.append(Intent(
+                                tool=p["tool"],
+                                args=p.get("args", {}),
+                                continue_on_error=p.get("continue_on_error", False)
+                            ))
+                    if intents:
+                        summary = _execute_intents(intents, registry)
+                        # Build a reply from the execution
+                        results = []
+                        for r in summary.ran:
+                            if r.ok:
+                                result_str = str(r.result.get("message", "Done")) if isinstance(r.result, dict) else "Done"
+                                results.append(result_str)
+                            else:
+                                results.append(f"Failed: {r.error}")
+                        return "; ".join(results) if results else "Done"
+                    return "Done"
+                
+                confirmation_result = resolve_pending(
+                    user_text,
+                    executor=_execute_confirmed_plan,
+                    speak_fn=_speak_confirmation,
+                )
+                
+                if confirmation_result == "executed":
+                    # Confirmation was handled - return early with success
+                    total_ms = now_ms() - start_ms
+                    safe_put(
+                        brain_to_core_q,
+                        {
+                            "type": "RESULT",
+                            "id": req_id,
+                            "reply": "Done.",
+                            "tool_calls": None,
+                            "tts_text": "Done.",
+                            "meta": {
+                                "timings": {
+                                    "stt_ms": stt_ms,
+                                    "llm_ms": 0,
+                                    "tool_ms": 0,
+                                    "tts_start_ms": now_ms(),
+                                    "total_ms": total_ms,
+                                },
+                                "user_text": user_text,
+                                "is_followup": is_followup,
+                                "confirmation_result": "executed",
+                                "capture_valid": True,
+                                "suppress_exit_once": True,  # Prevent Core exit detection
+                            },
+                        },
+                    )
+                    # TTS the result
+                    if tts_enabled and tts_router:
+                        tts_controller.enqueue("Done.", meta={"_confirmation": True})
+                    continue
+                
+                elif confirmation_result == "cancelled":
+                    # User cancelled - "Okay, cancelled" already spoken by resolve_pending
+                    total_ms = now_ms() - start_ms
+                    safe_put(
+                        brain_to_core_q,
+                        {
+                            "type": "RESULT",
+                            "id": req_id,
+                            "reply": "Okay, cancelled.",
+                            "tool_calls": None,
+                            "tts_text": "Okay, cancelled.",
+                            "meta": {
+                                "timings": {
+                                    "stt_ms": stt_ms,
+                                    "llm_ms": 0,
+                                    "tool_ms": 0,
+                                    "tts_start_ms": now_ms(),
+                                    "total_ms": total_ms,
+                                },
+                                "user_text": user_text,
+                                "is_followup": is_followup,
+                                "confirmation_result": "cancelled",
+                                "capture_valid": True,
+                                "suppress_exit_once": True,  # Prevent Core exit detection
+                            },
+                        },
+                    )
+                    continue
+                
+                elif confirmation_result == "expired":
+                    # Confirmation expired - tell user
+                    expired_reply = "That confirmation has expired."
+                    total_ms = now_ms() - start_ms
+                    safe_put(
+                        brain_to_core_q,
+                        {
+                            "type": "RESULT",
+                            "id": req_id,
+                            "reply": expired_reply,
+                            "tool_calls": None,
+                            "tts_text": expired_reply,
+                            "meta": {
+                                "timings": {
+                                    "stt_ms": stt_ms,
+                                    "llm_ms": 0,
+                                    "tool_ms": 0,
+                                    "tts_start_ms": now_ms(),
+                                    "total_ms": total_ms,
+                                },
+                                "user_text": user_text,
+                                "is_followup": is_followup,
+                                "confirmation_result": "expired",
+                                "capture_valid": True,
+                                "suppress_exit_once": True,  # Prevent Core exit detection
+                            },
+                        },
+                    )
+                    if tts_enabled and tts_router:
+                        tts_controller.enqueue(expired_reply, meta={"_confirmation": True})
+                    continue
+                
+                elif confirmation_result == "ignored":
+                    # User said something other than yes/no while pending exists
+                    # Re-ask the confirmation prompt
+                    pending_prompt = get_pending_prompt()
+                    if pending_prompt:
+                        logger.info(f"[CONFIRM] re-asking: {pending_prompt}")
+                        total_ms = now_ms() - start_ms
+                        safe_put(
+                            brain_to_core_q,
+                            {
+                                "type": "RESULT",
+                                "id": req_id,
+                                "reply": pending_prompt,
+                                "tool_calls": None,
+                                "tts_text": pending_prompt,
+                                "meta": {
+                                    "timings": {
+                                        "stt_ms": stt_ms,
+                                        "llm_ms": 0,
+                                        "tool_ms": 0,
+                                        "tts_start_ms": now_ms(),
+                                        "total_ms": total_ms,
+                                    },
+                                    "user_text": user_text,
+                                    "is_followup": is_followup,
+                                    "confirmation_result": "ignored",
+                                    "capture_valid": True,
+                                },
+                            },
+                        )
+                        if tts_enabled and tts_router:
+                            tts_controller.enqueue(pending_prompt, meta={"_confirmation": True})
+                        continue
+                
+                # confirmation_result == "none" - no pending confirmation, continue normal flow
+
             # Check if this is an exit phrase (in any mode) - skip orchestrator processing
             # This is the SINGLE source of truth for exit detection in multiprocess mode.
             # We use check_exit_phrase() which returns a sentinel, preventing double-detection.
-            is_followup = meta.get("is_followup", False)
+            # NOTE: If there's a pending confirmation, we already handled it above.
             exit_sentinel = None
             if user_text:
-                followup_mgr = FollowupManager()
-                exit_sentinel = followup_mgr.check_exit_phrase(user_text, log_detection=True)
+                # GUARD: Don't treat as exit phrase if there's still a pending confirmation
+                # (This shouldn't happen since we handle all pending cases above, but just in case)
+                if not has_active_pending():
+                    followup_mgr = FollowupManager()
+                    exit_sentinel = followup_mgr.check_exit_phrase(user_text, log_detection=True)
                 if exit_sentinel:
                     # Exit phrase detected - don't process through orchestrator, return empty
                     # Include the sentinel in meta so core process knows not to re-check
@@ -929,6 +1114,9 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
 
             total_ms = now_ms() - start_ms
 
+            # Phase 11: Extract orchestrator meta for confirmation flags
+            orch_meta = (result_dict or {}).get("meta", {})
+            
             safe_put(
                 brain_to_core_q,
                 {
@@ -953,6 +1141,10 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                         "show_followup_prompt": show_followup_prompt,  # Whether to show prompt
                         "has_tool_calls": bool(tool_calls),  # Whether response involved tools
                         "capture_valid": True,  # Valid capture - allow follow-up if appropriate
+                        # Phase 11: Forward confirmation flags from orchestrator to Core
+                        "has_pending_confirmation": orch_meta.get("has_pending_confirmation", False),
+                        "confirmation_timeout_sec": orch_meta.get("confirmation_timeout_sec"),
+                        "autonomy_action": orch_meta.get("autonomy_action"),
                     },
                 },
             )

@@ -504,6 +504,12 @@ class WyzerAssistant:
                 should_stop = True
                 stop_reason = "followup max chain depth"
         
+        # 3. No-speech-start timeout (if user spoke during grace period and didn't repeat)
+        if (not self.state.speech_detected and
+            self.followup_manager.check_no_speech_timeout()):
+            should_stop = True
+            stop_reason = "no speech after grace period"
+        
         if should_stop:
             self.logger.info(f"FOLLOWUP stopped: {stop_reason}")
             
@@ -1063,6 +1069,27 @@ class WyzerAssistantMultiprocess:
         self._brain_speaking: bool = False
         self._show_followup_prompt: bool = True  # Whether to show "Is there anything else?" prompt
         self._waiting_for_followup_tts: bool = False  # Track when we're waiting for followup TTS to finish
+        
+        # Phase 11: Pending confirmation tracking for multiprocess
+        # Set when Brain returns ask_confirm, used by should_use_streaming_tts
+        self._has_pending_confirmation: bool = False
+        self._confirmation_deadline_ts: float = 0.0
+        
+        # Phase 11: Confirmation listening mode - when True, listen for yes/no without hotword
+        # This allows user to respond to confirmation prompts from IDLE state
+        self._confirmation_listening: bool = False
+        self._confirmation_speech_detected: bool = False
+        self._confirmation_silence_frames: int = 0
+        self._confirmation_audio_buffer: List[np.ndarray] = []
+        self._confirmation_total_frames: int = 0
+        
+        # Phase 11: TTS grace period - accept confirmation even while TTS is playing
+        # Track when TTS started for the confirmation prompt
+        self._confirmation_tts_start_ts: float = 0.0
+        
+        # Phase 11: Suppress exit detection once after confirmation handling
+        # When Brain resolves yes/no confirmation, Core must NOT run exit detection
+        self._suppress_exit_once: bool = False
 
         self._exit_after_tts: bool = False
 
@@ -1213,6 +1240,12 @@ class WyzerAssistantMultiprocess:
             try:
                 audio_frame = self.audio_queue.get(timeout=0.05)
             except Empty:
+                # Phase 11: Check for passive expiry of pending confirmations
+                # This runs on every poll timeout (~50ms) for timely expiry
+                from wyzer.policy.pending_confirmation import check_passive_expiry
+                if check_passive_expiry():
+                    self._has_pending_confirmation = False
+                
                 # Also allow hotword gating timeouts in LISTENING
                 if self.state.is_in_state(AssistantState.LISTENING):
                     self._process_listening_timeout_tick()
@@ -1246,8 +1279,90 @@ class WyzerAssistantMultiprocess:
             f"q_in={queue_size_in} q_out={queue_size_out} "
             f"time_in_state={self.state.get_time_in_current_state():.1f}s"
         )
+        
+        # Phase 11: Passive expiry check for pending confirmations
+        # This ensures confirmations expire even if user never speaks again
+        from wyzer.policy.pending_confirmation import check_passive_expiry
+        if check_passive_expiry():
+            self._has_pending_confirmation = False
 
     def _process_idle(self, audio_frame: np.ndarray) -> None:
+        # =====================================================================
+        # Phase 11: CONFIRMATION LISTENING MODE
+        # When pending confirmation is active, listen for yes/no WITHOUT hotword
+        # =====================================================================
+        if self._has_pending_confirmation and self.enable_hotword:
+            current_time = time.time()
+            
+            # Check if confirmation has expired
+            if current_time > self._confirmation_deadline_ts:
+                self._has_pending_confirmation = False
+                self._confirmation_listening = False
+                self._confirmation_audio_buffer = []
+                self.logger.info("[CONFIRM] expired -> cleared (deadline passed in Core)")
+            else:
+                # Confirmation is still active - use VAD to detect speech
+                # This allows user to say "yes/no" without hotword
+                is_speech = self.vad.is_speech(audio_frame)
+                
+                # TTS grace: accept speech even while TTS is playing the confirmation prompt
+                # Config.CONFIRMATION_GRACE_MS allows speech that started during TTS
+                tts_grace_active = (
+                    self._brain_speaking 
+                    and self._confirmation_tts_start_ts > 0
+                    and (current_time - self._confirmation_tts_start_ts) * 1000 < Config.CONFIRMATION_GRACE_MS
+                )
+                
+                if is_speech:
+                    if not self._confirmation_listening:
+                        # Speech started - begin confirmation listening
+                        self._confirmation_listening = True
+                        self._confirmation_speech_detected = True
+                        self._confirmation_silence_frames = 0
+                        self._confirmation_audio_buffer = []
+                        self._confirmation_total_frames = 0
+                        grace_info = " (TTS grace)" if tts_grace_active else ""
+                        self.logger.info(f"[CONFIRM] speech detected, listening for yes/no{grace_info}")
+                    
+                    self._confirmation_audio_buffer.append(audio_frame)
+                    self._confirmation_total_frames += 1
+                    self._confirmation_silence_frames = 0
+                elif self._confirmation_listening:
+                    # Was listening, now silence - accumulate silence frames
+                    self._confirmation_audio_buffer.append(audio_frame)
+                    self._confirmation_total_frames += 1
+                    self._confirmation_silence_frames += 1
+                    
+                    # Check for end of speech (silence timeout)
+                    silence_sec = self._confirmation_silence_frames * (Config.CHUNK_SAMPLES / Config.SAMPLE_RATE)
+                    if silence_sec >= 0.6:  # Slightly longer timeout for confirmation responses
+                        # Send audio to brain for confirmation check
+                        self.logger.info("[CONFIRM] sending confirmation response to brain")
+                        self._send_confirmation_audio_to_brain()
+                        
+                        # Reset confirmation listening state
+                        self._confirmation_listening = False
+                        self._confirmation_speech_detected = False
+                        self._confirmation_silence_frames = 0
+                        self._confirmation_audio_buffer = []
+                        self._confirmation_total_frames = 0
+                        return
+                    
+                    # Max duration limit for confirmation
+                    if self._confirmation_total_frames >= Config.get_max_record_frames():
+                        self.logger.info("[CONFIRM] max duration reached, sending to brain")
+                        self._send_confirmation_audio_to_brain()
+                        
+                        self._confirmation_listening = False
+                        self._confirmation_speech_detected = False
+                        self._confirmation_silence_frames = 0
+                        self._confirmation_audio_buffer = []
+                        self._confirmation_total_frames = 0
+                        return
+        
+        # =====================================================================
+        # NORMAL HOTWORD DETECTION
+        # =====================================================================
         if not (self.enable_hotword and self.hotword):
             return
 
@@ -1457,10 +1572,16 @@ class WyzerAssistantMultiprocess:
                 should_stop = True
                 stop_reason = "speech ended (early send)"
         
-        # Check FOLLOWUP timeout
+        # Check FOLLOWUP timeout (only if speech was detected)
         if not should_stop and self.state.speech_detected and self.followup_manager.check_timeout():
             should_stop = True
             stop_reason = "followup silence timeout"
+        
+        # Check no-speech-start timeout (if speech was never detected after grace period)
+        # This handles the case where user spoke during grace period (ignored) and didn't repeat
+        if not should_stop and not self.state.speech_detected and self.followup_manager.check_no_speech_timeout():
+            should_stop = True
+            stop_reason = "no speech after grace period"
         
         # Max duration limit
         if self.state.total_frames_recorded >= Config.get_max_record_frames():
@@ -1579,6 +1700,62 @@ class WyzerAssistantMultiprocess:
             },
         )
 
+    def _send_confirmation_audio_to_brain(self) -> None:
+        """
+        Send confirmation response audio to brain worker.
+        
+        This is called when user speaks yes/no during pending confirmation,
+        even from IDLE state (without hotword).
+        """
+        if not self._core_to_brain_q:
+            self.logger.error("Brain worker queue not available")
+            return
+
+        if not self._confirmation_audio_buffer:
+            self.logger.warning("[CONFIRM] No audio captured for confirmation")
+            return
+
+        audio_data = concat_audio_frames(self._confirmation_audio_buffer)
+        self._confirmation_audio_buffer = []
+
+        # Save to temp WAV
+        wav_path = None
+        try:
+            fd, wav_path = tempfile.mkstemp(prefix="wyzer_confirm_", suffix=".wav")
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            int16_audio = audio_to_int16(audio_data)
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(Config.SAMPLE_RATE)
+                wf.writeframes(int16_audio.tobytes())
+        except Exception as e:
+            self.logger.error(f"[CONFIRM] Failed to write temp WAV: {e}")
+            try:
+                if wav_path:
+                    os.unlink(wav_path)
+            except Exception:
+                pass
+            return
+
+        req_id = new_id()
+        safe_put(
+            self._core_to_brain_q,
+            {
+                "type": "AUDIO",
+                "id": req_id,
+                "wav_path": wav_path,
+                "pcm_bytes": None,
+                "sample_rate": Config.SAMPLE_RATE,
+                "meta": {
+                    "is_confirmation_response": True,  # Flag for brain to prioritize confirmation check
+                },
+            },
+        )
+
     def _poll_brain_messages(self) -> None:
         if not self._brain_to_core_q:
             return
@@ -1641,6 +1818,24 @@ class WyzerAssistantMultiprocess:
                 user_text = str(meta.get("user_text") or "").strip()
                 is_followup = meta.get("is_followup", False)
                 
+                # Phase 11: Track pending confirmation for should_use_streaming_tts
+                if meta.get("has_pending_confirmation"):
+                    self._has_pending_confirmation = True
+                    timeout_sec = meta.get("confirmation_timeout_sec", 45.0)  # Default 45s
+                    self._confirmation_deadline_ts = time.time() + timeout_sec
+                    # Track when TTS starts for grace period (TTS will start speaking the prompt)
+                    self._confirmation_tts_start_ts = time.time()
+                    self.logger.info(f"[CONFIRM] Core received pending confirmation, expires in {timeout_sec}s")
+                
+                # Phase 11: Check if confirmation was resolved (yes/no/expired)
+                # Clear pending confirmation tracking when resolved
+                confirmation_result = meta.get("confirmation_result")
+                if confirmation_result in ("executed", "cancelled", "expired"):
+                    self._has_pending_confirmation = False
+                    self._confirmation_listening = False
+                    self._confirmation_audio_buffer = []
+                    self.logger.debug(f"[CONFIRM] Core cleared pending confirmation: {confirmation_result}")
+                
                 # Check if this was a valid capture (not empty/minimal transcript)
                 # If capture_valid is False, we should NOT enter follow-up mode even
                 # if the response would normally trigger it. This prevents the case
@@ -1676,7 +1871,24 @@ class WyzerAssistantMultiprocess:
                 # Only check if:
                 # 1. No sentinel was set AND user_text is present
                 # 2. capture_valid is True (don't check empty/noise captures for exit phrases)
-                if user_text and not exit_sentinel and capture_valid:
+                # 3. NOT suppressed by confirmation handling
+                # 4. NOT during active pending confirmation
+                
+                # Phase 11: Check suppress_exit_once flag (set by confirmation handling)
+                if meta.get("suppress_exit_once"):
+                    self._suppress_exit_once = True
+                
+                # Phase 11: Guard exit detection when pending confirmation active or just handled
+                should_skip_exit = False
+                if self._has_pending_confirmation:
+                    self.logger.info("[EXIT] suppressed (pending_confirmation active)")
+                    should_skip_exit = True
+                elif self._suppress_exit_once:
+                    self.logger.info("[EXIT] suppressed (suppress_exit_once consumed)")
+                    self._suppress_exit_once = False  # Consume the latch
+                    should_skip_exit = True
+                
+                if user_text and not exit_sentinel and capture_valid and not should_skip_exit:
                     fallback_sentinel = self.followup_manager.check_exit_phrase(user_text, log_detection=True)
                     if fallback_sentinel:
                         self.logger.info("[EXIT] Fallback exit phrase detection - silently returning to idle")

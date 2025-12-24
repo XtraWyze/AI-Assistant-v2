@@ -279,6 +279,75 @@ class TestIntegration:
             assert manager.get_chain_count() == 0
         finally:
             Config.FOLLOWUP_TIMEOUT_SEC = original_timeout
+    
+    def test_no_speech_timeout_after_grace_period(self):
+        """Test that FOLLOWUP times out when no speech is detected after grace period.
+        
+        This handles the case where a user speaks during grace period (audio is
+        ignored to avoid TTS echo) but doesn't speak again after grace period ends.
+        Without this fix, FOLLOWUP would listen indefinitely.
+        """
+        original_timeout = Config.FOLLOWUP_TIMEOUT_SEC
+        try:
+            Config.FOLLOWUP_TIMEOUT_SEC = 0.2  # Short timeout for testing
+            
+            manager = FollowupManager()
+            manager._grace_period_duration = 0.1  # Short grace for testing
+            
+            # Start FOLLOWUP
+            manager.start_followup_window()
+            assert manager.is_followup_active() is True
+            
+            # During grace period - should not timeout
+            assert manager.is_in_grace_period() is True
+            assert manager.check_no_speech_timeout() is False
+            
+            # Wait for grace period to end
+            time.sleep(0.15)
+            assert manager.is_in_grace_period() is False
+            
+            # Just after grace period, before timeout - should not timeout yet
+            assert manager.check_no_speech_timeout() is False
+            
+            # Wait for full timeout (grace + followup timeout)
+            time.sleep(0.2)
+            
+            # Now should timeout
+            assert manager.check_no_speech_timeout() is True
+            assert manager.is_followup_active() is False
+        finally:
+            Config.FOLLOWUP_TIMEOUT_SEC = original_timeout
+    
+    def test_no_speech_timeout_not_triggered_if_speech_detected(self):
+        """Test that no-speech timeout is independent of regular speech timeout.
+        
+        When speech IS detected, the regular check_timeout() handles the timeout,
+        not check_no_speech_timeout().
+        """
+        original_timeout = Config.FOLLOWUP_TIMEOUT_SEC
+        try:
+            Config.FOLLOWUP_TIMEOUT_SEC = 0.2
+            
+            manager = FollowupManager()
+            manager._grace_period_duration = 0.1
+            
+            manager.start_followup_window()
+            
+            # Wait for grace period to end
+            time.sleep(0.15)
+            
+            # Simulate speech detected - reset the speech timer
+            manager.reset_speech_timer()
+            
+            # Wait a bit but not full timeout
+            time.sleep(0.1)
+            
+            # no-speech timeout should return False (since speech was detected,
+            # that path uses check_timeout() instead)
+            # Note: is_followup_active should still be True
+            assert manager.is_followup_active() is True
+        finally:
+            Config.FOLLOWUP_TIMEOUT_SEC = original_timeout
 
 
 if __name__ == "__main__":

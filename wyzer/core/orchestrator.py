@@ -43,6 +43,60 @@ _NO_OLLAMA_FALLBACK_REPLIES = [
 ]
 
 
+# ============================================================================
+# PHASE 11: AUTONOMY COMMAND PATTERNS (compiled early for should_use_streaming_tts)
+# ============================================================================
+# These patterns are used to detect autonomy commands before streaming TTS.
+# Must be defined before should_use_streaming_tts() function.
+# Patterns match natural variations while remaining deterministic.
+
+# Pattern components for mode-setting:
+# - Optional "set" prefix
+# - Optional "my/your" possessive
+# - "autonomy" with optional "level/mode/setting" suffix
+# - Optional "to" before mode
+# - The mode itself (off/low/normal/high)
+_AUTONOMY_OFF_RE = re.compile(
+    r"^(?:set\s+)?(?:(?:my|your)\s+)?autonomy(?:\s+(?:level|mode|setting))?(?:\s+to)?\s+off[.!]?$",
+    re.IGNORECASE
+)
+_AUTONOMY_LOW_RE = re.compile(
+    r"^(?:set\s+)?(?:(?:my|your)\s+)?autonomy(?:\s+(?:level|mode|setting))?(?:\s+to)?\s+low[.!]?$",
+    re.IGNORECASE
+)
+_AUTONOMY_NORMAL_RE = re.compile(
+    r"^(?:set\s+)?(?:(?:my|your)\s+)?autonomy(?:\s+(?:level|mode|setting))?(?:\s+to)?\s+normal[.!]?$",
+    re.IGNORECASE
+)
+_AUTONOMY_HIGH_RE = re.compile(
+    r"^(?:set\s+)?(?:(?:my|your)\s+)?autonomy(?:\s+(?:level|mode|setting))?(?:\s+to)?\s+high[.!]?$",
+    re.IGNORECASE
+)
+_AUTONOMY_STATUS_RE = re.compile(
+    r"^what(?:'s|\s+is)\s+(?:my|your)\s+autonomy(?:\s+(?:level|mode|setting))?(?:\s+(?:set\s+)?(?:at|to))?[.?]?$",
+    re.IGNORECASE
+)
+_WHY_DID_YOU_RE = re.compile(
+    r"^(?:why(?:'d|\s+did)?\s+you\s+(?:do\s+(?:that|this|it)|say\s+that|act\s+on\s+that|execute\s+that|ask(?:\s+me)?)|"
+    r"explain\s+(?:that|your\s+(?:last\s+)?(?:decision|action))|"
+    r"what\s+was\s+your\s+reason(?:ing)?|"
+    r"why\s+(?:that|did\s+you))\.?\??$",
+    re.IGNORECASE
+)
+
+# Confirmation response patterns (for pending confirmations)
+# These patterns match if the response STARTS with a confirmation word
+# to handle natural replies like "Yes, I did" or "No, don't do that"
+_CONFIRM_YES_RE = re.compile(
+    r"^(?:yes|yeah|yep|yup|sure|ok|okay|confirm|proceed|do\s+it|go\s+ahead|absolutely|affirmative)(?:[.,!]|\s|$)",
+    re.IGNORECASE
+)
+_CONFIRM_NO_RE = re.compile(
+    r"^(?:no|nope|nah|cancel|stop|never\s+mind|nevermind|don't|do\s+not|abort|negative)(?:[.,!]|\s|$)",
+    re.IGNORECASE
+)
+
+
 def _get_no_ollama_reply() -> str:
     """Get a random short reply for unsupported commands in no-ollama mode."""
     return random.choice(_NO_OLLAMA_FALLBACK_REPLIES)
@@ -620,6 +674,24 @@ def handle_user_text(text: str) -> Dict[str, Any]:
         return _handle_replay_last_action(original_text, start_time)
     
     # =========================================================================
+    # PHASE 11: AUTONOMY COMMANDS (deterministic, no LLM)
+    # =========================================================================
+    # Check for autonomy-related voice commands before any other processing.
+    # These are handled purely by regex matching and never touch the LLM.
+    autonomy_result = _check_autonomy_commands(text, start_time)
+    if autonomy_result is not None:
+        return autonomy_result
+    
+    # =========================================================================
+    # PHASE 11: CONFIRMATION FLOW (deterministic)
+    # =========================================================================
+    # Check if user is responding to a pending confirmation (yes/no).
+    # This must happen before routing to handle confirmation responses.
+    confirmation_result = _check_confirmation_response(text, start_time)
+    if confirmation_result is not None:
+        return confirmation_result
+    
+    # =========================================================================
     # CONTINUATION PHRASE PRE-PASS (deterministic topic continuity)
     # =========================================================================
     # If user says "tell me more" etc., rewrite to include the last topic.
@@ -719,6 +791,22 @@ def handle_user_text(text: str) -> Dict[str, Any]:
             tool_intents, leftover_text = split_result
             logger.info(f'[SPLIT] Executing tool+text split: tool={tool_intents[0]["tool"]} leftover="{leftover_text[:40]}..."')
             
+            # ===============================================================
+            # PHASE 11: Apply autonomy policy before execution (split path)
+            # ===============================================================
+            # Use high confidence for split path (deterministic match)
+            autonomy_result = execute_tool_plan_with_autonomy(
+                tool_intents,
+                registry,
+                0.95,  # Split path is high confidence
+                start_time,
+                original_text,
+            )
+            if autonomy_result is not None:
+                # Autonomy policy blocked or deferred execution
+                return autonomy_result
+            # ===============================================================
+            
             # Step 1: Execute the first tool intent(s)
             execution_summary, executed_intents = execute_tool_plan(tool_intents, registry)
             tool_reply = _format_fastpath_reply(text, executed_intents, execution_summary)
@@ -788,6 +876,22 @@ def handle_user_text(text: str) -> Dict[str, Any]:
         if hybrid_decision.mode == "tool_plan" and hybrid_decision.intents:
             if _hybrid_tool_plan_is_registered(hybrid_decision.intents, registry):
                 logger.info(f"[HYBRID] route=tool_plan confidence={hybrid_decision.confidence:.2f}")
+                
+                # ===============================================================
+                # PHASE 11: Apply autonomy policy before execution
+                # ===============================================================
+                autonomy_result = execute_tool_plan_with_autonomy(
+                    hybrid_decision.intents,
+                    registry,
+                    hybrid_decision.confidence,
+                    start_time,
+                    original_text,
+                )
+                if autonomy_result is not None:
+                    # Autonomy policy blocked or deferred execution
+                    return autonomy_result
+                # ===============================================================
+                
                 execution_summary, executed_intents = execute_tool_plan(hybrid_decision.intents, registry)
                 # Always use _format_fastpath_reply to properly handle tool execution failures.
                 # The hybrid_decision.reply is just a prediction; we need to verify execution succeeded.
@@ -1113,6 +1217,7 @@ def should_use_streaming_tts(text: str) -> bool:
     Streaming TTS is ONLY for normal LLM chat responses, NOT for:
     - Tool/action commands (deterministic routing)
     - Hybrid router tool plans
+    - Autonomy commands ("why did you do that", "autonomy off", etc.)
     
     This is a PRE-CHECK before calling handle_user_text_streaming.
     
@@ -1128,6 +1233,25 @@ def should_use_streaming_tts(text: str) -> bool:
     
     # Check if Ollama is disabled
     if getattr(Config, "NO_OLLAMA", False):
+        return False
+    
+    # Phase 11: Check for autonomy commands BEFORE hybrid router
+    # These must be handled deterministically, never streamed to LLM
+    text_stripped = text.strip()
+    if (_WHY_DID_YOU_RE.match(text_stripped) or
+        _AUTONOMY_OFF_RE.match(text_stripped) or
+        _AUTONOMY_LOW_RE.match(text_stripped) or
+        _AUTONOMY_NORMAL_RE.match(text_stripped) or
+        _AUTONOMY_HIGH_RE.match(text_stripped) or
+        _AUTONOMY_STATUS_RE.match(text_stripped)):
+        return False
+    
+    # Phase 11: Check for confirmation responses ONLY if there's a pending confirmation
+    from wyzer.context.world_state import get_pending_confirmation
+    pending = get_pending_confirmation()
+    if pending is not None:
+        # Block streaming for ANY input when pending confirmation exists
+        # The brain worker's resolve_pending() will handle it deterministically
         return False
     
     # Check hybrid router - if it returns a tool_plan, don't stream
@@ -1396,6 +1520,151 @@ def execute_tool_plan(intents: List[Dict[str, Any]], registry) -> Tuple[Executio
     # Preserve existing validation/gating behavior.
     validate_intents(converted, registry)
     return _execute_intents(converted, registry), converted
+
+
+def execute_tool_plan_with_autonomy(
+    intents: List[Dict[str, Any]],
+    registry,
+    confidence: float,
+    start_time: float,
+    original_text: str = "",
+) -> Optional[Dict[str, Any]]:
+    """
+    Execute a tool plan with autonomy policy applied.
+    
+    Phase 11: Applies autonomy policy before execution.
+    - If mode is "off": execute immediately (current behavior)
+    - If mode is active: apply policy decision (execute/ask/deny)
+    
+    Args:
+        intents: List of tool call dicts
+        registry: Tool registry
+        confidence: Router confidence (0.0-1.0)
+        start_time: Performance timer start
+        original_text: Original user text for logging
+        
+    Returns:
+        Response dict if autonomy blocked/deferred execution, None to proceed normally
+    """
+    logger = get_logger_instance()
+    
+    from wyzer.context.world_state import (
+        get_autonomy_mode,
+        set_pending_confirmation,
+        set_last_autonomy_decision,
+        get_world_state,
+    )
+    from wyzer.policy.risk import classify_plan
+    from wyzer.policy.autonomy_policy import assess, summarize_plan
+    
+    mode = get_autonomy_mode()
+    
+    # Mode OFF: preserve current behavior exactly (no policy check)
+    if mode == "off":
+        return None  # Signal to proceed with normal execution
+    
+    # Compute risk classification
+    ws = get_world_state()
+    risk = classify_plan(intents, ws)
+    
+    # Get confirmation setting from config
+    confirm_sensitive = getattr(Config, "AUTONOMY_CONFIRM_SENSITIVE", True)
+    
+    # Assess policy decision
+    decision = assess(intents, confidence, mode, risk, confirm_sensitive)
+    
+    # Log the decision
+    plan_summary = summarize_plan(intents)
+    logger.info(
+        f"[AUTONOMY] mode={mode} confidence={confidence:.2f} risk={risk} "
+        f"action={decision['action']} confirm={1 if decision['needs_confirmation'] else 0} "
+        f"reason=\"{decision['reason'][:60]}...\""
+    )
+    
+    # Store decision for "why did you do that" command
+    set_last_autonomy_decision(
+        mode=mode,
+        confidence=confidence,
+        risk=risk,
+        action=decision["action"],
+        reason=decision["reason"],
+        plan_summary=plan_summary,
+    )
+    
+    # Handle decision
+    if decision["action"] == "execute":
+        # Policy says execute - proceed with normal execution
+        return None
+    
+    elif decision["action"] == "ask":
+        if decision["needs_confirmation"]:
+            # High-risk confirmation flow
+            timeout_sec = getattr(Config, "AUTONOMY_CONFIRM_TIMEOUT_SEC", 20.0)
+            prompt = decision["question"] or "Do you want me to proceed?"
+            
+            set_pending_confirmation(
+                plan=intents,
+                prompt=prompt,
+                timeout_sec=timeout_sec,
+                decision=dict(decision),
+            )
+            logger.info(f"[CONFIRM] set expires_in={timeout_sec}s")
+            
+            end_time = time.perf_counter()
+            return {
+                "reply": prompt,
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {
+                    "autonomy_action": "ask_confirm",
+                    "risk": risk,
+                    "confidence": confidence,
+                    "plan_summary": plan_summary,
+                    "has_pending_confirmation": True,  # Flag for Core process
+                    "confirmation_timeout_sec": timeout_sec,
+                },
+            }
+        else:
+            # Clarification question (not high-risk, just uncertain)
+            # ALSO set pending confirmation so "Yes" can trigger execution
+            question = decision["question"] or "Can you clarify what you'd like me to do?"
+            timeout_sec = getattr(Config, "AUTONOMY_CONFIRM_TIMEOUT_SEC", 20.0)
+            
+            set_pending_confirmation(
+                plan=intents,
+                prompt=question,
+                timeout_sec=timeout_sec,
+                decision=dict(decision),
+            )
+            logger.info(f"[CLARIFY] set pending, expires_in={timeout_sec}s")
+            
+            end_time = time.perf_counter()
+            return {
+                "reply": question,
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {
+                    "autonomy_action": "ask_clarify",
+                    "risk": risk,
+                    "confidence": confidence,
+                    "plan_summary": plan_summary,
+                    "has_pending_confirmation": True,  # Flag for Core process
+                    "confirmation_timeout_sec": timeout_sec,
+                },
+            }
+    
+    else:  # deny
+        reason = decision["reason"]
+        end_time = time.perf_counter()
+        return {
+            "reply": "I'm not confident enough to do that. Can you be more specific?",
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {
+                "autonomy_action": "deny",
+                "risk": risk,
+                "confidence": confidence,
+                "reason": reason,
+                "plan_summary": plan_summary,
+            },
+        }
 
 
 def _try_extract_explicit_tool_request(user_text: str, registry) -> Optional[Tuple[str, str]]:
@@ -3699,3 +3968,249 @@ def _ollama_request(prompt: str, user_text: str = "") -> Dict[str, Any]:
         llm_name = "llama.cpp" if llm_mode == "llamacpp" else "Ollama"
         logger.error(f"Unexpected {llm_name} error: {e}")
         return {"reply": f"I had trouble talking to {llm_name}."}
+
+
+# ============================================================================
+# PHASE 11: AUTONOMY COMMAND HANDLERS (deterministic, no LLM)
+# ============================================================================
+# NOTE: Regex patterns for autonomy commands are defined at the top of the file
+# (near line 45) so they can be used by should_use_streaming_tts().
+
+
+def _check_autonomy_commands(text: str, start_time: float) -> Optional[Dict[str, Any]]:
+    """
+    Check for autonomy-related voice commands.
+    
+    These are handled purely deterministically (no LLM).
+    
+    Args:
+        text: User input text
+        start_time: Performance timer start
+        
+    Returns:
+        Response dict if command matched, None otherwise
+    """
+    logger = get_logger_instance()
+    text = text.strip()
+    
+    from wyzer.context.world_state import (
+        get_autonomy_mode,
+        set_autonomy_mode,
+        get_last_autonomy_decision,
+    )
+    
+    # "autonomy off"
+    if _AUTONOMY_OFF_RE.match(text):
+        old_mode = get_autonomy_mode()
+        set_autonomy_mode("off")
+        logger.info("[AUTONOMY] mode changed to off (source=voice)")
+        end_time = time.perf_counter()
+        return {
+            "reply": "Autonomy set to off.",
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"autonomy_command": "off", "previous_mode": old_mode},
+        }
+    
+    # "autonomy low"
+    if _AUTONOMY_LOW_RE.match(text):
+        old_mode = get_autonomy_mode()
+        set_autonomy_mode("low")
+        logger.info("[AUTONOMY] mode changed to low (source=voice)")
+        end_time = time.perf_counter()
+        return {
+            "reply": "Autonomy set to low.",
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"autonomy_command": "low", "previous_mode": old_mode},
+        }
+    
+    # "autonomy normal"
+    if _AUTONOMY_NORMAL_RE.match(text):
+        old_mode = get_autonomy_mode()
+        set_autonomy_mode("normal")
+        logger.info("[AUTONOMY] mode changed to normal (source=voice)")
+        end_time = time.perf_counter()
+        return {
+            "reply": "Autonomy set to normal.",
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"autonomy_command": "normal", "previous_mode": old_mode},
+        }
+    
+    # "autonomy high"
+    if _AUTONOMY_HIGH_RE.match(text):
+        old_mode = get_autonomy_mode()
+        set_autonomy_mode("high")
+        logger.info("[AUTONOMY] mode changed to high (source=voice)")
+        end_time = time.perf_counter()
+        return {
+            "reply": "Autonomy set to high.",
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"autonomy_command": "high", "previous_mode": old_mode},
+        }
+    
+    # "what's my autonomy" / "what is your autonomy"
+    if _AUTONOMY_STATUS_RE.match(text):
+        mode = get_autonomy_mode()
+        # Respond with "My" if user said "your", otherwise "Your" if user said "my"
+        if " your " in text.lower():
+            reply = f"My autonomy mode is {mode}."
+        else:
+            reply = f"Your autonomy mode is {mode}."
+        end_time = time.perf_counter()
+        return {
+            "reply": reply,
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"autonomy_command": "status", "current_mode": mode},
+        }
+    
+    # "why did you do that"
+    if _WHY_DID_YOU_RE.match(text):
+        logger.info("[CMD] why_did_you_do_that matched")
+        
+        from wyzer.context.world_state import get_world_state
+        
+        mode = get_autonomy_mode()
+        decision = get_last_autonomy_decision()
+        ws = get_world_state()
+        last_action = ws.last_action
+        
+        if decision is not None:
+            # We have an autonomy decision - format it
+            from wyzer.policy.autonomy_policy import format_decision_for_speech
+            decision_dict = {
+                "action": decision.action,
+                "reason": decision.reason,
+                "confidence": decision.confidence,
+                "risk": decision.risk,
+                "needs_confirmation": False,
+                "question": None,
+            }
+            reply = format_decision_for_speech(decision_dict)
+            if decision.plan_summary:
+                reply = f"For '{decision.plan_summary}': {reply}"
+            logger.info(f"[EXPLAIN] mode={mode} confidence={decision.confidence:.2f} risk={decision.risk} action={decision.action} reason=\"{decision.reason}\"")
+        elif last_action is not None:
+            # No autonomy decision, but we have a last action (autonomy off or not triggered)
+            tool_name = last_action.tool
+            args_summary = ", ".join(f"{k}={v}" for k, v in last_action.args.items()) if last_action.args else ""
+            target_info = ""
+            if last_action.resolved:
+                if "matched_name" in last_action.resolved:
+                    target_info = f" target={last_action.resolved['matched_name']}"
+                elif "title" in last_action.resolved:
+                    target_info = f" target={last_action.resolved['title']}"
+            
+            logger.info(f"[EXPLAIN] mode={mode} last_action={tool_name}{target_info}")
+            
+            if mode == "off":
+                reply = f"I executed {tool_name}({args_summary}). Autonomy is off, so no policy check was applied."
+            else:
+                reply = f"I executed {tool_name}({args_summary}). This action didn't require an autonomy decision."
+        else:
+            # Nothing to explain
+            logger.info(f"[EXPLAIN] mode={mode} no_action=true")
+            reply = "I haven't performed any actions yet."
+        
+        end_time = time.perf_counter()
+        return {
+            "reply": reply,
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {
+                "autonomy_command": "why",
+                "mode": mode,
+                "had_decision": decision is not None,
+                "had_last_action": last_action is not None,
+            },
+        }
+    
+    return None
+
+
+def _check_confirmation_response(text: str, start_time: float) -> Optional[Dict[str, Any]]:
+    """
+    Check if user is responding to a pending confirmation.
+    
+    Only active when there's a pending confirmation from autonomy policy.
+    
+    Args:
+        text: User input text
+        start_time: Performance timer start
+        
+    Returns:
+        Response dict if confirmation handled, None otherwise
+    """
+    logger = get_logger_instance()
+    text = text.strip()
+    
+    from wyzer.context.world_state import (
+        get_pending_confirmation,
+        consume_pending_confirmation,
+        clear_pending_confirmation,
+        get_autonomy_mode,
+    )
+    
+    # Only check for confirmation responses if there's a pending confirmation
+    pending = get_pending_confirmation()
+    if pending is None:
+        return None
+    
+    # Check for "yes" confirmation
+    if _CONFIRM_YES_RE.match(text):
+        plan = consume_pending_confirmation()
+        if plan is None:
+            # Expired or already consumed
+            logger.info("[CONFIRM] Confirmation expired or already used")
+            end_time = time.perf_counter()
+            return {
+                "reply": "That confirmation has expired. Please try again.",
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {"confirmation": "expired"},
+            }
+        
+        # Execute the confirmed plan
+        logger.info(f"[CONFIRM] confirmed -> executing {len(plan)} tools")
+        try:
+            registry = get_registry()
+            execution_summary, executed_intents = execute_tool_plan(plan, registry)
+            reply = _format_fastpath_reply("", executed_intents, execution_summary)
+            
+            end_time = time.perf_counter()
+            return {
+                "reply": reply,
+                "latency_ms": int((end_time - start_time) * 1000),
+                "execution_summary": {
+                    "ran": [
+                        {
+                            "tool": r.tool,
+                            "ok": r.ok,
+                            "result": r.result,
+                            "error": r.error,
+                        }
+                        for r in execution_summary.ran
+                    ],
+                    "stopped_early": execution_summary.stopped_early,
+                },
+                "meta": {"confirmation": "confirmed", "confirmed_plan": [t.get("tool") for t in plan]},
+            }
+        except Exception as e:
+            logger.error(f"[CONFIRM] Error executing confirmed plan: {e}")
+            end_time = time.perf_counter()
+            return {
+                "reply": "Something went wrong executing that action.",
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {"confirmation": "error", "error": str(e)},
+            }
+    
+    # Check for "no" cancellation
+    if _CONFIRM_NO_RE.match(text):
+        clear_pending_confirmation()
+        logger.info("[CONFIRM] cancelled")
+        end_time = time.perf_counter()
+        return {
+            "reply": "Okay, cancelled.",
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"confirmation": "cancelled"},
+        }
+    
+    # Text doesn't match yes/no patterns - not a confirmation response
+    # Let it fall through to normal processing, but note the pending confirmation
+    return None

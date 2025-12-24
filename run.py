@@ -381,13 +381,14 @@ def main():
     
     # Print startup banner
     print("\n" + "=" * 60)
-    print("  Wyzer AI Assistant - Phase 10")
+    print("  Wyzer AI Assistant - Phase 11")
     print("=" * 60)
     print(f"  Whisper Model: {args.model}")
     print(f"  Whisper Device: {args.whisper_device}")
     print(f"  Profile: {args.profile}")
     print(f"  Single Process: {args.single_process}")
     print(f"  Quiet Mode: {quiet_mode}")
+    print(f"  Autonomy Mode: {Config.AUTONOMY_DEFAULT}")
     print(f"  Hotword Enabled: {not args.no_hotword}")
     if not args.no_hotword:
         print(f"  Hotword Keywords: {', '.join(Config.HOTWORD_KEYWORDS)}")
