@@ -257,7 +257,7 @@ def looks_multi_intent(text: str) -> bool:
     # E.g., "close chrome open spotify" should be detected as 2 intents
     # Verbs that commonly start new intents (from multi_intent_parser.py)
     # Use word boundaries to avoid matching substrings like "play" in "playback"
-    action_verbs = r"\b(?:open|launch|start|close|quit|exit|minimize|shrink|maximize|fullscreen|expand|move|send|play|pause|resume|mute|unmute|scan)\b"
+    action_verbs = r"\b(?:open|launch|start|close|quit|exit|minimize|shrink|maximize|fullscreen|expand|move|send|play|pause|resume|mute|unmute|scan|switch|focus|go)\b"
     verb_matches = list(re.finditer(action_verbs, tl, re.IGNORECASE))
     if len(verb_matches) >= 2:
         return True
@@ -352,6 +352,37 @@ _MINIMIZE_RE = re.compile(r"^(minimize|shrink)\s+(.+)$", re.IGNORECASE)
 
 # Anchored maximize/fullscreen/expand.
 _MAXIMIZE_RE = re.compile(r"^(maximize|fullscreen|expand|full\s+screen)\s+(.+)$", re.IGNORECASE)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Switch app patterns: deterministic app switching using focus history
+# ═══════════════════════════════════════════════════════════════════════════
+# "switch to X" / "go to X" / "switch back to X"
+_SWITCH_TO_APP_RE = re.compile(
+    r"^(?:switch(?:\s+back)?|go)\s+to\s+(.+)$",
+    re.IGNORECASE,
+)
+
+# "go back" / "switch back" / "previous app" / "last app"
+_SWITCH_PREVIOUS_RE = re.compile(
+    r"^(?:"
+    r"go\s+back|"                          # "go back"
+    r"switch\s+back|"                      # "switch back"
+    r"previous\s+(?:app|window|application)|"  # "previous app"
+    r"last\s+(?:app|window|application)|"      # "last app"
+    r"back\s+to\s+(?:the\s+)?(?:last|previous)\s+(?:app|window)"  # "back to the last app"
+    r")$",
+    re.IGNORECASE,
+)
+
+# "next app" / "cycle apps"
+_SWITCH_NEXT_RE = re.compile(
+    r"^(?:"
+    r"next\s+(?:app|window|application)|"  # "next app"
+    r"cycle\s+(?:apps?|windows?)|"         # "cycle apps"
+    r"switch\s+(?:to\s+)?next(?:\s+(?:app|window))?"  # "switch next", "switch to next app"
+    r")$",
+    re.IGNORECASE,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Google search patterns: "google this cats", "google cats", "search google for cats"
@@ -916,8 +947,85 @@ def _decide_single_clause(text: str) -> HybridDecision:
             confidence=0.93,
         )
 
-    # Open/launch/start X (non-URL) -> open_target.
+    # ═══════════════════════════════════════════════════════════════════════
+    # Switch app patterns: deterministic app switching using focus history
+    # ═══════════════════════════════════════════════════════════════════════
     clause_stripped = _strip_trailing_punct(clause)
+    
+    # "go back" / "switch back" / "previous app" / "last app" -> switch_app mode=previous
+    if _SWITCH_PREVIOUS_RE.match(clause_stripped):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{
+                "tool": "switch_app",
+                "args": {"mode": "previous"},
+                "continue_on_error": False
+            }],
+            reply="",
+            confidence=0.95,
+        )
+    
+    # "next app" / "cycle apps" -> switch_app mode=next
+    if _SWITCH_NEXT_RE.match(clause_stripped):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{
+                "tool": "switch_app",
+                "args": {"mode": "next"},
+                "continue_on_error": False
+            }],
+            reply="",
+            confidence=0.93,
+        )
+    
+    # "switch to X" / "go to X" -> switch_app mode=named
+    m = _SWITCH_TO_APP_RE.match(clause_stripped)
+    if m:
+        target = (m.group(1) or "").strip().strip('"').strip("'")
+        # If the target is missing or too ambiguous, defer to LLM.
+        if not target or target.lower() in {"it", "this", "that", "something", "anything"}:
+            return HybridDecision(mode="llm", intents=None, reply="", confidence=0.4)
+        
+        # Check for ambiguous targets that could be media commands
+        target_l = target.lower().strip()
+        if target_l in {"the last app", "last app", "previous app", "the previous app"}:
+            # This is actually a "switch back" command
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{
+                    "tool": "switch_app",
+                    "args": {"mode": "previous"},
+                    "continue_on_error": False
+                }],
+                reply="",
+                confidence=0.95,
+            )
+        
+        if target_l in {"the next app", "next app"}:
+            # This is actually a "next app" command
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{
+                    "tool": "switch_app",
+                    "args": {"mode": "next"},
+                    "continue_on_error": False
+                }],
+                reply="",
+                confidence=0.93,
+            )
+        
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{
+                "tool": "switch_app",
+                "args": {"mode": "named", "app": target},
+                "continue_on_error": False
+            }],
+            reply=f"Switching to {target}.",
+            confidence=0.92,
+        )
+
+    # Open/launch/start X (non-URL) -> open_target.
     m = _OPEN_RE.match(clause_stripped)
     if m:
         target = (m.group(2) or "").strip().strip('"').strip("'")

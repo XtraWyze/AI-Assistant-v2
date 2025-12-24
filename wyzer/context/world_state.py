@@ -21,8 +21,9 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Deque, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from wyzer.policy.autonomy_policy import AutonomyDecision
@@ -224,6 +225,7 @@ class WorldState:
         focused_window: Currently focused window record
         recent_window_events: Ring buffer of recent changes
         last_window_snapshot_ts: Timestamp of last window snapshot
+        last_active_window_ts: Timestamp when last_active_window was last updated
     """
     last_tool: Optional[str] = None
     last_target: Optional[str] = None
@@ -235,6 +237,7 @@ class WorldState:
     
     # Phase 10 - Enhanced reference resolution fields
     last_active_window: Optional[Dict[str, Any]] = None  # {app_name, window_title, pid, hwnd}
+    last_active_window_ts: float = 0.0  # Timestamp when last_active_window was updated
     last_targets: List["TargetRecord"] = field(default_factory=list)  # Ring buffer, max 5
     last_intents: Optional[List[Dict[str, Any]]] = None  # Last executed intent list
     last_llm_reply_only: bool = False  # True if last response was chat-only
@@ -252,6 +255,13 @@ class WorldState:
     last_window_snapshot_ts: float = 0.0
     detected_monitor_count: int = 1  # Actual number of monitors detected by WindowWatcher
     
+    # Focus stack for deterministic app switching (switch_app tool)
+    # Ordered by actual focus changes, most recent first, no consecutive duplicates
+    # Each entry: {app: str, hwnd: int, title: str, ts: float}
+    focus_stack: Deque[Dict[str, Any]] = field(default_factory=lambda: deque(maxlen=10))
+    # Current position in focus_stack for "next app" cycling (round-robin)
+    focus_stack_index: int = 0
+    
     def clear(self) -> None:
         """Reset all state fields."""
         self.last_tool = None
@@ -263,6 +273,7 @@ class WorldState:
         self.last_action = None
         # Phase 10: Clear enhanced reference resolution fields
         self.last_active_window = None
+        self.last_active_window_ts = 0.0
         self.last_targets = []
         self.last_intents = None
         self.last_llm_reply_only = False
@@ -276,6 +287,9 @@ class WorldState:
         self.recent_window_events = []
         self.last_window_snapshot_ts = 0.0
         self.detected_monitor_count = 1
+        # Clear focus stack
+        self.focus_stack = deque(maxlen=10)
+        self.focus_stack_index = 0
     
     def has_last_action(self) -> bool:
         """Check if there's a valid last action for reference."""
@@ -590,6 +604,24 @@ def _extract_resolved_info_for_replay(tool_name: str, result: dict) -> Optional[
                 resolved_info["app_name"] = result.get("app_name")
             return resolved_info if resolved_info.get("type") else None
     
+    # For switch_app: extract to_app/from_app and matched window info
+    # This is crucial for chained commands like "switch to Spotify and move it"
+    if tool_name == "switch_app":
+        # Handle both 'switched' status (has to_app) and 'already_focused' status (has app)
+        target_app = result.get("to_app") or result.get("app")
+        resolved_info["to_app"] = target_app
+        resolved_info["from_app"] = result.get("from_app")
+        resolved_info["hwnd"] = result.get("hwnd")
+        # Also check matched dict if present
+        matched = result.get("matched")
+        if matched and isinstance(matched, dict):
+            resolved_info["process"] = matched.get("process")
+            resolved_info["title"] = matched.get("title")
+        # Ensure we have at least to_app for reference resolution
+        if resolved_info.get("to_app"):
+            return resolved_info
+        return None
+    
     # For close_window/focus_window: extract matched window info
     if tool_name in ("close_window", "focus_window", "minimize_window", "maximize_window"):
         matched = result.get("matched")
@@ -897,6 +929,7 @@ def update_last_active_window(
             "pid": pid,
             "hwnd": hwnd,
         }
+        ws.last_active_window_ts = time.time()  # Track when active window was updated
         # Also update legacy fields for compatibility
         if app_name:
             ws.active_app = app_name
@@ -1168,7 +1201,23 @@ def update_window_watcher_state(
         detected_monitor_count: Number of monitors detected by WindowWatcher
     """
     ws = get_world_state()
+    
+    # Track if focus changed for focus_stack update (done outside the main lock)
+    new_focus_app = None
+    new_focus_hwnd = None
+    new_focus_title = None
+    
     with _world_state_lock:
+        # Check if focus changed before updating
+        old_focus_hwnd = ws.focused_window.get("hwnd") if ws.focused_window else None
+        new_hwnd = focused_window.get("hwnd") if focused_window else None
+        
+        if new_hwnd and new_hwnd != old_focus_hwnd:
+            # Focus changed - capture info for stack update
+            new_focus_app = focused_window.get("process")
+            new_focus_hwnd = new_hwnd
+            new_focus_title = focused_window.get("title")
+        
         ws.open_windows = list(open_windows)
         ws.windows_by_monitor = {k: list(v) for k, v in windows_by_monitor.items()}
         ws.focused_window = dict(focused_window) if focused_window else None
@@ -1180,6 +1229,10 @@ def update_window_watcher_state(
         if focused_window:
             ws.active_app = focused_window.get("process")
             ws.active_window_title = focused_window.get("title")
+    
+    # Update focus_stack outside the main lock (push_focus_stack has its own locking)
+    if new_focus_app and new_focus_hwnd:
+        push_focus_stack(new_focus_app, new_focus_hwnd, new_focus_title or "")
 
 
 def get_windows_on_monitor(monitor: int) -> List[Dict[str, Any]]:
@@ -1256,3 +1309,140 @@ def get_monitor_count() -> int:
     ws = get_world_state()
     with _world_state_lock:
         return max(1, ws.detected_monitor_count)
+
+
+# ============================================================================
+# FOCUS STACK - DETERMINISTIC APP SWITCHING
+# ============================================================================
+
+def push_focus_stack(app: str, hwnd: int, title: str) -> None:
+    """
+    Push a focus event onto the focus_stack.
+    
+    Called when a window gains focus. Deduplicates consecutive entries
+    (same app won't appear twice in a row).
+    
+    Args:
+        app: Application/process name (e.g., "chrome.exe", "notepad.exe")
+        hwnd: Window handle
+        title: Window title
+    """
+    if not app:
+        return
+    
+    ws = get_world_state()
+    with _world_state_lock:
+        # Normalize app name for comparison
+        app_norm = app.lower().strip()
+        
+        # Check if the top of the stack is the same app (avoid consecutive duplicates)
+        if ws.focus_stack:
+            top = ws.focus_stack[0]
+            if top.get("app", "").lower() == app_norm:
+                # Same app, just update hwnd/title/ts
+                top["hwnd"] = hwnd
+                top["title"] = title
+                top["ts"] = time.time()
+                return
+        
+        # Push new entry to front
+        entry = {
+            "app": app,
+            "hwnd": hwnd,
+            "title": title,
+            "ts": time.time(),
+        }
+        ws.focus_stack.appendleft(entry)
+        
+        # Reset cycle index when a new app is focused
+        ws.focus_stack_index = 0
+
+
+def get_focus_stack() -> List[Dict[str, Any]]:
+    """
+    Get the current focus stack.
+    
+    Returns:
+        List of focus records, most recent first
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        return list(ws.focus_stack)
+
+
+def get_previous_focused_app() -> Optional[Dict[str, Any]]:
+    """
+    Get the previously focused app (for "go back" / "switch back").
+    
+    Returns:
+        Focus record of the previous app, or None if only one app in history
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        if len(ws.focus_stack) < 2:
+            return None
+        return dict(ws.focus_stack[1])
+
+
+def get_next_focused_app() -> Optional[Dict[str, Any]]:
+    """
+    Cycle forward through focus_stack (round-robin) for "next app".
+    
+    Returns:
+        Focus record of the next app in the cycle, or None if not enough apps
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        if len(ws.focus_stack) < 2:
+            return None
+        
+        # Increment index and wrap around
+        ws.focus_stack_index = (ws.focus_stack_index + 1) % len(ws.focus_stack)
+        return dict(ws.focus_stack[ws.focus_stack_index])
+
+
+def find_app_in_focus_stack(app_name: str) -> Optional[Dict[str, Any]]:
+    """
+    Find the most recent entry for an app in the focus_stack.
+    
+    Args:
+        app_name: Application name to find (case-insensitive, substring match)
+        
+    Returns:
+        Focus record if found, None otherwise
+    """
+    if not app_name:
+        return None
+    
+    app_norm = app_name.lower().strip()
+    # Remove .exe if present for matching
+    if app_norm.endswith(".exe"):
+        app_norm = app_norm[:-4]
+    
+    ws = get_world_state()
+    with _world_state_lock:
+        for entry in ws.focus_stack:
+            entry_app = (entry.get("app") or "").lower()
+            # Remove .exe for comparison
+            if entry_app.endswith(".exe"):
+                entry_app = entry_app[:-4]
+            
+            # Match if the requested app name is contained in the entry app name
+            if app_norm in entry_app or entry_app in app_norm:
+                return dict(entry)
+    
+    return None
+
+
+def get_current_focused_app() -> Optional[Dict[str, Any]]:
+    """
+    Get the currently focused app (top of focus_stack).
+    
+    Returns:
+        Focus record of the current app, or None if stack is empty
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        if ws.focus_stack:
+            return dict(ws.focus_stack[0])
+        return None

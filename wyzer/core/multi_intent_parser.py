@@ -21,11 +21,12 @@ MULTI_INTENT_SEPARATORS = [
     (r"\s+then\s+", "sequential"),        # "open X then Y"
     (r"\s+and\s+", "parallel"),           # "open X and Y"
     (r"\s*;\s*", "sequential"),           # "open X; do Y"
+    (r"\s*\.\s+", "sequential"),          # "open X. Do Y" (sentence boundary)
     (r"\s*,\s*", "parallel"),             # "open X, Y"
 ]
 
 # Verbs that can start a new intent when appearing without separator
-ACTION_VERBS = r"(?:open|launch|start|close|quit|exit|minimize|shrink|maximize|fullscreen|expand|move|send|play|pause|resume|mute|unmute|scan)"
+ACTION_VERBS = r"(?:open|launch|start|close|quit|exit|minimize|shrink|maximize|fullscreen|expand|move|send|play|pause|resume|mute|unmute|scan|switch|focus|go)"
 
 
 def _split_by_separator(text: str, separator_pattern: str) -> List[str]:
@@ -86,8 +87,10 @@ def _infer_missing_verb(clause: str, previous_clauses: List[str]) -> str:
     clause = clause.strip()
     
     # If clause already starts with a verb, don't modify it
+    # This list should match ACTION_VERBS defined above
     verb_patterns = [
         r"^(open|launch|start|close|quit|exit|play|pause|resume|mute|unmute|turn|scan)",
+        r"^(move|send|switch|focus|go|minimize|shrink|maximize|fullscreen|expand)",
         r"^(volume|set|get)",
     ]
     for pattern in verb_patterns:

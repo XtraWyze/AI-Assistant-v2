@@ -98,6 +98,7 @@ _CONNECTORS = [
     " plus ",
     "; ",
     ";",
+    ". ",  # Sentence boundary: "pause. what's a VPN?"
     ", ",
     ",",
 ]

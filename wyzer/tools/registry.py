@@ -81,6 +81,9 @@ def build_default_registry() -> ToolRegistry:
         MoveWindowToMonitorTool
     )
     
+    # Switch app tool (deterministic app switching using focus history)
+    from wyzer.tools.switch_app import SwitchAppTool
+    
     # Phase 6 tools - Monitor info
     from wyzer.tools.monitor_info import MonitorInfoTool
     
@@ -141,6 +144,9 @@ def build_default_registry() -> ToolRegistry:
     registry.register(MaximizeWindowTool())
     registry.register(CloseWindowTool())
     registry.register(MoveWindowToMonitorTool())
+    
+    # Register switch app tool (deterministic app switching)
+    registry.register(SwitchAppTool())
     
     # Register monitor info tool
     registry.register(MonitorInfoTool())

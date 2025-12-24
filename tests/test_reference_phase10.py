@@ -30,6 +30,7 @@ from wyzer.context.world_state import (
     get_last_targets,
     update_after_tool,
     TargetRecord,
+    LastAction,
 )
 from wyzer.core.reference_resolver import (
     resolve_references,
@@ -766,6 +767,319 @@ class TestStreamingTTSBypass:
         assert should_use_streaming_tts("shut it") is False
         assert should_use_streaming_tts("kill that") is False
         assert should_use_streaming_tts("focus on it") is False
+
+
+# ============================================================================
+# TEST: Chained command pronoun resolution - last_action.resolved priority
+# ============================================================================
+
+class TestChainedCommandResolution:
+    """
+    Exit criterion: Chained commands like "switch to Spotify and move it to monitor 1"
+    should resolve "it" to the LAST ACTION's target (Spotify), not active_app.
+    
+    This tests the fix for the bug where "move it" resolved to WindowsTerminal
+    instead of Spotify after switch_app succeeded.
+    """
+    
+    def test_switch_app_then_move_it_resolves_to_switched_app(self):
+        """
+        After switch_app("Spotify") succeeds, "move it" resolves to Spotify.
+        This is the core bug fix scenario.
+        """
+        # Simulate switch_app execution with result containing to_app
+        update_from_tool_execution(
+            tool_name="switch_app",
+            tool_args={"mode": "named", "app": "Spotify"},
+            tool_result={
+                "status": "switched",
+                "from_app": "WindowsTerminal",
+                "to_app": "Spotify",
+                "hwnd": 12345,
+                "message": "Switched to Spotify.",
+                "spoken": "Switching to Spotify.",
+            },
+        )
+        
+        # Simulate that active_app might still show the old window due to timing
+        # This simulates the race condition where the window watcher hasn't updated yet
+        ws = get_world_state()
+        ws.active_app = "WindowsTerminal"  # Stale value
+        ws.last_active_window = {"app_name": "WindowsTerminal"}  # Stale value
+        
+        # "move it" should resolve to Spotify (from last_action.resolved), not WindowsTerminal
+        result = resolve_references("move it to monitor 1")
+        # The result should contain Spotify, not WindowsTerminal
+        # Note: resolve_references may return unchanged for "move it to monitor X"
+        # so we also test resolve_pronoun_target directly
+        target, reason = resolve_pronoun_target("move it")
+        assert target == "Spotify", f"Expected Spotify but got {target} (reason: {reason})"
+        assert "last_action" in reason.lower() or "last action" in reason.lower()
+    
+    def test_switch_app_then_close_it_resolves_to_switched_app(self):
+        """
+        After switch_app("Discord") succeeds, "close it" resolves to Discord.
+        """
+        update_from_tool_execution(
+            tool_name="switch_app",
+            tool_args={"mode": "named", "app": "Discord"},
+            tool_result={
+                "status": "switched",
+                "from_app": "Chrome",
+                "to_app": "Discord",
+                "hwnd": 54321,
+            },
+        )
+        
+        # Stale active_app
+        ws = get_world_state()
+        ws.active_app = "Chrome"
+        ws.last_active_window = {"app_name": "Chrome"}
+        
+        result = resolve_references("close it")
+        assert result == "close Discord", f"Expected 'close Discord' but got '{result}'"
+    
+    def test_open_target_then_close_it_resolves_to_opened_app(self):
+        """
+        After open_target("Chrome") succeeds, "close it" resolves to Chrome.
+        """
+        update_from_tool_execution(
+            tool_name="open_target",
+            tool_args={"query": "Chrome"},
+            tool_result={
+                "success": True,
+                "resolved": {
+                    "type": "app",
+                    "matched_name": "Chrome",
+                    "path": "C:\\Program Files\\Google\\Chrome\\chrome.exe",
+                },
+            },
+        )
+        
+        # Simulate stale active_app (still shows Notepad)
+        ws = get_world_state()
+        ws.active_app = "Notepad"
+        ws.last_active_window = {"app_name": "Notepad"}
+        
+        target, reason = resolve_pronoun_target("close it")
+        assert target == "Chrome", f"Expected Chrome but got {target}"
+    
+    def test_fallback_to_active_app_when_no_last_action(self):
+        """
+        When no last_action.resolved exists, fall back to active_app.
+        """
+        # Clear last_action
+        ws = get_world_state()
+        ws.last_action = None
+        ws.last_tool = None
+        ws.last_target = None
+        
+        # Set active_app
+        update_last_active_window(app_name="Firefox", window_title="Mozilla Firefox")
+        
+        result = resolve_references("close it")
+        assert result == "close Firefox", f"Expected 'close Firefox' but got '{result}'"
+    
+    def test_stale_last_action_falls_back_to_active_app(self):
+        """
+        When last_action is too old (> 30 seconds), fall back to active_app.
+        """
+        import time
+        from wyzer.context.world_state import LastAction
+        
+        # Set up old last_action (60 seconds ago)
+        ws = get_world_state()
+        ws.last_action = LastAction(
+            tool="switch_app",
+            args={"mode": "named", "app": "OldApp"},
+            resolved={"to_app": "OldApp"},
+            ts=time.time() - 60,  # 60 seconds ago
+        )
+        
+        # Set current active_app
+        update_last_active_window(app_name="CurrentApp", window_title="Current Window")
+        
+        target, reason = resolve_pronoun_target("close it")
+        # Should use active_app since last_action is stale
+        assert target == "CurrentApp", f"Expected CurrentApp but got {target} (last_action was stale)"
+    
+    def test_minimize_it_after_switch_app(self):
+        """'minimize it' after switch_app resolves to switched app."""
+        update_from_tool_execution(
+            tool_name="switch_app",
+            tool_args={"mode": "named", "app": "Teams"},
+            tool_result={
+                "status": "switched",
+                "from_app": "Slack",
+                "to_app": "Teams",
+            },
+        )
+        
+        ws = get_world_state()
+        ws.active_app = "Slack"  # Stale
+        
+        result = resolve_references("minimize it")
+        assert "Teams" in result, f"Expected Teams in result but got '{result}'"
+    
+    def test_focus_it_after_switch_app(self):
+        """'focus on it' after switch_app resolves to switched app."""
+        update_from_tool_execution(
+            tool_name="switch_app",
+            tool_args={"mode": "named", "app": "Zoom"},
+            tool_result={
+                "status": "switched",
+                "to_app": "Zoom",
+            },
+        )
+        
+        ws = get_world_state()
+        ws.active_app = "OldApp"  # Stale
+        
+        result = resolve_references("focus on it")
+        assert "Zoom" in result, f"Expected Zoom in result but got '{result}'"
+    
+    def test_existing_close_it_patterns_still_work(self):
+        """Existing 'close it' patterns should still work with active_app."""
+        # This tests that when last_action matches active_app, behavior is unchanged
+        update_from_tool_execution(
+            tool_name="open_target",
+            tool_args={"query": "Notepad"},
+            tool_result={
+                "success": True,
+                "resolved": {"type": "app", "matched_name": "Notepad"},
+            },
+        )
+        update_last_active_window(app_name="Notepad", window_title="Untitled - Notepad")
+        
+        result = resolve_references("close it")
+        assert result == "close Notepad"
+        
+        result = resolve_references("close that")
+        assert result == "close Notepad"
+        
+        result = resolve_references("shut it")
+        assert result == "shut Notepad"
+
+
+class TestMultiIntentRouting:
+    """Test that multi-intent detection works with various separators."""
+    
+    def test_comma_separated_detected_as_multi_intent(self):
+        """'Switch to X, move it' should be detected as multi-intent."""
+        from wyzer.core.hybrid_router import looks_multi_intent
+        
+        # Both "and" and comma should be detected as multi-intent
+        assert looks_multi_intent("Switch to Spotify and move it to monitor 1")
+        assert looks_multi_intent("Switch to Spotify, move it to monitor 1")
+        assert looks_multi_intent("Focus Chrome, close it")
+        assert looks_multi_intent("go to spotify, minimize it")
+    
+    def test_comma_separated_routes_correctly(self):
+        """'Switch to X, move it' should route to switch_app + leftover."""
+        from wyzer.core.hybrid_router import decide
+        
+        result = decide("Switch to Spotify, move it to monitor 1")
+        assert result.mode == "tool_plan"
+        assert result.intents is not None
+        assert len(result.intents) == 1
+        assert result.intents[0]["tool"] == "switch_app"
+        assert result.intents[0]["args"]["app"] == "Spotify"
+        # The leftover should be marked for processing after switch_app succeeds
+        assert "__LEFTOVER__" in result.reply
+        assert "move it" in result.reply
+    
+    def test_period_separated_routes_correctly(self):
+        """'Switch to X. Move it to screen 1.' should route correctly."""
+        from wyzer.core.hybrid_router import decide
+        
+        result = decide("Switch to Spotify. Move it to screen 1.")
+        assert result.mode == "tool_plan"
+        assert result.intents is not None
+        assert len(result.intents) == 1
+        assert result.intents[0]["tool"] == "switch_app"
+        assert result.intents[0]["args"]["app"] == "Spotify"
+        # The leftover should be marked for processing after switch_app succeeds
+        assert "__LEFTOVER__" in result.reply
+        assert "move it" in result.reply.lower() or "Move it" in result.reply
+    
+    def test_open_and_move_it_routes_correctly(self):
+        """'Open X and move it to monitor 2' should NOT infer 'open' for 'move it'."""
+        from wyzer.core.hybrid_router import decide
+        
+        result = decide("Open Chrome and move it to monitor 2")
+        assert result.mode == "tool_plan"
+        assert result.intents is not None
+        # Should only have ONE open_target intent, not two
+        assert len(result.intents) == 1
+        assert result.intents[0]["tool"] == "open_target"
+        assert result.intents[0]["args"]["query"] == "Chrome"
+        # The leftover "move it to monitor 2" should be handled after open succeeds
+        assert "__LEFTOVER__" in result.reply
+        assert "move it" in result.reply.lower()
+
+
+class TestResolvedInfoExtraction:
+    """Test that _extract_resolved_info_for_replay extracts the right info."""
+    
+    def test_switch_app_extracts_to_app(self):
+        """switch_app result extracts to_app for reference resolution."""
+        update_from_tool_execution(
+            tool_name="switch_app",
+            tool_args={"mode": "named", "app": "Spotify"},
+            tool_result={
+                "status": "switched",
+                "from_app": "Terminal",
+                "to_app": "Spotify",
+                "hwnd": 123,
+            },
+        )
+        
+        ws = get_world_state()
+        assert ws.last_action is not None
+        assert ws.last_action.resolved is not None
+        assert ws.last_action.resolved.get("to_app") == "Spotify"
+    
+    def test_switch_app_already_focused_extracts_app(self):
+        """switch_app with already_focused status extracts app for reference resolution."""
+        update_from_tool_execution(
+            tool_name="switch_app",
+            tool_args={"mode": "named", "app": "Spotify"},
+            tool_result={
+                "status": "already_focused",
+                "app": "Spotify",
+                "message": "Already on Spotify.",
+            },
+        )
+        
+        ws = get_world_state()
+        assert ws.last_action is not None
+        assert ws.last_action.resolved is not None
+        # Should extract 'app' as 'to_app' for consistency
+        assert ws.last_action.resolved.get("to_app") == "Spotify"
+        
+        # And pronoun resolution should work
+        target, reason = resolve_pronoun_target("move it")
+        assert target == "Spotify"
+    
+    def test_focus_window_extracts_process(self):
+        """focus_window result extracts process for reference resolution."""
+        update_from_tool_execution(
+            tool_name="focus_window",
+            tool_args={"query": "Discord"},
+            tool_result={
+                "success": True,
+                "matched": {
+                    "title": "Discord",
+                    "process": "Discord.exe",
+                    "hwnd": 456,
+                },
+            },
+        )
+        
+        ws = get_world_state()
+        assert ws.last_action is not None
+        assert ws.last_action.resolved is not None
+        assert ws.last_action.resolved.get("process") == "Discord.exe"
 
 
 if __name__ == "__main__":

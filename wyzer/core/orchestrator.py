@@ -1078,12 +1078,75 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 leftover_text = ""
                 if hybrid_decision.reply and hybrid_decision.reply.startswith("__LEFTOVER__:"):
                     leftover_text = hybrid_decision.reply[len("__LEFTOVER__:"):]
-                    if leftover_text and not getattr(Config, "NO_OLLAMA", False):
-                        logger.info(f'[HYBRID] Partial multi-intent: executing LLM for leftover="{leftover_text[:40]}..."')
-                        llm_response = _call_llm_reply_only(leftover_text)
-                        leftover_llm_reply = llm_response.get("reply", "").strip()
+                    # Only process leftover if all executed intents succeeded.
+                    # If an intent failed (e.g., app not found), the leftover is likely
+                    # dependent on that action (e.g., "move it to screen one" requires
+                    # the app to be focused first).
+                    all_intents_succeeded = all(r.ok for r in execution_summary.ran)
+                    if leftover_text and all_intents_succeeded:
+                        # First, check if leftover matches a tool pattern (e.g., "move it to screen 1")
+                        # Re-route through hybrid router instead of just generating LLM reply
+                        from wyzer.core.reference_resolver import is_move_it_to_monitor_request, resolve_move_it_to_monitor
+                        from wyzer.context.world_state import get_world_state
+                        
+                        leftover_handled = False
+                        
+                        # Check for "move it to monitor/screen X" pattern
+                        if is_move_it_to_monitor_request(leftover_text):
+                            move_args, move_reason = resolve_move_it_to_monitor(leftover_text, get_world_state())
+                            if move_args is not None:
+                                logger.info(f'[HYBRID] Leftover is move_window: process={move_args.get("process")} monitor={move_args.get("monitor")}')
+                                
+                                # Check if we just opened an app - if so, the window may not be visible yet
+                                # Add retry logic with small delays to wait for the window to appear
+                                # executed_intents contains Intent objects with .tool attribute
+                                last_tool = executed_intents[0].tool if executed_intents else None
+                                app_opening_tools = {"open_target", "open_app", "launch_app"}
+                                max_retries = 3 if last_tool in app_opening_tools else 1
+                                retry_delay_ms = 300  # 300ms between retries
+                                
+                                try:
+                                    intent = {"tool": "move_window_to_monitor", "args": move_args}
+                                    leftover_summary = None
+                                    
+                                    for attempt in range(max_retries):
+                                        if attempt > 0:
+                                            time.sleep(retry_delay_ms / 1000.0)
+                                            logger.debug(f'[HYBRID] Retry {attempt + 1}/{max_retries} for move_window after app open')
+                                        
+                                        leftover_summary, leftover_intents = execute_tool_plan([intent], registry)
+                                        if leftover_summary.ran and leftover_summary.ran[0].ok:
+                                            break  # Success, exit retry loop
+                                        
+                                        # Check if error is window_not_found - only retry for that
+                                        error = leftover_summary.ran[0].error if leftover_summary.ran else None
+                                        if not error or error.get("type") != "window_not_found":
+                                            break  # Different error, don't retry
+                                    
+                                    if leftover_summary and leftover_summary.ran and leftover_summary.ran[0].ok:
+                                        target_name = move_args.get("_display_name") or move_args.get("process") or "window"
+                                        monitor = move_args.get("monitor", 2)
+                                        leftover_llm_reply = f"Moved {target_name} to monitor {monitor}."
+                                        leftover_handled = True
+                                        # Merge execution summaries
+                                        execution_summary.ran.extend(leftover_summary.ran)
+                                    else:
+                                        error = leftover_summary.ran[0].error if leftover_summary and leftover_summary.ran else None
+                                        leftover_llm_reply = _tool_error_to_speech(error, "move_window_to_monitor", move_args)
+                                        leftover_handled = True
+                                except Exception as e:
+                                    logger.warning(f"[HYBRID] Leftover move_window failed: {e}")
+                        
+                        # If not a recognized tool pattern and LLM is available, use LLM
+                        if not leftover_handled and not getattr(Config, "NO_OLLAMA", False):
+                            logger.info(f'[HYBRID] Partial multi-intent: executing LLM for leftover="{leftover_text[:40]}..."')
+                            llm_response = _call_llm_reply_only(leftover_text)
+                            leftover_llm_reply = llm_response.get("reply", "").strip()
+                        
                         if leftover_llm_reply:
                             reply = f"{reply} {leftover_llm_reply}"
+                    elif leftover_text and not all_intents_succeeded:
+                        logger.info(f'[HYBRID] Skipping leftover (prior intent failed): "{leftover_text[:40]}..."')
 
                 end_time = time.perf_counter()
                 latency_ms = int((end_time - start_time) * 1000)
