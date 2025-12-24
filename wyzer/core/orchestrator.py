@@ -96,6 +96,80 @@ _CONFIRM_NO_RE = re.compile(
     re.IGNORECASE
 )
 
+# ============================================================================
+# PHASE 12: WINDOW WATCHER COMMAND PATTERNS (deterministic, no LLM)
+# ============================================================================
+# Commands for multi-monitor window awareness.
+
+# "what's on monitor 2" / "whats on screen 1" / "what is on monitor 3"
+# Note: Handle both straight (') and curly (') apostrophes from STT
+# Robust pattern to handle STT transcription errors like:
+# "what's on monitor 1", "whats on screen two", "it's on monitor 1" (misheard),
+# "what is on my display 2", "what's monitor one", "what's on the second monitor",
+# "what's on the secondary monitor", "what's on monitor to" (mishear of "two"), etc.
+# Supports two forms:
+#   1. "what's on monitor <number>" - number after monitor
+#   2. "what's on the second/secondary monitor" - ordinal before monitor
+_WHATS_ON_MONITOR_RE = re.compile(
+    r"^(?:what(?:[''']?s|\s+is)|it(?:[''']?s|\s+is))\s+"  # "what's" or "it's" (common mishear)
+    r"(?:on\s+)?(?:a\s+)?(?:my\s+)?"                       # optional: on/a/my
+    r"(?:"
+        # Form 1: [the] monitor/screen/display <number>
+        r"(?:the\s+)?(?:monitor|screen|display)\s*"
+        r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|to|too|"  # "to/too" = mishear of "two"
+        r"primary|secondary|main|other|left|right|first|second|third)"
+        r"|"
+        # Form 2: [the] <ordinal> monitor/screen/display
+        r"(?:the\s+)?(first|second|third|primary|secondary|main|other|left|right)\s+"
+        r"(?:monitor|screen|display)"
+    r")[.?!]?$",
+    re.IGNORECASE
+)
+
+# "close all on screen 1" / "close everything on monitor 2"
+_CLOSE_ALL_ON_MONITOR_RE = re.compile(
+    r"^close\s+(?:all|everything)\s+(?:on\s+)?(?:the\s+)?(?:monitor|screen|display)\s*"
+    r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"primary|secondary|main|other|left|right)[.?]?$",
+    re.IGNORECASE
+)
+
+# "what did I just open" / "what did I open" / "what was just opened"
+_WHAT_DID_I_OPEN_RE = re.compile(
+    r"^(?:what\s+did\s+(?:i|you)\s+(?:just\s+)?open|"
+    r"what\s+(?:was|were)\s+(?:just\s+)?opened|"
+    r"recently?\s+opened(?:\s+windows?)?)[.?]?$",
+    re.IGNORECASE
+)
+
+# "where am I" / "which monitor am I on" / "what monitor is this"
+_WHERE_AM_I_RE = re.compile(
+    r"^(?:where\s+am\s+i|"
+    r"which\s+(?:monitor|screen|display)\s+(?:am\s+i\s+on|is\s+(?:this|active|focused))|"
+    r"what\s+(?:monitor|screen|display)\s+(?:am\s+i\s+on|is\s+(?:this|active|focused)))[.?]?$",
+    re.IGNORECASE
+)
+
+# Word to number mapping for monitor references
+_MONITOR_WORD_TO_NUM = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "primary": 1, "main": 1, "secondary": 2, "other": 2,
+    "left": 2, "right": 1,  # Primary is typically on right, secondary on left
+    # Ordinal words
+    "first": 1, "second": 2, "third": 3,
+    # STT mishears of "two"
+    "to": 2, "too": 2,
+}
+
+
+def _parse_monitor_number(text: str) -> int:
+    """Parse a monitor reference (number or word) to integer."""
+    text = text.strip().lower()
+    if text.isdigit():
+        return int(text)
+    return _MONITOR_WORD_TO_NUM.get(text, 1)
+
 
 def _get_no_ollama_reply() -> str:
     """Get a random short reply for unsupported commands in no-ollama mode."""
@@ -683,6 +757,15 @@ def handle_user_text(text: str) -> Dict[str, Any]:
         return autonomy_result
     
     # =========================================================================
+    # PHASE 12: WINDOW WATCHER COMMANDS (deterministic, no LLM)
+    # =========================================================================
+    # Check for window watcher commands: "what's on monitor 2", "close all on screen 1", etc.
+    # These are handled purely by regex matching and never touch the LLM.
+    window_watcher_result = _check_window_watcher_commands(text, start_time)
+    if window_watcher_result is not None:
+        return window_watcher_result
+    
+    # =========================================================================
     # PHASE 11: CONFIRMATION FLOW (deterministic)
     # =========================================================================
     # Check if user is responding to a pending confirmation (yes/no).
@@ -1244,6 +1327,14 @@ def should_use_streaming_tts(text: str) -> bool:
         _AUTONOMY_NORMAL_RE.match(text_stripped) or
         _AUTONOMY_HIGH_RE.match(text_stripped) or
         _AUTONOMY_STATUS_RE.match(text_stripped)):
+        return False
+    
+    # Phase 12: Check for window watcher commands BEFORE hybrid router
+    # These must be handled deterministically, never streamed to LLM
+    if (_WHATS_ON_MONITOR_RE.match(text_stripped) or
+        _CLOSE_ALL_ON_MONITOR_RE.match(text_stripped) or
+        _WHAT_DID_I_OPEN_RE.match(text_stripped) or
+        _WHERE_AM_I_RE.match(text_stripped)):
         return False
     
     # Phase 11: Check for confirmation responses ONLY if there's a pending confirmation
@@ -4213,4 +4304,347 @@ def _check_confirmation_response(text: str, start_time: float) -> Optional[Dict[
     
     # Text doesn't match yes/no patterns - not a confirmation response
     # Let it fall through to normal processing, but note the pending confirmation
+    return None
+
+
+# ============================================================================
+# PHASE 12: WINDOW WATCHER COMMAND HANDLERS (deterministic, no LLM)
+# ============================================================================
+
+def _check_window_watcher_commands(text: str, start_time: float) -> Optional[Dict[str, Any]]:
+    """
+    Check for Phase 12 window watcher voice commands.
+    
+    These are handled purely deterministically (no LLM).
+    Commands:
+    - "what's on monitor 2" - list windows on that monitor
+    - "close all on screen 1" - close all windows on that monitor (with confirmation)
+    - "what did I just open" - list recently opened windows
+    - "where am I" - report focused window and monitor
+    
+    Args:
+        text: User input text
+        start_time: Performance timer start
+        
+    Returns:
+        Response dict if command matched, None otherwise
+    """
+    logger = get_logger_instance()
+    text = text.strip()
+    
+    from wyzer.context.world_state import (
+        get_windows_on_monitor,
+        get_focused_window_info,
+        get_recent_window_events,
+        get_monitor_count,
+        set_pending_confirmation,
+        get_autonomy_mode,
+    )
+    from wyzer.policy.risk import classify_plan
+    
+    # Known junk window titles to exclude
+    JUNK_TITLES = frozenset({
+        "program manager",
+        "windows input experience",
+        "windows shell experience host",
+        "textinputhost",
+        "search",
+        "start",
+        "task view",
+        "nvidia geforce overlay",
+        "nvidia notification helper window",
+        "settings",
+    })
+    
+    # Known junk process names to exclude
+    JUNK_PROCESSES = frozenset({
+        "explorer.exe",
+        "applicationframehost.exe",
+        "textinputhost.exe",
+        "searchhost.exe",
+        "shellexperiencehost.exe",
+        "startmenuexperiencehost.exe",
+        "lockapp.exe",
+        "dwm.exe",
+        "taskhostw.exe",
+    })
+    
+    def _is_junk_window(w: Dict[str, Any], is_focused: bool = False) -> bool:
+        """Check if a window is junk that should be excluded from listings."""
+        title = (w.get("title") or "").strip()
+        process = (w.get("process") or "").lower()
+        
+        # Empty titles are junk UNLESS this is the focused window
+        if not title and not is_focused:
+            return True
+        
+        # Check known junk titles
+        if title.lower() in JUNK_TITLES:
+            return True
+        
+        # Check known junk processes
+        if process in JUNK_PROCESSES:
+            return True
+        
+        return False
+    
+    # "what's on monitor 2" or "what's on the second monitor"
+    match = _WHATS_ON_MONITOR_RE.match(text)
+    if match:
+        # Extract from group 1 (number after monitor) or group 2 (ordinal before monitor)
+        monitor_ref = match.group(1) or match.group(2)
+        monitor = _parse_monitor_number(monitor_ref)
+        detected_count = get_monitor_count()
+        
+        logger.info(f"[CMD_P12] whats_on_monitor monitor={monitor} detected_count={detected_count}")
+        
+        # Check if requested monitor exists
+        if monitor > detected_count:
+            reply = f"I only detect {detected_count} monitor{'s' if detected_count != 1 else ''} right now."
+            end_time = time.perf_counter()
+            return {
+                "reply": reply,
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {
+                    "window_watcher_command": "whats_on_monitor",
+                    "monitor": monitor,
+                    "detected_count": detected_count,
+                    "error": "monitor_not_found",
+                },
+            }
+        
+        windows = get_windows_on_monitor(monitor)
+        focused = get_focused_window_info()
+        focused_hwnd = focused.get("hwnd") if focused else None
+        
+        # Filter out junk windows
+        filtered_windows = []
+        for w in windows:
+            is_focused = w.get("hwnd") == focused_hwnd
+            if not _is_junk_window(w, is_focused):
+                filtered_windows.append(w)
+        
+        logger.info(f"[CMD_P12] whats_on_monitor monitor={monitor} raw={len(windows)} filtered={len(filtered_windows)}")
+        
+        if not filtered_windows:
+            reply = f"Monitor {monitor} appears empty."
+        else:
+            # Format window list (show titles, max 6), prioritize focused window
+            # Sort: focused window first, then by title
+            sorted_windows = sorted(
+                filtered_windows,
+                key=lambda w: (0 if w.get("hwnd") == focused_hwnd else 1, w.get("title", "").lower())
+            )
+            
+            lines = []
+            for w in sorted_windows[:6]:
+                title = w.get("title", "Untitled")[:40]
+                if len(w.get("title", "")) > 40:
+                    title += "..."
+                is_focused = w.get("hwnd") == focused_hwnd
+                prefix = "→ " if is_focused else "• "
+                lines.append(f"{prefix}{title}")
+            
+            extra = len(filtered_windows) - 6
+            if extra > 0:
+                lines.append(f"...and {extra} more")
+            
+            reply = f"Monitor {monitor} has {len(filtered_windows)} windows:\n" + "\n".join(lines)
+        
+        end_time = time.perf_counter()
+        return {
+            "reply": reply,
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"window_watcher_command": "whats_on_monitor", "monitor": monitor},
+        }
+    
+    # "close all on screen 1"
+    match = _CLOSE_ALL_ON_MONITOR_RE.match(text)
+    if match:
+        monitor_ref = match.group(1)
+        monitor = _parse_monitor_number(monitor_ref)
+        detected_count = get_monitor_count()
+        
+        logger.info(f"[CMD_P12] close_all_on_monitor monitor={monitor} detected_count={detected_count}")
+        
+        # Check if requested monitor exists
+        if monitor > detected_count:
+            reply = f"I only detect {detected_count} monitor{'s' if detected_count != 1 else ''} right now."
+            end_time = time.perf_counter()
+            return {
+                "reply": reply,
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {
+                    "window_watcher_command": "close_all_on_monitor",
+                    "monitor": monitor,
+                    "detected_count": detected_count,
+                    "error": "monitor_not_found",
+                },
+            }
+        
+        windows = get_windows_on_monitor(monitor)
+        
+        # Filter windows: exclude junk and Wyzer's own process
+        closeable = []
+        for w in windows:
+            title = (w.get("title") or "").strip()
+            process = (w.get("process") or "").lower()
+            
+            # Skip junk windows
+            if _is_junk_window(w):
+                continue
+            # Skip Wyzer's own process
+            if "wyzer" in process or "python" in process:
+                continue
+            
+            closeable.append(w)
+        
+        logger.info(f"[CMD_P12] close_all_on_monitor monitor={monitor} raw={len(windows)} closeable={len(closeable)}")
+        
+        if not closeable:
+            reply = f"No closeable windows found on monitor {monitor}."
+            end_time = time.perf_counter()
+            return {
+                "reply": reply,
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {"window_watcher_command": "close_all_on_monitor", "monitor": monitor, "count": 0},
+            }
+        
+        # Build tool plan to close each window
+        max_close = getattr(Config, "WINDOW_WATCHER_MAX_BULK_CLOSE", 10)
+        if len(closeable) > max_close:
+            # Too many - ask for explicit confirmation with warning
+            titles_preview = ", ".join(w.get("title", "?")[:20] for w in closeable[:3])
+            reply = f"There are {len(closeable)} windows on monitor {monitor}. That's a lot! Say 'close all' again to confirm, or close specific windows."
+            end_time = time.perf_counter()
+            return {
+                "reply": reply,
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {"window_watcher_command": "close_all_on_monitor", "monitor": monitor, "count": len(closeable), "needs_explicit": True},
+            }
+        
+        # Build the tool plan
+        tool_plan = []
+        for w in closeable:
+            tool_plan.append({
+                "tool": "close_window",
+                "args": {"title": w.get("title", "")},
+                "continue_on_error": True,  # Keep going even if one fails
+            })
+        
+        # Check risk - bulk close is HIGH risk
+        risk = classify_plan(tool_plan)
+        mode = get_autonomy_mode()
+        
+        # Format confirmation prompt
+        titles_preview = ", ".join(w.get("title", "?")[:20] for w in closeable[:3])
+        if len(closeable) > 3:
+            titles_preview += f"... and {len(closeable) - 3} more"
+        
+        # Always require confirmation for bulk close (HIGH risk)
+        if mode == "off" or risk == "high":
+            # Set pending confirmation
+            prompt = f"I found {len(closeable)} windows on monitor {monitor}: {titles_preview}. Close them all?"
+            set_pending_confirmation(
+                plan=tool_plan,
+                prompt=prompt,
+                timeout_sec=getattr(Config, "AUTONOMY_CONFIRM_TIMEOUT_SEC", 45.0),
+            )
+            
+            logger.info(f"[CMD_P12] close_all_on_monitor awaiting confirmation count={len(closeable)} risk={risk}")
+            
+            end_time = time.perf_counter()
+            return {
+                "reply": prompt,
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {
+                    "window_watcher_command": "close_all_on_monitor",
+                    "monitor": monitor,
+                    "count": len(closeable),
+                    "has_pending_confirmation": True,
+                    "confirmation_timeout_sec": getattr(Config, "AUTONOMY_CONFIRM_TIMEOUT_SEC", 45.0),
+                },
+            }
+        
+        # In high autonomy mode with non-high risk (shouldn't happen for bulk close but just in case)
+        # Execute directly
+        registry = get_registry()
+        execution_summary, executed_intents = execute_tool_plan(tool_plan, registry)
+        closed_count = sum(1 for r in execution_summary.ran if r.ok)
+        
+        reply = f"Closed {closed_count} of {len(closeable)} windows on monitor {monitor}."
+        
+        end_time = time.perf_counter()
+        return {
+            "reply": reply,
+            "latency_ms": int((end_time - start_time) * 1000),
+            "execution_summary": {
+                "ran": [{"tool": r.tool, "ok": r.ok} for r in execution_summary.ran],
+                "stopped_early": execution_summary.stopped_early,
+            },
+            "meta": {"window_watcher_command": "close_all_on_monitor", "monitor": monitor, "closed": closed_count},
+        }
+    
+    # "what did I just open"
+    if _WHAT_DID_I_OPEN_RE.match(text):
+        # Get recent opened and focus_changed events
+        opened_events = get_recent_window_events(event_type="opened", limit=5)
+        focus_events = get_recent_window_events(event_type="focus_changed", limit=3)
+        
+        # Combine and sort by timestamp
+        all_events = opened_events + focus_events
+        all_events.sort(key=lambda e: e.get("ts", 0), reverse=True)
+        
+        logger.info(f"[CMD_P12] what_did_i_open events={len(all_events)}")
+        
+        if not all_events:
+            reply = "I haven't tracked any recently opened windows yet."
+        else:
+            lines = []
+            seen_titles = set()
+            for ev in all_events[:5]:
+                title = ev.get("title", "Untitled")[:40]
+                if title in seen_titles:
+                    continue
+                seen_titles.add(title)
+                ev_type = ev.get("type", "")
+                if ev_type == "opened":
+                    lines.append(f"• Opened: {title}")
+                else:
+                    lines.append(f"• Focused: {title}")
+            
+            reply = "Recently opened:\n" + "\n".join(lines)
+        
+        end_time = time.perf_counter()
+        return {
+            "reply": reply,
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"window_watcher_command": "what_did_i_open", "count": len(all_events)},
+        }
+    
+    # "where am I"
+    if _WHERE_AM_I_RE.match(text):
+        focused = get_focused_window_info()
+        
+        logger.info(f"[CMD_P12] where_am_i focused={focused is not None}")
+        
+        if not focused:
+            reply = "I can't detect the focused window right now."
+        else:
+            title = focused.get("title", "Unknown")[:50]
+            process = focused.get("process", "")
+            monitor = focused.get("monitor", 1)
+            
+            if process:
+                reply = f"You're in {title} ({process}) on monitor {monitor}."
+            else:
+                reply = f"You're in {title} on monitor {monitor}."
+        
+        end_time = time.perf_counter()
+        return {
+            "reply": reply,
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"window_watcher_command": "where_am_i", "focused": focused},
+        }
+    
     return None

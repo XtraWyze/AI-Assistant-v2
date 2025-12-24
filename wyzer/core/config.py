@@ -203,7 +203,7 @@ class Config:
     # - low: Very conservative - only execute high-confidence, low/medium risk actions
     # - normal: Balanced - ask for clarification on uncertain intents
     # - high: More permissive - execute most actions, confirm only high-risk
-    AUTONOMY_DEFAULT: str = os.environ.get("WYZER_AUTONOMY_DEFAULT", "normal")
+    AUTONOMY_DEFAULT: str = os.environ.get("WYZER_AUTONOMY_DEFAULT", "off")
     
     # Require confirmation for sensitive/high-risk actions even in high mode
     # When True: high-risk actions always ask for confirmation
@@ -223,6 +223,47 @@ class Config:
     CONFIRMATION_GRACE_MS: int = int(
         os.environ.get("WYZER_CONFIRMATION_GRACE_MS", "1500")
     )
+    
+    # =========================================================================
+    # Phase 12: Window Watcher Settings (Multi-Monitor Window Awareness)
+    # =========================================================================
+    # Lightweight background watcher that tracks open windows across monitors.
+    # NO OCR, NO screenshots - just window titles/processes/positions.
+    
+    # Enable/disable window watcher
+    WINDOW_WATCHER_ENABLED: bool = os.environ.get(
+        "WYZER_WINDOW_WATCHER_ENABLED", "true"
+    ).lower() in ("true", "1", "yes")
+    
+    # Poll interval in milliseconds (default 500ms, minimum 100ms)
+    WINDOW_WATCHER_POLL_MS: int = max(100, int(os.environ.get(
+        "WYZER_WINDOW_WATCHER_POLL_MS", "500"
+    )))
+    
+    # Maximum recent events to keep in ring buffer
+    WINDOW_WATCHER_MAX_EVENTS: int = int(os.environ.get(
+        "WYZER_WINDOW_WATCHER_MAX_EVENTS", "25"
+    ))
+    
+    # Processes to ignore (comma-separated, case-insensitive)
+    # Example: "explorer.exe,searchui.exe,shellexperiencehost.exe"
+    WINDOW_WATCHER_IGNORE_PROCESSES: List[str] = [
+        p.strip().lower() for p in
+        os.environ.get("WYZER_WINDOW_WATCHER_IGNORE_PROCESSES", "").split(",")
+        if p.strip()
+    ]
+    
+    # Title substrings to ignore (comma-separated, case-insensitive)
+    WINDOW_WATCHER_IGNORE_TITLES: List[str] = [
+        t.strip().lower() for t in
+        os.environ.get("WYZER_WINDOW_WATCHER_IGNORE_TITLES", "").split(",")
+        if t.strip()
+    ]
+    
+    # Maximum windows to close in bulk without explicit confirmation
+    WINDOW_WATCHER_MAX_BULK_CLOSE: int = int(os.environ.get(
+        "WYZER_WINDOW_WATCHER_MAX_BULK_CLOSE", "10"
+    ))
     
     @classmethod
     def get_frame_duration_ms(cls) -> float:

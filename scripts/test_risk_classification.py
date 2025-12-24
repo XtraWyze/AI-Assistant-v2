@@ -115,9 +115,17 @@ class TestToolClassification:
         """volume_control should be MEDIUM risk."""
         assert classify_tool("volume_control") == "medium"
         
-    def test_media_play_pause_is_medium(self):
-        """media_play_pause should be MEDIUM risk."""
-        assert classify_tool("media_play_pause") == "medium"
+    def test_media_play_pause_is_low(self):
+        """media_play_pause should be LOW risk (instantly reversible toggle)."""
+        assert classify_tool("media_play_pause") == "low"
+        
+    def test_media_next_is_low(self):
+        """media_next should be LOW risk (can skip back)."""
+        assert classify_tool("media_next") == "low"
+        
+    def test_media_previous_is_low(self):
+        """media_previous should be LOW risk (can skip forward)."""
+        assert classify_tool("media_previous") == "low"
         
     def test_timer_is_medium(self):
         """timer should be MEDIUM risk."""

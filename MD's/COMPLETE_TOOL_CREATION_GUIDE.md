@@ -98,6 +98,9 @@ This means:
 | `wyzer/core/orchestrator.py` | Executes tools and formats responses |
 | `wyzer/core/tool_worker_pool.py` | Pool of worker processes that execute tools |
 | `wyzer/core/brain_worker.py` | Brain process (can poll for async events) |
+| `wyzer/context/world_state.py` | In-RAM state for reference resolution (Phase 10-12) |
+| `wyzer/policy/autonomy_policy.py` | Risk assessment and confirmation logic (Phase 11) |
+| `wyzer/world/window_watcher.py` | Multi-monitor window tracking (Phase 12) |
 
 ---
 

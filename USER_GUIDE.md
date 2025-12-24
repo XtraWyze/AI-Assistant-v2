@@ -123,8 +123,7 @@ To get Wyzer's attention, just say:
 |----------|--------------|
 | "What's my system info?" | CPU, RAM, disk info |
 | "How many monitors?" | Display info |
-| "Monitor info" | Detailed screen info |
-
+| "Monitor info" | Detailed screen info || \"What app am I using?\" | Shows current app info |
 ---
 
 ## 🔗 Combine Multiple Commands!
@@ -173,6 +172,28 @@ Wyzer: "Currently sunny and 72 degrees"
 - "That's all"
 - "Stop"
 - "Never mind"
+
+---
+
+## 🛡️ Autonomy Mode (Optional)
+
+Wyzer has an optional autonomy system that can ask for confirmation before risky actions:
+
+| Mode | Description |
+|------|-------------|
+| **off** | No confirmations (default) |
+| **low** | Very careful, confirms most actions |
+| **normal** | Balanced, confirms uncertain actions |
+| **high** | Permissive, only confirms risky actions |
+
+### Enable Autonomy
+| Say This | What Happens |
+|----------|--------------|
+| "Set autonomy to normal" | Enables balanced mode |
+| "Turn off autonomy" | Disables confirmations |
+| "Why did you do that?" | Explains last decision |
+
+When enabled, Wyzer may ask: "Do you want me to close Chrome?" - just say "yes" or "no"!
 
 ---
 

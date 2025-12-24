@@ -18,6 +18,9 @@ This document defines the architectural boundaries that **must not be violated**
 | **Tools** | `wyzer/tools/` | Stateless, JSON-only | NO I/O, NO global state |
 | **Local Library** | `wyzer/local_library/` | Indexing + resolution only | NO tool logic |
 | **Memory Manager** | `wyzer/memory/` | Session + long-term memory | File-based persistence |
+| **Autonomy Policy** | `wyzer/policy/` | Risk assessment + confirmation | Deterministic, NO LLM |
+| **Window Watcher** | `wyzer/world/` | Multi-monitor window tracking | NO OCR, NO screenshots |
+| **World State** | `wyzer/context/` | In-RAM state tracking | Written only by tools |
 
 ### Multiprocess Architecture
 
@@ -66,6 +69,29 @@ This document defines the architectural boundaries that **must not be violated**
 2. **Long-Term Memory**: Disk-persisted in `wyzer/data/memory.json`
 3. **Memory Injection**: Controlled by `use_memories` flag
 4. **No Auto-Learn**: Memories only saved via explicit "remember X" commands
+
+### Autonomy Rules (Phase 11)
+
+1. **Mode OFF Default**: No confirmation prompts unless explicitly enabled
+2. **Deterministic Policy**: All decisions based on confidence + risk, NO LLM
+3. **Risk Classification**: Tools categorized as low/medium/high risk
+4. **Confirmation Flow**: High-risk actions require yes/no voice confirmation
+5. **Timeout Safety**: Pending confirmations expire after configurable timeout
+
+### Window Watcher Rules (Phase 12)
+
+1. **Metadata Only**: Track titles, processes, positions - NO content
+2. **No OCR**: Never extract text from screen
+3. **No Screenshots**: Never capture screen images
+4. **Background Thread**: Runs in dedicated thread, not blocking audio
+5. **World State Updates**: Push snapshots to WorldState for context
+
+### World State Rules
+
+1. **RAM-Only**: Never persisted to disk
+2. **Read Anywhere**: Any component can read world state
+3. **Write Deterministically**: Only tools and state updates can write
+4. **Never LLM-Written**: LLM cannot modify world state directly
 
 ---
 

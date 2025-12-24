@@ -89,14 +89,11 @@ MEDIUM_RISK_TOOLS = frozenset({
     "focus_window",
     "move_window_to_monitor",
     
-    # Audio/media controls
+    # Audio controls (volume changes can be disruptive)
     "volume_control",
     "volume_up",
     "volume_down",
     "volume_mute_toggle",
-    "media_play_pause",
-    "media_next",
-    "media_previous",
     "set_audio_output_device",
     
     # Timer
@@ -113,7 +110,7 @@ MEDIUM_RISK_TOOLS = frozenset({
     "system_storage_open",
 })
 
-# LOW RISK: Read-only tools
+# LOW RISK: Read-only tools + harmless reversible actions
 # Everything not in HIGH or MEDIUM defaults to LOW
 LOW_RISK_TOOLS = frozenset({
     # Time/info queries
@@ -130,6 +127,12 @@ LOW_RISK_TOOLS = frozenset({
     
     # List/status queries
     "system_storage_list",
+    
+    # Media playback controls (instantly reversible, non-destructive)
+    # Press play/pause again to undo, skip back to undo next/previous
+    "media_play_pause",
+    "media_next",
+    "media_previous",
 })
 
 
@@ -192,6 +195,8 @@ def classify_plan(
     
     For replay_last_action: inherits the risk of the stored last_action tool.
     
+    Phase 12: Bulk close_window (>= 3) is classified as HIGH risk.
+    
     Args:
         tool_plan: List of tool call dicts with "tool" and optional "args"
         world_state: Optional WorldState for resolving replay risk
@@ -204,6 +209,16 @@ def classify_plan(
     
     max_risk: RiskLevel = "low"
     risk_order = {"low": 0, "medium": 1, "high": 2}
+    
+    # Phase 12: Count close_window calls for bulk detection
+    close_window_count = sum(
+        1 for intent in tool_plan
+        if isinstance(intent, dict) and intent.get("tool") == "close_window"
+    )
+    
+    # Bulk close (>= 3) is HIGH risk
+    if close_window_count >= 3:
+        return "high"
     
     for intent in tool_plan:
         if not isinstance(intent, dict):

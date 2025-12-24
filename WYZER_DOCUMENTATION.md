@@ -22,7 +22,10 @@
 12. [Hybrid Router](#hybrid-router)
 13. [Memory System](#memory-system)
 14. [Interruption System](#interruption-system)
-15. [Troubleshooting](#troubleshooting)
+15. [Autonomy System](#autonomy-system)
+16. [Window Watcher](#window-watcher)
+17. [Screen Awareness](#screen-awareness)
+18. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -39,6 +42,9 @@ Wyzer is a **local voice assistant** that runs entirely on your Windows machine.
 - **Memory System**: Remember facts about you with explicit "remember X" commands
 - **Hybrid Routing**: Fast deterministic routing bypasses LLM for obvious commands
 - **Interruption System**: Cancel any process with the wake word (barge-in)
+- **Autonomy System**: Configurable risk-based action confirmation (off/low/normal/high modes)
+- **Window Watcher**: Real-time multi-monitor window awareness for intelligent context
+- **Screen Awareness**: Read-only foreground window context (no OCR, no screenshots)
 
 ### Key Principles
 
@@ -389,6 +395,12 @@ Wyzer includes a comprehensive set of tools for system control:
 | Tool | Description | Example |
 |------|-------------|---------|
 | `monitor_info` | Get connected monitor details | "Monitor info", "How many monitors?" |
+
+### Screen Awareness
+
+| Tool | Description | Example |
+|------|-------------|---------|
+| `get_window_context` | Get current foreground window info | "What app am I using?", (context for "close it") |
 
 ---
 
@@ -826,6 +838,123 @@ python run.py --no-speak-interrupt
 
 ---
 
+## Autonomy System
+
+Phase 11 adds a configurable autonomy policy that controls when Wyzer asks for confirmation before executing actions.
+
+### Autonomy Modes
+
+| Mode | Description | Risk Handling |
+|------|-------------|---------------|
+| **off** | No autonomy policy (current behavior) | All actions execute directly |
+| **low** | Very conservative | High-confidence only, always confirm high-risk |
+| **normal** | Balanced | Ask for clarification on uncertain intents |
+| **high** | More permissive | Execute most actions, confirm only high-risk |
+
+### Risk Classification
+
+Actions are classified by risk level:
+- **Low Risk**: Time, weather, system info queries
+- **Medium Risk**: Opening apps, window management
+- **High Risk**: Closing applications, file operations, system changes
+
+### Configuration
+
+**Environment Variables:**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WYZER_AUTONOMY_DEFAULT` | `off` | Default autonomy mode |
+| `WYZER_AUTONOMY_CONFIRM_SENSITIVE` | `true` | Always confirm high-risk actions |
+| `WYZER_AUTONOMY_CONFIRM_TIMEOUT_SEC` | `45.0` | Confirmation window timeout |
+| `WYZER_CONFIRMATION_GRACE_MS` | `1500` | Grace period for responses during TTS |
+
+### Confirmation Flow
+
+When autonomy is enabled and a high-risk action is detected:
+1. Wyzer asks: "Do you want me to close Chrome?"
+2. User has 45 seconds to respond "yes" or "no"
+3. Confirmed actions execute, denied actions are cancelled
+4. Expired confirmations are automatically cancelled
+
+### Voice Commands
+
+| Command | Action |
+|---------|--------|
+| "Set autonomy to low" | Switch to low mode |
+| "Set autonomy to normal" | Switch to normal mode |
+| "Set autonomy to high" | Switch to high mode |
+| "Turn off autonomy" | Disable autonomy policy |
+| "Why did you do that?" | Explain last autonomy decision |
+
+---
+
+## Window Watcher
+
+Phase 12 adds a lightweight background watcher that tracks open windows across all monitors for intelligent context awareness.
+
+### Features
+
+- **Multi-Monitor Awareness**: Tracks windows across all connected displays
+- **Real-Time Updates**: Polls every 500ms (configurable)
+- **Recent Events**: Ring buffer of recent window changes (opened, closed, moved, focused)
+- **No OCR/Screenshots**: Privacy-focused, only tracks metadata (titles, processes, positions)
+
+### What Gets Tracked
+
+| Data | Description |
+|------|-------------|
+| Window Title | Current title of each window |
+| Process Name | Application process (e.g., chrome.exe) |
+| Monitor Position | Which monitor (1, 2, 3...) the window is on |
+| Window Bounds | Position and size (x, y, width, height) |
+| Focus State | Whether the window is focused |
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WYZER_WINDOW_WATCHER_ENABLED` | `true` | Enable/disable watcher |
+| `WYZER_WINDOW_WATCHER_POLL_MS` | `500` | Poll interval (min 100ms) |
+| `WYZER_WINDOW_WATCHER_MAX_EVENTS` | `25` | Recent events buffer size |
+| `WYZER_WINDOW_WATCHER_MAX_BULK_CLOSE` | `10` | Max windows to close without confirmation |
+
+### Voice Commands
+
+| Command | Action |
+|---------|--------|
+| "What windows are open?" | List all open windows |
+| "What's on monitor 2?" | List windows on specific monitor |
+| "Close all Chrome windows" | Close multiple windows (with confirmation) |
+| "Move all Chrome to monitor 1" | Bulk window movement |
+
+---
+
+## Screen Awareness
+
+Phase 9 adds read-only screen awareness for context-aware responses.
+
+### get_window_context Tool
+
+Returns information about the current foreground window:
+- **App Name**: Process name (e.g., "chrome.exe")
+- **Window Title**: Current window title
+- **Process ID**: System PID
+
+### Privacy Principles
+
+- **NO OCR**: Text is not extracted from screenshots
+- **NO Screenshots**: Screen content is never captured
+- **NO UI Automation**: No interaction with UI elements
+- **Read-Only**: Only observes window metadata
+
+### Use Cases
+
+- "What app am I using?" → Returns current app info
+- Context for follow-up commands ("minimize this")
+- Reference resolution ("close it" → uses last active window)
+
+---
+
 ## Troubleshooting
 
 ### Common Issues
@@ -912,6 +1041,8 @@ AI-Assistant-v2/
 │   │   ├── brain_worker.py     # Brain worker process
 │   │   ├── hybrid_router.py    # Fast-path routing
 │   │   ├── multi_intent_parser.py  # Multi-command parsing
+│   │   ├── deterministic_splitter.py  # Clause splitting
+│   │   ├── reference_resolver.py     # "it"/"this" resolution
 │   │   ├── state.py            # State machine
 │   │   ├── config.py           # Configuration
 │   │   ├── followup_manager.py # Follow-up mode
@@ -921,6 +1052,21 @@ AI-Assistant-v2/
 │   ├── memory/                 # Memory system
 │   │   ├── memory_manager.py   # Session & long-term memory
 │   │   └── command_detector.py # Memory command parsing
+│   │
+│   ├── context/                # World state (Phase 10-12)
+│   │   └── world_state.py      # In-RAM state for reference resolution
+│   │
+│   ├── policy/                 # Autonomy policy (Phase 11)
+│   │   ├── autonomy_policy.py  # Risk-based action decisions
+│   │   ├── pending_confirmation.py  # Confirmation handling
+│   │   └── risk.py             # Risk classification
+│   │
+│   ├── world/                  # Window awareness (Phase 12)
+│   │   ├── window_watcher.py   # Multi-monitor window tracking
+│   │   └── diff_snapshots.py   # Window change detection
+│   │
+│   ├── vision/                 # Screen awareness (Phase 9)
+│   │   └── window_context.py   # Foreground window info
 │   │
 │   ├── tools/                  # Tool implementations
 │   │   ├── tool_base.py        # Base tool class
@@ -933,6 +1079,7 @@ AI-Assistant-v2/
 │   │   ├── media_controls.py
 │   │   ├── timer_tool.py
 │   │   ├── system_storage.py
+│   │   ├── get_window_context.py  # Phase 9 screen awareness
 │   │   └── ... (more tools)
 │   │
 │   ├── local_library/          # App/folder indexing
@@ -957,11 +1104,19 @@ AI-Assistant-v2/
 ├── scripts/                    # Test scripts
 │   ├── test_hybrid_router.py
 │   ├── test_timer_tool.py
+│   ├── test_autonomy_policy.py
+│   ├── test_window_watcher_commands.py
+│   └── ...
+│
+├── tests/                      # Unit tests
+│   ├── test_confirmation_flow.py
+│   ├── test_window_diff.py
 │   └── ...
 │
 └── MD's/                       # Additional documentation
     ├── INSTALL.md
     ├── MULTI_INTENT_COMMANDS.md
+    ├── ALL_FLAGS.md
     └── ...
 ```
 
@@ -999,10 +1154,14 @@ python run.py --stream-tts       # Streaming TTS (speak while generating)
 | "Scan devices" | Deep scan drives |
 | "List drives" | Show drive info |
 | "Open D drive" | Open in Explorer |
+| "What windows are open?" | List all windows |
+| "What's on monitor 2?" | Windows on specific monitor |
 | "Remember my name is John" | Save fact to memory |
 | "What do you remember?" | List memories |
 | "Forget that" | Delete last memory |
 | "Close Chrome open Spotify" | Multi-intent command |
+| "Set autonomy to normal" | Enable balanced autonomy |
+| "Why did you do that?" | Explain last decision |
 
 ### Keyboard Controls
 | Key | Action |

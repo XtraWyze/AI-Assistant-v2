@@ -256,7 +256,8 @@ def looks_multi_intent(text: str) -> bool:
     # Check for implicit verb boundaries: "verb1 target1 verb2 target2"
     # E.g., "close chrome open spotify" should be detected as 2 intents
     # Verbs that commonly start new intents (from multi_intent_parser.py)
-    action_verbs = r"(?:open|launch|start|close|quit|exit|minimize|shrink|maximize|fullscreen|expand|move|send|play|pause|resume|mute|unmute|scan)"
+    # Use word boundaries to avoid matching substrings like "play" in "playback"
+    action_verbs = r"\b(?:open|launch|start|close|quit|exit|minimize|shrink|maximize|fullscreen|expand|move|send|play|pause|resume|mute|unmute|scan)\b"
     verb_matches = list(re.finditer(action_verbs, tl, re.IGNORECASE))
     if len(verb_matches) >= 2:
         return True
@@ -1230,7 +1231,17 @@ def _decide_single_clause(text: str) -> HybridDecision:
             confidence=0.9,
         )
 
-    if re.search(r"\b(?:play\s*pause|play/pause|pause|play|resume)\b", tl):
+    # High-confidence media play/pause patterns (unambiguous commands)
+    if re.search(r"\b(?:hit\s+play|hit\s+pause|press\s+play|press\s+pause|play\s*pause|play/pause|play\s+(?:the\s+)?music|play\s+(?:the\s+)?media|play\s+(?:the\s+)?video|pause\s+(?:it|this|that|the\s+music|music|media|video)|resume\s+(?:it|this|that|the\s+music|music|media|video|playback)|unpause)\b", tl):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "media_play_pause", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.92,
+        )
+
+    # Lower-confidence bare "play"/"pause"/"resume" (could be ambiguous)
+    if re.search(r"\b(?:pause|play|resume)\b", tl):
         return HybridDecision(
             mode="tool_plan",
             intents=[{"tool": "media_play_pause", "args": {}, "continue_on_error": False}],

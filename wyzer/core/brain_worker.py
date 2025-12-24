@@ -521,6 +521,29 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
     from wyzer.core import orchestrator
     orchestrator.init_tool_pool()
 
+    # =========================================================================
+    # PHASE 12: Initialize Window Watcher (Multi-Monitor Awareness)
+    # =========================================================================
+    window_watcher = None
+    if getattr(Config, "WINDOW_WATCHER_ENABLED", True):
+        try:
+            from wyzer.world.window_watcher import init_window_watcher
+            window_watcher = init_window_watcher()
+            if window_watcher:
+                logger.info(
+                    f"[WORLD] Window Watcher enabled "
+                    f"(poll_ms={getattr(Config, 'WINDOW_WATCHER_POLL_MS', 500)})"
+                )
+        except Exception as e:
+            logger.warning(f"[WORLD] Failed to init Window Watcher: {e}")
+            window_watcher = None
+    else:
+        logger.info("[WORLD] Window Watcher disabled")
+    
+    # Track last watcher tick time
+    last_watcher_tick = time.time()
+    watcher_poll_sec = getattr(Config, "WINDOW_WATCHER_POLL_MS", 500) / 1000.0
+
     interrupt_generation = 0
     last_job_id = "none"
     last_heartbeat = time.time()
@@ -552,6 +575,30 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             )
             last_heartbeat = current_time
         
+        # =====================================================================
+        # PHASE 12: Window Watcher Tick (non-blocking poll)
+        # =====================================================================
+        # Update window state periodically (aligned to poll_ms).
+        # This runs in the main loop to avoid needing a separate thread.
+        if window_watcher and (current_time - last_watcher_tick) >= watcher_poll_sec:
+            try:
+                snapshot, events = window_watcher.tick()
+                
+                # Update world_state with watcher data
+                if snapshot or events:
+                    from wyzer.context.world_state import update_window_watcher_state
+                    update_window_watcher_state(
+                        open_windows=window_watcher.get_latest_snapshot(),
+                        windows_by_monitor=window_watcher.get_windows_by_monitor(),
+                        focused_window=window_watcher.get_focused_window(),
+                        recent_events=window_watcher.get_recent_events(),
+                        detected_monitor_count=window_watcher.get_monitor_count(),
+                    )
+            except Exception as e:
+                # Don't let watcher errors crash the brain
+                pass
+            last_watcher_tick = current_time
+        
         # Check if a timer has finished and announce it
         if check_timer_finished():
             logger.info("[TIMER] Timer finished, announcing alarm")
@@ -580,6 +627,14 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                     stop_server(force=True)  # Force stop any llama-server on Wyzer shutdown
                 except Exception as e:
                     logger.warning(f"[LLAMACPP] Error stopping server: {e}")
+            
+            # Stop window watcher if running (Phase 12)
+            if window_watcher:
+                try:
+                    from wyzer.world.window_watcher import stop_window_watcher
+                    stop_window_watcher()
+                except Exception:
+                    pass
             
             return
 

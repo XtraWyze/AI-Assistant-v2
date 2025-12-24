@@ -147,6 +147,13 @@ class WorldState:
         autonomy_mode: Current autonomy mode (off|low|normal|high)
         pending_confirmation: Pending high-risk confirmation, if any
         last_autonomy_decision: Last autonomy policy decision for "why" command
+        
+        # Phase 12 - Window Watcher fields (Multi-Monitor Awareness)
+        open_windows: Snapshot of all open windows
+        windows_by_monitor: Windows grouped by monitor index (1..N)
+        focused_window: Currently focused window record
+        recent_window_events: Ring buffer of recent changes
+        last_window_snapshot_ts: Timestamp of last window snapshot
     """
     last_tool: Optional[str] = None
     last_target: Optional[str] = None
@@ -161,6 +168,14 @@ class WorldState:
     pending_confirmation: Optional[PendingConfirmation] = None
     last_autonomy_decision: Optional[LastAutonomyDecision] = None
     
+    # Phase 12 - Window Watcher fields
+    open_windows: List[Dict[str, Any]] = field(default_factory=list)
+    windows_by_monitor: Dict[int, List[Dict[str, Any]]] = field(default_factory=dict)
+    focused_window: Optional[Dict[str, Any]] = None
+    recent_window_events: List[Dict[str, Any]] = field(default_factory=list)
+    last_window_snapshot_ts: float = 0.0
+    detected_monitor_count: int = 1  # Actual number of monitors detected by WindowWatcher
+    
     def clear(self) -> None:
         """Reset all state fields."""
         self.last_tool = None
@@ -173,6 +188,13 @@ class WorldState:
         # Don't reset autonomy_mode on clear (user preference)
         self.pending_confirmation = None
         self.last_autonomy_decision = None
+        # Phase 12: Clear window watcher state
+        self.open_windows = []
+        self.windows_by_monitor = {}
+        self.focused_window = None
+        self.recent_window_events = []
+        self.last_window_snapshot_ts = 0.0
+        self.detected_monitor_count = 1
     
     def has_last_action(self) -> bool:
         """Check if there's a valid last action for reference."""
@@ -787,3 +809,117 @@ def get_last_autonomy_decision() -> Optional[LastAutonomyDecision]:
 def has_pending_confirmation() -> bool:
     """Check if there's a valid (non-expired) pending confirmation."""
     return get_pending_confirmation() is not None
+
+
+# ============================================================================
+# PHASE 12: WINDOW WATCHER STATE FUNCTIONS
+# ============================================================================
+
+def update_window_watcher_state(
+    open_windows: List[Dict[str, Any]],
+    windows_by_monitor: Dict[int, List[Dict[str, Any]]],
+    focused_window: Optional[Dict[str, Any]],
+    recent_events: List[Dict[str, Any]],
+    detected_monitor_count: int = 1,
+) -> None:
+    """
+    Update world state with window watcher data.
+    
+    Called by the window watcher after each poll cycle.
+    
+    Args:
+        open_windows: Snapshot of all open windows
+        windows_by_monitor: Windows grouped by monitor index (1..N)
+        focused_window: Currently focused window record
+        recent_events: Recent change events (from ring buffer)
+        detected_monitor_count: Number of monitors detected by WindowWatcher
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        ws.open_windows = list(open_windows)
+        ws.windows_by_monitor = {k: list(v) for k, v in windows_by_monitor.items()}
+        ws.focused_window = dict(focused_window) if focused_window else None
+        ws.recent_window_events = list(recent_events)
+        ws.last_window_snapshot_ts = time.time()
+        ws.detected_monitor_count = max(1, detected_monitor_count)
+        
+        # Also update active_app and active_window_title for Phase 9 compatibility
+        if focused_window:
+            ws.active_app = focused_window.get("process")
+            ws.active_window_title = focused_window.get("title")
+
+
+def get_windows_on_monitor(monitor: int) -> List[Dict[str, Any]]:
+    """
+    Get windows on a specific monitor.
+    
+    Args:
+        monitor: 1-based monitor index
+        
+    Returns:
+        List of window records on that monitor
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        return list(ws.windows_by_monitor.get(monitor, []))
+
+
+def get_focused_window_info() -> Optional[Dict[str, Any]]:
+    """
+    Get the currently focused window info.
+    
+    Returns:
+        Dict with title, process, monitor, etc. or None
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        return dict(ws.focused_window) if ws.focused_window else None
+
+
+def get_recent_window_events(event_type: Optional[str] = None, limit: int = 5) -> List[Dict[str, Any]]:
+    """
+    Get recent window events, optionally filtered by type.
+    
+    Args:
+        event_type: Filter by event type (opened/closed/moved/title_changed/focus_changed)
+        limit: Maximum number of events to return
+        
+    Returns:
+        List of event records (newest last)
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        events = list(ws.recent_window_events)
+    
+    if event_type:
+        events = [e for e in events if e.get("type") == event_type]
+    
+    # Return last N events (newest)
+    return events[-limit:] if len(events) > limit else events
+
+
+def get_all_open_windows() -> List[Dict[str, Any]]:
+    """
+    Get all open windows.
+    
+    Returns:
+        List of all window records
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        return list(ws.open_windows)
+
+
+def get_monitor_count() -> int:
+    """
+    Get the number of detected monitors.
+    
+    Returns the actual number of monitors detected by the WindowWatcher,
+    not just the number of monitors that have windows on them.
+    
+    Returns:
+        Number of monitors (at least 1)
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        return max(1, ws.detected_monitor_count)

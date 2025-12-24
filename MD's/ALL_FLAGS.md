@@ -245,6 +245,26 @@ All environment variables are prefixed with `WYZER_`.
 
 **Priority Order:** CLI flag (`--no-memories`) > env var (`WYZER_USE_MEMORIES`) > config default (`true`)
 
+### Autonomy Settings (Phase 11)
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `WYZER_AUTONOMY_DEFAULT` | string | `off` | Default autonomy mode: `off`, `low`, `normal`, `high` |
+| `WYZER_AUTONOMY_CONFIRM_SENSITIVE` | bool | `true` | Always confirm high-risk actions even in high mode |
+| `WYZER_AUTONOMY_CONFIRM_TIMEOUT_SEC` | float | `45.0` | Confirmation window timeout in seconds |
+| `WYZER_CONFIRMATION_GRACE_MS` | int | `1500` | Grace period for responses during TTS playback |
+
+### Window Watcher Settings (Phase 12)
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `WYZER_WINDOW_WATCHER_ENABLED` | bool | `true` | Enable/disable window watcher |
+| `WYZER_WINDOW_WATCHER_POLL_MS` | int | `500` | Poll interval in milliseconds (min 100ms) |
+| `WYZER_WINDOW_WATCHER_MAX_EVENTS` | int | `25` | Maximum recent events in ring buffer |
+| `WYZER_WINDOW_WATCHER_IGNORE_PROCESSES` | string | *(empty)* | Comma-separated processes to ignore |
+| `WYZER_WINDOW_WATCHER_IGNORE_TITLES` | string | *(empty)* | Comma-separated title substrings to ignore |
+| `WYZER_WINDOW_WATCHER_MAX_BULK_CLOSE` | int | `10` | Max windows to close without confirmation |
+
 ---
 
 ## Usage Examples
@@ -263,6 +283,17 @@ python run.py --llm llamacpp            # Explicit llama.cpp mode (default)
 python run.py --llamacpp-model ./wyzer/llm_models/custom.gguf  # Custom model
 python run.py --llamacpp-ctx 4096       # Larger context window
 python run.py --llamacpp-threads 8      # Specific thread count
+```
+
+### Autonomy Configuration
+```bash
+# Enable balanced autonomy mode (asks for confirmation on uncertain actions)
+set WYZER_AUTONOMY_DEFAULT=normal
+python run.py
+
+# Enable high autonomy mode (executes most actions, confirms only risky)
+set WYZER_AUTONOMY_DEFAULT=high
+python run.py
 ```
 
 ### Memory Injection
