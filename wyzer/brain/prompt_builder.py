@@ -225,7 +225,8 @@ NEVER invent tools. Stories and creative content need NO tools - reply directly.
 # ============================================================================
 # Ultra-minimal prompt for snappy voice Q&A - keeps est_tokens <= 150 for simple queries
 # Phase 11.5: Added anti-hallucination reminder
-FASTLANE_SYSTEM_PROMPT = """You are Wyzer. Answer in one short sentence. Say "I don't know" if uncertain. No extra commentary."""
+# Phase 12: Tightened for identity queries - no fluff, direct answers only
+FASTLANE_SYSTEM_PROMPT = """You are Wyzer. Answer in one short sentence. Say "I don't know" if uncertain. No extra commentary. For identity questions, output ONLY the direct answer with zero justification."""
 
 
 # ============================================================================

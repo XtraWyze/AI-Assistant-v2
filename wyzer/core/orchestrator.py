@@ -953,6 +953,40 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                     "meta": {"reply_only": True, "reason": reason, "no_ollama": True},
                 }
             
+            # ================================================================
+            # PHASE 12: META-QUESTION HANDLER (deterministic, no LLM)
+            # ================================================================
+            # Check if this is a meta-question about Wyzer itself.
+            # If yes, return deterministic answer to avoid hallucinations.
+            from wyzer.policy.meta_answer import maybe_handle_meta_question
+            
+            ws = get_world_state()
+            # Check if last response was memory-based or identity
+            was_memory_based = False  # TODO: track this in execution_summary
+            was_identity_query = False  # TODO: track this in execution_summary
+            
+            handled, meta_reply = maybe_handle_meta_question(
+                user_text=text,
+                last_execution_summary=None,  # No tool execution in reply-only path
+                was_memory_based=was_memory_based,
+                was_identity_query=was_identity_query,
+            )
+            
+            if handled:
+                end_time = time.perf_counter()
+                latency_ms = int((end_time - start_time) * 1000)
+                
+                # Phase 10: Mark as reply-only so "do that again" doesn't repeat chat
+                from wyzer.context.world_state import set_last_llm_reply_only
+                set_last_llm_reply_only(True)
+                
+                return {
+                    "reply": meta_reply,
+                    "latency_ms": latency_ms,
+                    "meta": {"reply_only": True, "reason": "meta_deterministic", "original_text": original_text},
+                }
+            # ================================================================
+            
             # Use reply-only LLM call (no tools)
             llm_response = _call_llm_reply_only(text)
             reply = llm_response.get("reply", "")
@@ -1425,6 +1459,42 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 },
             }
         
+        # ====================================================================
+        # PHASE 12: SAFETY GATE FOR UNGROUNDED META-QUESTIONS
+        # ====================================================================
+        # If this is a meta-question about Wyzer and no tools were executed,
+        # prefer deterministic answer over LLM (reason=normal) to avoid
+        # hallucinations.
+        from wyzer.policy.meta_answer import maybe_handle_meta_question
+        
+        ws = get_world_state()
+        # Check if last turn had tool execution
+        last_had_tools = ws.last_tool is not None
+        
+        # Only apply safety gate if no recent tool execution
+        if not last_had_tools:
+            handled, meta_reply = maybe_handle_meta_question(
+                user_text=text,
+                last_execution_summary=None,
+                was_memory_based=False,
+                was_identity_query=False,
+            )
+            
+            if handled:
+                end_time = time.perf_counter()
+                latency_ms = int((end_time - start_time) * 1000)
+                
+                # Phase 10: Mark as reply-only so "do that again" doesn't repeat chat
+                from wyzer.context.world_state import set_last_llm_reply_only
+                set_last_llm_reply_only(True)
+                
+                return {
+                    "reply": meta_reply,
+                    "latency_ms": latency_ms,
+                    "meta": {"reply_only": True, "reason": "meta_deterministic_safety_gate", "original_text": original_text},
+                }
+        # ====================================================================
+        
         # First LLM call: interpret user intent(s)
         llm_response = _call_llm(text, registry)
         
@@ -1440,6 +1510,37 @@ def handle_user_text(text: str) -> Dict[str, Any]:
 
         # If we dropped all intents and we have no usable reply, force a reply-only call.
         if not intent_plan.intents and not (intent_plan.reply or llm_response.get("reply", "")).strip():
+            # ================================================================
+            # PHASE 12: META-QUESTION HANDLER (deterministic, no LLM)
+            # ================================================================
+            # Check if this is a meta-question about Wyzer itself.
+            # If yes, return deterministic answer to avoid hallucinations.
+            from wyzer.policy.meta_answer import maybe_handle_meta_question
+            
+            ws = get_world_state()
+            # No execution summary in this path (we filtered out all intents)
+            handled, meta_reply = maybe_handle_meta_question(
+                user_text=text,
+                last_execution_summary=None,
+                was_memory_based=False,
+                was_identity_query=False,
+            )
+            
+            if handled:
+                end_time = time.perf_counter()
+                latency_ms = int((end_time - start_time) * 1000)
+                
+                # Phase 10: Mark as reply-only so "do that again" doesn't repeat chat
+                from wyzer.context.world_state import set_last_llm_reply_only
+                set_last_llm_reply_only(True)
+                
+                return {
+                    "reply": meta_reply,
+                    "latency_ms": latency_ms,
+                    "meta": {"reply_only": True, "reason": "meta_deterministic", "original_text": original_text},
+                }
+            # ================================================================
+            
             reply_only = _call_llm_reply_only(text)
             intent_plan.reply = reply_only.get("reply", "")
         
@@ -1678,6 +1779,46 @@ def handle_user_text_streaming(
         return result
     
     logger.info("[STREAM_TTS] Using streaming TTS path")
+    
+    # ========================================================================
+    # PHASE 12: META-QUESTION HANDLER (deterministic, no LLM)
+    # ========================================================================
+    # Check if this is a meta-question about Wyzer itself.
+    # If yes, return deterministic answer to avoid hallucinations.
+    # This runs BEFORE the LLM prompt is built.
+    from wyzer.policy.meta_answer import maybe_handle_meta_question
+    from wyzer.context.world_state import get_world_state, set_last_llm_reply_only
+    
+    ws = get_world_state()
+    # Check if last turn had tool execution (for context-aware answers)
+    last_execution_summary = None
+    if ws.last_tool is not None:
+        last_execution_summary = {"ran": [{"tool": ws.last_tool, "ok": True}]}
+    
+    handled, meta_reply = maybe_handle_meta_question(
+        user_text=text,
+        last_execution_summary=last_execution_summary,
+        was_memory_based=False,
+        was_identity_query=False,
+    )
+    
+    if handled:
+        end_time = time.perf_counter()
+        latency_ms = int((end_time - start_time) * 1000)
+        
+        # NOTE: Do NOT call on_segment here - the caller (brain_worker) will
+        # handle TTS for the returned reply. Calling on_segment would cause
+        # double synthesis.
+        
+        # Mark as reply-only so "do that again" doesn't repeat chat
+        set_last_llm_reply_only(True)
+        
+        return {
+            "reply": meta_reply,
+            "latency_ms": latency_ms,
+            "meta": {"reply_only": True, "reason": "meta_deterministic_streaming", "streamed": False},
+        }
+    # ========================================================================
     
     try:
         # Build reply-only prompt (no JSON, plain text output for streaming TTS)
