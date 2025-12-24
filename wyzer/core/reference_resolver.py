@@ -44,9 +44,9 @@ _OPEN_IT_RE = re.compile(
     re.IGNORECASE
 )
 
-# "minimize it", "maximize it", "focus on it"
+# "minimize it", "maximize it", "focus on it", "full screen it"
 _WINDOW_ACTION_IT_RE = re.compile(
-    r"^(?:minimize|maximise|maximize|focus(?:\s+on)?|switch\s+to)\s+(?:it|that|this|the\s+window)\.?$",
+    r"^(?:minimize|minimise|maximise|maximize|fullscreen|full\s+screen|expand|focus(?:\s+on)?|switch\s+to)\s+(?:it|that|this|the\s+window)\.?$",
     re.IGNORECASE
 )
 
@@ -836,9 +836,9 @@ _WORD_TO_DIGIT = {
 _PRONOUN_PATTERNS = {"it", "that", "this", "the app", "the window", "the application", "that one", "this one"}
 
 # Pattern: pronoun-based action commands that need tool execution
-# Examples: "close it", "close that", "minimize it", "maximize that", "shut it", "kill that"
+# Examples: "close it", "close that", "minimize it", "maximize that", "shut it", "kill that", "full screen it"
 _PRONOUN_ACTION_RE = re.compile(
-    r"^(?:close|shut|kill|quit|exit|minimize|maximize|focus(?:\s+on)?)\s+"
+    r"^(?:close|shut|kill|quit|exit|minimize|minimise|maximize|maximise|fullscreen|full\s+screen|expand|focus(?:\s+on)?)\s+"
     r"(?:it|that|this|the\s+(?:app|window|application))\.?$",
     re.IGNORECASE
 )
@@ -861,6 +861,76 @@ def is_move_it_to_monitor_request(text: str) -> bool:
 def is_pronoun_action_request(text: str) -> bool:
     """Check if text is a pronoun-based action like 'close it', 'minimize that'."""
     return bool(_PRONOUN_ACTION_RE.match(text.strip()))
+
+
+# Pattern for "fullscreen it", "maximize it", "minimize it" etc.
+_WINDOW_ACTION_IT_PATTERN = re.compile(
+    r"^(?P<action>minimize|minimise|maximize|maximise|fullscreen|full\s+screen|expand)\s+"
+    r"(?:it|that|this|the\s+window)\.?$",
+    re.IGNORECASE
+)
+
+
+def is_window_action_it_request(text: str) -> bool:
+    """Check if text matches a window action with pronoun like 'fullscreen it', 'maximize it'."""
+    return bool(_WINDOW_ACTION_IT_PATTERN.match(text.strip()))
+
+
+def resolve_window_action_it(
+    text: str,
+    ws: Optional[WorldState] = None,
+) -> Tuple[Optional[dict], Optional[str]]:
+    """
+    Resolve "fullscreen it" / "maximize it" / "minimize it" to concrete tool call.
+    
+    Args:
+        text: Text like "fullscreen it" or "maximize this"
+        ws: WorldState instance
+        
+    Returns:
+        Tuple of (intent_dict, reason) or (None, None) if not matched
+        intent_dict has keys: tool, args (with title or process)
+    """
+    if ws is None:
+        ws = get_world_state()
+    
+    logger = get_logger()
+    
+    match = _WINDOW_ACTION_IT_PATTERN.match(text.strip())
+    if not match:
+        return None, None
+    
+    action = match.group("action").lower().replace(" ", "")  # normalize "full screen" -> "fullscreen"
+    logger.debug(f"[REF] detected pattern=window_action_it action=\"{action}\" text=\"{text}\"")
+    
+    # Map action to tool
+    if action in ("minimize", "minimise"):
+        tool = "minimize_window"
+    elif action in ("maximize", "maximise", "fullscreen", "expand"):
+        tool = "maximize_window"
+    else:
+        return None, None
+    
+    # Resolve the window target
+    resolved_target, reason = resolve_pronoun_target(text, ws)
+    
+    if not resolved_target:
+        # Try to use focused window
+        if ws.focused_window:
+            resolved_target = ws.focused_window.get("process") or ws.focused_window.get("title")
+        elif ws.last_active_window:
+            resolved_target = ws.last_active_window.get("app_name")
+    
+    if not resolved_target:
+        return None, "Which window do you want to modify? I can't determine the target."
+    
+    args = {
+        "title": resolved_target,
+        "_display_name": resolved_target,  # For reply formatting
+    }
+    action_name = "Minimizing" if tool == "minimize_window" else "Maximizing"
+    logger.debug(f"[REF] resolved target={resolved_target} tool={tool}")
+    return {"tool": tool, "args": args}, f"{action_name} {resolved_target}"
 
 
 def resolve_pronoun_target(

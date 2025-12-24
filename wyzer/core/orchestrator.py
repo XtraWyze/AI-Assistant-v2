@@ -1086,56 +1086,145 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                     if leftover_text and all_intents_succeeded:
                         # First, check if leftover matches a tool pattern (e.g., "move it to screen 1")
                         # Re-route through hybrid router instead of just generating LLM reply
-                        from wyzer.core.reference_resolver import is_move_it_to_monitor_request, resolve_move_it_to_monitor
+                        from wyzer.core.reference_resolver import (
+                            is_move_it_to_monitor_request, resolve_move_it_to_monitor,
+                            is_window_action_it_request, resolve_window_action_it
+                        )
                         from wyzer.context.world_state import get_world_state
                         
                         leftover_handled = False
+                        leftover_parts_handled = []
                         
-                        # Check for "move it to monitor/screen X" pattern
-                        if is_move_it_to_monitor_request(leftover_text):
-                            move_args, move_reason = resolve_move_it_to_monitor(leftover_text, get_world_state())
-                            if move_args is not None:
-                                logger.info(f'[HYBRID] Leftover is move_window: process={move_args.get("process")} monitor={move_args.get("monitor")}')
-                                
-                                # Check if we just opened an app - if so, the window may not be visible yet
-                                # Add retry logic with small delays to wait for the window to appear
-                                # executed_intents contains Intent objects with .tool attribute
-                                last_tool = executed_intents[0].tool if executed_intents else None
-                                app_opening_tools = {"open_target", "open_app", "launch_app"}
-                                max_retries = 3 if last_tool in app_opening_tools else 1
-                                retry_delay_ms = 300  # 300ms between retries
-                                
-                                try:
-                                    intent = {"tool": "move_window_to_monitor", "args": move_args}
-                                    leftover_summary = None
+                        # Split leftover by comma or "and" to handle multiple pronoun commands
+                        # e.g., "move it to monitor 2, full screen it" or "move it to monitor 2 and full screen it"
+                        import re as _re
+                        leftover_parts = _re.split(r'\s*,\s*|\s+and\s+', leftover_text.strip())
+                        leftover_parts = [p.strip() for p in leftover_parts if p.strip()]
+                        
+                        # Check if we just opened an app - if so, the window may not be visible yet
+                        # executed_intents contains Intent objects with .tool attribute
+                        last_tool = executed_intents[0].tool if executed_intents else None
+                        app_opening_tools = {"open_target", "open_app", "launch_app"}
+                        max_retries = 3 if last_tool in app_opening_tools else 1
+                        retry_delay_ms = 300  # 300ms between retries
+                        
+                        # IMPORTANT: Capture the resolved target from the main intent BEFORE processing leftovers.
+                        # All leftover parts (e.g., "move it", "full screen it") refer to the SAME target.
+                        # If we don't capture this, subsequent leftover parts may resolve "it" to the wrong
+                        # app because intermediate tool executions (like move_window_to_monitor) update
+                        # last_action but are not focus-changing tools.
+                        ws = get_world_state()
+                        original_resolved_target = None
+                        if ws.last_action and ws.last_action.resolved:
+                            # Extract target from the resolved dict (could be 'to_app', 'app', 'matched_name', etc.)
+                            resolved = ws.last_action.resolved
+                            original_resolved_target = (
+                                resolved.get("to_app") or 
+                                resolved.get("app") or 
+                                resolved.get("matched_name") or 
+                                resolved.get("name") or
+                                resolved.get("process")
+                            )
+                            logger.debug(f'[HYBRID] Captured original target for leftovers: {original_resolved_target}')
+                        
+                        for part_idx, leftover_part in enumerate(leftover_parts):
+                            part_handled = False
+                            
+                            # Check for "move it to monitor/screen X" pattern
+                            if is_move_it_to_monitor_request(leftover_part):
+                                move_args, move_reason = resolve_move_it_to_monitor(leftover_part, ws)
+                                if move_args is not None:
+                                    # Override with captured target if available (for chained commands)
+                                    if original_resolved_target and move_args.get("process") != original_resolved_target:
+                                        logger.debug(f'[HYBRID] Overriding resolved target {move_args.get("process")} with original {original_resolved_target}')
+                                        move_args["process"] = original_resolved_target
+                                        move_args["_display_name"] = original_resolved_target
+                                    logger.info(f'[HYBRID] Leftover part {part_idx + 1} is move_window: process={move_args.get("process")} monitor={move_args.get("monitor")}')
                                     
-                                    for attempt in range(max_retries):
-                                        if attempt > 0:
-                                            time.sleep(retry_delay_ms / 1000.0)
-                                            logger.debug(f'[HYBRID] Retry {attempt + 1}/{max_retries} for move_window after app open')
+                                    try:
+                                        intent = {"tool": "move_window_to_monitor", "args": move_args}
+                                        leftover_summary = None
                                         
-                                        leftover_summary, leftover_intents = execute_tool_plan([intent], registry)
-                                        if leftover_summary.ran and leftover_summary.ran[0].ok:
-                                            break  # Success, exit retry loop
+                                        for attempt in range(max_retries):
+                                            if attempt > 0:
+                                                time.sleep(retry_delay_ms / 1000.0)
+                                                logger.debug(f'[HYBRID] Retry {attempt + 1}/{max_retries} for move_window after app open')
+                                            
+                                            leftover_summary, leftover_intents = execute_tool_plan([intent], registry)
+                                            if leftover_summary.ran and leftover_summary.ran[0].ok:
+                                                break  # Success, exit retry loop
+                                            
+                                            # Check if error is window_not_found - only retry for that
+                                            error = leftover_summary.ran[0].error if leftover_summary.ran else None
+                                            if not error or error.get("type") != "window_not_found":
+                                                break  # Different error, don't retry
                                         
-                                        # Check if error is window_not_found - only retry for that
-                                        error = leftover_summary.ran[0].error if leftover_summary.ran else None
-                                        if not error or error.get("type") != "window_not_found":
-                                            break  # Different error, don't retry
+                                        if leftover_summary and leftover_summary.ran and leftover_summary.ran[0].ok:
+                                            target_name = move_args.get("_display_name") or move_args.get("process") or "window"
+                                            monitor = move_args.get("monitor", 2)
+                                            leftover_parts_handled.append(f"Moved {target_name} to monitor {monitor}.")
+                                            part_handled = True
+                                            # Merge execution summaries
+                                            execution_summary.ran.extend(leftover_summary.ran)
+                                        else:
+                                            error = leftover_summary.ran[0].error if leftover_summary and leftover_summary.ran else None
+                                            leftover_parts_handled.append(_tool_error_to_speech(error, "move_window_to_monitor", move_args))
+                                            part_handled = True
+                                    except Exception as e:
+                                        logger.warning(f"[HYBRID] Leftover move_window failed: {e}")
+                            
+                            # Check for "fullscreen it", "maximize it", "minimize it" patterns
+                            elif is_window_action_it_request(leftover_part):
+                                intent_dict, action_reason = resolve_window_action_it(leftover_part, ws)
+                                if intent_dict is not None:
+                                    tool_name = intent_dict.get("tool", "")
+                                    args = intent_dict.get("args", {})
+                                    # Override with captured target if available (for chained commands)
+                                    if original_resolved_target and args.get("title") != original_resolved_target:
+                                        logger.debug(f'[HYBRID] Overriding resolved target {args.get("title")} with original {original_resolved_target}')
+                                        args["title"] = original_resolved_target
+                                        args["_display_name"] = original_resolved_target
+                                    logger.info(f'[HYBRID] Leftover part {part_idx + 1} is {tool_name}: title={args.get("title")}')
                                     
-                                    if leftover_summary and leftover_summary.ran and leftover_summary.ran[0].ok:
-                                        target_name = move_args.get("_display_name") or move_args.get("process") or "window"
-                                        monitor = move_args.get("monitor", 2)
-                                        leftover_llm_reply = f"Moved {target_name} to monitor {monitor}."
-                                        leftover_handled = True
-                                        # Merge execution summaries
-                                        execution_summary.ran.extend(leftover_summary.ran)
-                                    else:
-                                        error = leftover_summary.ran[0].error if leftover_summary and leftover_summary.ran else None
-                                        leftover_llm_reply = _tool_error_to_speech(error, "move_window_to_monitor", move_args)
-                                        leftover_handled = True
-                                except Exception as e:
-                                    logger.warning(f"[HYBRID] Leftover move_window failed: {e}")
+                                    try:
+                                        leftover_summary = None
+                                        
+                                        for attempt in range(max_retries):
+                                            if attempt > 0:
+                                                time.sleep(retry_delay_ms / 1000.0)
+                                                logger.debug(f'[HYBRID] Retry {attempt + 1}/{max_retries} for {tool_name} after app open')
+                                            
+                                            leftover_summary, leftover_intents = execute_tool_plan([intent_dict], registry)
+                                            if leftover_summary.ran and leftover_summary.ran[0].ok:
+                                                break  # Success, exit retry loop
+                                            
+                                            # Check if error is window_not_found - only retry for that
+                                            error = leftover_summary.ran[0].error if leftover_summary.ran else None
+                                            if not error or error.get("type") != "window_not_found":
+                                                break  # Different error, don't retry
+                                        
+                                        if leftover_summary and leftover_summary.ran and leftover_summary.ran[0].ok:
+                                            target_name = args.get("_display_name") or args.get("title") or "window"
+                                            action_verb = "Maximized" if tool_name == "maximize_window" else "Minimized"
+                                            leftover_parts_handled.append(f"{action_verb} {target_name}.")
+                                            part_handled = True
+                                            # Merge execution summaries
+                                            execution_summary.ran.extend(leftover_summary.ran)
+                                        else:
+                                            error = leftover_summary.ran[0].error if leftover_summary and leftover_summary.ran else None
+                                            leftover_parts_handled.append(_tool_error_to_speech(error, tool_name, args))
+                                            part_handled = True
+                                    except Exception as e:
+                                        logger.warning(f"[HYBRID] Leftover {tool_name} failed: {e}")
+                            
+                            if part_handled:
+                                leftover_handled = True
+                                # After first window operation succeeds, reduce retries for subsequent ones
+                                max_retries = 1
+                        
+                        # Combine all handled parts into the reply
+                        if leftover_parts_handled:
+                            leftover_llm_reply = " ".join(leftover_parts_handled)
                         
                         # If not a recognized tool pattern and LLM is available, use LLM
                         if not leftover_handled and not getattr(Config, "NO_OLLAMA", False):

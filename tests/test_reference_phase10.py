@@ -42,6 +42,8 @@ from wyzer.core.reference_resolver import (
     is_replay_request,
     is_other_one_request,
     has_unresolved_pronoun,
+    is_window_action_it_request,
+    resolve_window_action_it,
     REPLAY_LAST_ACTION_SENTINEL,
 )
 
@@ -1080,6 +1082,84 @@ class TestResolvedInfoExtraction:
         assert ws.last_action is not None
         assert ws.last_action.resolved is not None
         assert ws.last_action.resolved.get("process") == "Discord.exe"
+
+
+class TestWindowActionItPatterns:
+    """Tests for 'fullscreen it', 'maximize it', 'minimize it' pattern recognition and resolution."""
+
+    def setup_method(self):
+        """Reset world state before each test."""
+        clear_world_state()
+
+    def test_is_window_action_it_request_fullscreen(self):
+        """'fullscreen it' matches the pattern."""
+        assert is_window_action_it_request("fullscreen it") is True
+        assert is_window_action_it_request("fullscreen this") is True
+        assert is_window_action_it_request("fullscreen that") is True
+        assert is_window_action_it_request("fullscreen the window") is True
+
+    def test_is_window_action_it_request_full_screen(self):
+        """'full screen it' (two words) matches the pattern."""
+        assert is_window_action_it_request("full screen it") is True
+        assert is_window_action_it_request("full screen this") is True
+        assert is_window_action_it_request("FULL SCREEN IT") is True  # Case insensitive
+
+    def test_is_window_action_it_request_maximize(self):
+        """'maximize it' matches the pattern."""
+        assert is_window_action_it_request("maximize it") is True
+        assert is_window_action_it_request("maximise it") is True  # British spelling
+        assert is_window_action_it_request("expand it") is True
+
+    def test_is_window_action_it_request_minimize(self):
+        """'minimize it' matches the pattern."""
+        assert is_window_action_it_request("minimize it") is True
+        assert is_window_action_it_request("minimise it") is True  # British spelling
+
+    def test_is_window_action_it_request_no_match(self):
+        """Non-matching patterns return False."""
+        assert is_window_action_it_request("move it") is False
+        assert is_window_action_it_request("close it") is False
+        assert is_window_action_it_request("open chrome") is False
+        assert is_window_action_it_request("maximize chrome") is False  # No pronoun
+
+    def test_resolve_window_action_fullscreen_with_active_app(self):
+        """'full screen it' resolves to maximize_window with active app."""
+        ws = get_world_state()
+        ws.active_app = "Chrome"
+        
+        result, reason = resolve_window_action_it("full screen it", ws)
+        assert result is not None
+        assert result["tool"] == "maximize_window"
+        assert result["args"]["title"] == "Chrome"
+        assert "Maximizing Chrome" in reason
+
+    def test_resolve_window_action_minimize_with_active_app(self):
+        """'minimize it' resolves to minimize_window with active app."""
+        ws = get_world_state()
+        ws.active_app = "Spotify"
+        
+        result, reason = resolve_window_action_it("minimize it", ws)
+        assert result is not None
+        assert result["tool"] == "minimize_window"
+        assert result["args"]["title"] == "Spotify"
+        assert "Minimizing Spotify" in reason
+
+    def test_resolve_window_action_with_last_action(self):
+        """Window action resolves using last_action.resolved in chained commands."""
+        ws = get_world_state()
+        ws.active_app = "OldApp"  # Stale
+        ws.last_action = LastAction(
+            tool="open_target",
+            args={"query": "Discord"},
+            resolved={"to_app": "Discord"},
+            ts=time.time(),
+        )
+        
+        result, reason = resolve_window_action_it("fullscreen it", ws)
+        assert result is not None
+        assert result["tool"] == "maximize_window"
+        # Should resolve to Discord from last_action, not OldApp
+        assert result["args"]["title"] == "Discord"
 
 
 if __name__ == "__main__":

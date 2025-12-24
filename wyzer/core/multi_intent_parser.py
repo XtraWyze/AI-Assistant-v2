@@ -88,9 +88,11 @@ def _infer_missing_verb(clause: str, previous_clauses: List[str]) -> str:
     
     # If clause already starts with a verb, don't modify it
     # This list should match ACTION_VERBS defined above
+    # Note: "full screen" (two words) is a common speech variant of "fullscreen"
     verb_patterns = [
         r"^(open|launch|start|close|quit|exit|play|pause|resume|mute|unmute|turn|scan)",
         r"^(move|send|switch|focus|go|minimize|shrink|maximize|fullscreen|expand)",
+        r"^(full\s+screen)",  # "full screen it" should not get "open" inferred
         r"^(volume|set|get)",
     ]
     for pattern in verb_patterns:
