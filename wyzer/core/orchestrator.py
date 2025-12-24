@@ -748,6 +748,92 @@ def handle_user_text(text: str) -> Dict[str, Any]:
         return _handle_replay_last_action(original_text, start_time)
     
     # =========================================================================
+    # PHASE 10: "THE OTHER ONE" PATTERN (deterministic toggle)
+    # =========================================================================
+    # Handle "the other one" / "switch to the other one" patterns to toggle
+    # between the last two distinct targets.
+    from wyzer.core.reference_resolver import is_other_one_request, resolve_other_one, resolve_move_it_to_monitor, is_move_it_to_monitor_request
+    if is_other_one_request(text):
+        ws = get_world_state()
+        resolved_target, reason = resolve_other_one(text, ws)
+        if resolved_target:
+            # Rewrite the command to use the resolved target
+            # Determine the action from the text
+            text_lower = text.lower()
+            if "close" in text_lower:
+                text = f"close {resolved_target}"
+            elif "focus" in text_lower or "switch" in text_lower:
+                text = f"focus {resolved_target}"
+            elif "minimize" in text_lower:
+                text = f"minimize {resolved_target}"
+            elif "maximize" in text_lower:
+                text = f"maximize {resolved_target}"
+            elif "open" in text_lower:
+                text = f"open {resolved_target}"
+            else:
+                text = f"focus {resolved_target}"  # Default action
+            logger.info(f'[REF] "the other one" → "{text}" ({reason})')
+        elif reason:
+            # Ambiguous or no targets - return clarification
+            end_time = time.perf_counter()
+            latency_ms = int((end_time - start_time) * 1000)
+            return {
+                "reply": reason,
+                "latency_ms": latency_ms,
+                "meta": {"other_one": True, "clarification": True, "original_text": original_text},
+            }
+    
+    # =========================================================================
+    # PHASE 10: "MOVE IT TO MONITOR X" PATTERN (deterministic)
+    # =========================================================================
+    # Handle "move it to monitor 2" etc. - resolve the window and execute move_window.
+    move_args, move_reason = resolve_move_it_to_monitor(text, get_world_state())
+    if move_args is not None:
+        target_name = move_args.get("_display_name") or move_args.get("process") or "window"
+        logger.info(f'[REF] "move it to monitor" → process={move_args.get("process")} monitor={move_args.get("monitor")} ({move_reason})')
+        # Execute move_window_to_monitor tool directly
+        try:
+            registry = get_registry()
+            intent = {"tool": "move_window_to_monitor", "args": move_args}
+            execution_summary, executed_intents = execute_tool_plan([intent], registry)
+            
+            # Format reply
+            if execution_summary.ran and execution_summary.ran[0].ok:
+                target = target_name
+                monitor = move_args.get("monitor", 2)
+                reply = f"Moved {target} to monitor {monitor}."
+            else:
+                error = execution_summary.ran[0].error if execution_summary.ran else None
+                reply = _tool_error_to_speech(error, "move_window_to_monitor", move_args)
+            
+            end_time = time.perf_counter()
+            latency_ms = int((end_time - start_time) * 1000)
+            return {
+                "reply": reply,
+                "latency_ms": latency_ms,
+                "execution_summary": {
+                    "ran": [
+                        {"tool": r.tool, "ok": r.ok, "result": r.result, "error": r.error}
+                        for r in execution_summary.ran
+                    ],
+                    "stopped_early": execution_summary.stopped_early,
+                },
+                "meta": {"move_it_monitor": True, "original_text": original_text},
+            }
+        except Exception as e:
+            logger.warning(f"[REF] move_window_to_monitor execution failed: {e}")
+            # Fall through to normal processing
+    elif move_reason:
+        # Resolution failed - ask clarification
+        end_time = time.perf_counter()
+        latency_ms = int((end_time - start_time) * 1000)
+        return {
+            "reply": move_reason,
+            "latency_ms": latency_ms,
+            "meta": {"move_it_monitor": True, "clarification": True, "original_text": original_text},
+        }
+    
+    # =========================================================================
     # PHASE 11: AUTONOMY COMMANDS (deterministic, no LLM)
     # =========================================================================
     # Check for autonomy-related voice commands before any other processing.
@@ -852,6 +938,10 @@ def handle_user_text(text: str) -> Dict[str, Any]:
             # Use reply-only LLM call (no tools)
             llm_response = _call_llm_reply_only(text)
             reply = llm_response.get("reply", "")
+            
+            # Phase 10: Mark as reply-only so "do that again" doesn't repeat chat
+            from wyzer.context.world_state import set_last_llm_reply_only
+            set_last_llm_reply_only(True)
             
             end_time = time.perf_counter()
             latency_ms = int((end_time - start_time) * 1000)
@@ -1337,6 +1427,12 @@ def should_use_streaming_tts(text: str) -> bool:
         _WHERE_AM_I_RE.match(text_stripped)):
         return False
     
+    # Phase 10: Check for reference resolution patterns BEFORE hybrid router
+    # Pronoun-based commands must be handled deterministically, not streamed
+    from wyzer.core.reference_resolver import is_move_it_to_monitor_request, is_other_one_request, is_pronoun_action_request
+    if is_move_it_to_monitor_request(text_stripped) or is_other_one_request(text_stripped) or is_pronoun_action_request(text_stripped):
+        return False
+    
     # Phase 11: Check for confirmation responses ONLY if there's a pending confirmation
     from wyzer.context.world_state import get_pending_confirmation
     pending = get_pending_confirmation()
@@ -1596,18 +1692,77 @@ def _hybrid_tool_plan_is_registered(intents: List[Dict[str, Any]], registry) -> 
 
 
 def execute_tool_plan(intents: List[Dict[str, Any]], registry) -> Tuple[ExecutionSummary, List[Intent]]:
-    """Execute a list of tool-call dicts using the existing intent pipeline."""
-    converted: List[Intent] = []
+    """Execute a list of tool-call dicts using the existing intent pipeline.
+    
+    Phase 10: Applies reference resolution to each intent before execution.
+    This resolves pronouns (it/that/this) to concrete targets using world state.
+    """
+    logger = get_logger_instance()
+    
+    # =========================================================================
+    # PHASE 10: REFERENCE RESOLUTION FOR INTENTS
+    # =========================================================================
+    # Before converting to Intent objects, resolve any pronoun references
+    # in the intent arguments using world state.
+    from wyzer.core.reference_resolver import resolve_intent_args, has_unresolved_pronoun
+    from wyzer.context.world_state import get_world_state, update_last_intents
+    
+    ws = get_world_state()
+    resolved_intents: List[Dict[str, Any]] = []
+    clarification_needed = None
+    
     for raw in intents or []:
         tool = (raw or {}).get("tool")
         args = (raw or {}).get("args")
         continue_on_error = bool((raw or {}).get("continue_on_error", False))
+        
         if not isinstance(tool, str) or not tool.strip():
             continue
         if not isinstance(args, dict):
             args = {}
-        converted.append(Intent(tool=tool.strip(), args=args, continue_on_error=continue_on_error))
+        
+        intent_dict = {"tool": tool.strip(), "args": args}
+        
+        # Check if this intent has unresolved pronouns
+        if has_unresolved_pronoun(intent_dict):
+            resolved_args, clarification = resolve_intent_args(intent_dict, ws)
+            if clarification:
+                # Resolution failed - need to ask user
+                clarification_needed = clarification
+                logger.info(f"[REF] intent={tool} needs clarification: {clarification}")
+            else:
+                args = resolved_args
+                logger.info(f"[REF] intent={tool} resolved args={args}")
+        
+        resolved_intents.append({
+            "tool": tool.strip(),
+            "args": args,
+            "continue_on_error": continue_on_error,
+        })
+    
+    # If any intent needs clarification, return early with a failed result
+    if clarification_needed:
+        # Create a summary indicating clarification is needed
+        from wyzer.core.intent_plan import ExecutionResult, ExecutionSummary
+        failed_result = ExecutionResult(
+            tool="__reference_resolution__",
+            ok=False,
+            result=None,
+            error={"type": "clarification_needed", "message": clarification_needed}
+        )
+        return ExecutionSummary(ran=[failed_result], stopped_early=True), []
+    
+    # Convert to Intent objects
+    converted: List[Intent] = []
+    for raw in resolved_intents:
+        tool = raw.get("tool")
+        args = raw.get("args", {})
+        continue_on_error = raw.get("continue_on_error", False)
+        converted.append(Intent(tool=tool, args=args, continue_on_error=continue_on_error))
 
+    # Store intents for "do that again" before execution
+    update_last_intents(resolved_intents)
+    
     # Preserve existing validation/gating behavior.
     validate_intents(converted, registry)
     return _execute_intents(converted, registry), converted
@@ -2588,6 +2743,16 @@ def _fastpath_parse_clause(clause: str) -> Optional[List[Intent]]:
 
 
 def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summary: ExecutionSummary) -> str:
+    # =========================================================================
+    # PHASE 10: Handle clarification_needed errors from reference resolution
+    # =========================================================================
+    if execution_summary.ran:
+        first_result = execution_summary.ran[0]
+        if first_result.tool == "__reference_resolution__" and first_result.error:
+            error = first_result.error
+            if isinstance(error, dict) and error.get("type") == "clarification_needed":
+                return error.get("message", "Which one do you mean?")
+    
     def format_info(tool: str, args: Dict[str, Any], result: Dict[str, Any]) -> Optional[str]:
         if tool == "get_time":
             t = result.get("time")

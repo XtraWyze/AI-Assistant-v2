@@ -424,10 +424,30 @@ _DOMAIN_RE = re.compile(
     r"\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:[a-z]{2,})(?:/[^\s]*)?\b",
     re.IGNORECASE,
 )
+# Common executable/file extensions that should NOT be treated as domains
+_EXECUTABLE_EXTENSIONS = {".exe", ".msi", ".bat", ".cmd", ".ps1", ".sh", ".app", ".dmg", ".deb", ".rpm"}
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Timer patterns: set, cancel, or check a countdown timer
-# ═══════════════════════════════════════════════════════════════════════════
+
+def _looks_like_url_or_domain(text: str) -> bool:
+    tl = (text or "").strip().lower()
+    if not tl:
+        return False
+
+    if _URL_SCHEME_RE.search(tl) or _WWW_RE.search(tl):
+        return True
+
+    # Any obvious domain-like token (foo.com, foo.co.uk, etc.).
+    # But exclude common executable extensions like .exe, .msi, etc.
+    m = _DOMAIN_RE.search(tl)
+    if m:
+        matched = m.group(0)
+        # Check if it ends with an executable extension
+        for ext in _EXECUTABLE_EXTENSIONS:
+            if matched.endswith(ext):
+                return False
+        return True
+
+    return False
 
 # Word-to-number mapping for timer durations
 _WORD_TO_NUMBER = {
@@ -525,21 +545,6 @@ def _parse_compound_timer_duration(text: str) -> int:
         total_seconds += _parse_timer_duration_seconds(value, unit)
     
     return total_seconds
-
-
-def _looks_like_url_or_domain(text: str) -> bool:
-    tl = (text or "").strip().lower()
-    if not tl:
-        return False
-
-    if _URL_SCHEME_RE.search(tl) or _WWW_RE.search(tl):
-        return True
-
-    # Any obvious domain-like token (foo.com, foo.co.uk, etc.).
-    if _DOMAIN_RE.search(tl):
-        return True
-
-    return False
 
 
 def _decide_single_clause(text: str) -> HybridDecision:

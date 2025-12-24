@@ -1085,7 +1085,13 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             # Check if we should use streaming TTS for this request
             # Streaming is ONLY for conversational/reply-only queries, NOT for tool commands
             # Phase 10.1: Also skip streaming if this is a replay request
-            use_streaming_tts = should_use_streaming_tts(user_text) and not force_non_streaming
+            # Phase 10: Check ORIGINAL text for pronoun patterns (before resolution changed it)
+            #           AND resolved text (for other patterns like tool commands)
+            use_streaming_tts = (
+                should_use_streaming_tts(original_user_text) and 
+                should_use_streaming_tts(user_text) and 
+                not force_non_streaming
+            )
             result_streamed = False
             
             if use_streaming_tts:

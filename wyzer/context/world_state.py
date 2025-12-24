@@ -57,6 +57,70 @@ class LastAction:
 
 
 @dataclass
+class TargetRecord:
+    """
+    Phase 10 - Record of a resolved target for reference resolution.
+    
+    Stored in last_targets ring buffer to enable "the other one" toggling
+    and pronoun resolution across multiple entities.
+    
+    Fields:
+        type: Type of target (window/app/folder/drive/url/file)
+        name: Canonical name (e.g., "Chrome", "Notepad")
+        app_name: Process/app name (for window targets)
+        window_title: Full window title (for window targets)
+        hwnd: Window handle (optional, for window targets)
+        pid: Process ID (optional)
+        path: File/folder path (for file system targets)
+        url: URL (for website targets)
+        ts: Timestamp when this target was recorded
+    """
+    type: str  # window|app|folder|drive|url|file
+    name: str
+    app_name: Optional[str] = None
+    window_title: Optional[str] = None
+    hwnd: Optional[int] = None
+    pid: Optional[int] = None
+    path: Optional[str] = None
+    url: Optional[str] = None
+    ts: float = field(default_factory=time.time)
+    
+    def to_dict(self) -> dict:
+        """Convert to dict for logging/debugging."""
+        return {
+            "type": self.type,
+            "name": self.name,
+            "app_name": self.app_name,
+            "window_title": self.window_title,
+            "hwnd": self.hwnd,
+            "pid": self.pid,
+            "path": self.path,
+            "url": self.url,
+            "ts": self.ts,
+        }
+    
+    def matches(self, other: "TargetRecord") -> bool:
+        """Check if this target is effectively the same as another."""
+        if self.type != other.type:
+            return False
+        # For windows, match by hwnd if available, else by app_name
+        if self.type == "window":
+            if self.hwnd and other.hwnd:
+                return self.hwnd == other.hwnd
+            return self.app_name and self.app_name.lower() == (other.app_name or "").lower()
+        # For apps, match by name
+        if self.type == "app":
+            return self.name.lower() == other.name.lower()
+        # For files/folders, match by path
+        if self.type in ("file", "folder", "drive"):
+            return self.path and self.path.lower() == (other.path or "").lower()
+        # For URLs, match by URL
+        if self.type == "url":
+            return self.url and self.url.lower() == (other.url or "").lower()
+        return self.name.lower() == other.name.lower()
+
+
+@dataclass
 class PendingConfirmation:
     """
     Phase 11 - Pending confirmation for high-risk autonomy actions.
@@ -143,6 +207,12 @@ class WorldState:
         last_updated_ts: Unix timestamp of last update
         last_action: Phase 10.1 - Structured last action for deterministic replay
         
+        # Phase 10 - Enhanced reference resolution fields
+        last_active_window: Dict with app_name, window_title, pid, hwnd for focused window
+        last_targets: Ring buffer (max 5) of resolved targets for "the other one" toggle
+        last_intents: Last executed intent list for "do that again"
+        last_llm_reply_only: True if last response was chat-only (no tools)
+        
         # Phase 11 - Autonomy fields
         autonomy_mode: Current autonomy mode (off|low|normal|high)
         pending_confirmation: Pending high-risk confirmation, if any
@@ -162,6 +232,12 @@ class WorldState:
     active_window_title: Optional[str] = None
     last_updated_ts: float = field(default_factory=time.time)
     last_action: Optional[LastAction] = None
+    
+    # Phase 10 - Enhanced reference resolution fields
+    last_active_window: Optional[Dict[str, Any]] = None  # {app_name, window_title, pid, hwnd}
+    last_targets: List["TargetRecord"] = field(default_factory=list)  # Ring buffer, max 5
+    last_intents: Optional[List[Dict[str, Any]]] = None  # Last executed intent list
+    last_llm_reply_only: bool = False  # True if last response was chat-only
     
     # Phase 11 - Autonomy fields
     autonomy_mode: str = "off"  # off|low|normal|high
@@ -185,6 +261,11 @@ class WorldState:
         self.active_window_title = None
         self.last_updated_ts = time.time()
         self.last_action = None
+        # Phase 10: Clear enhanced reference resolution fields
+        self.last_active_window = None
+        self.last_targets = []
+        self.last_intents = None
+        self.last_llm_reply_only = False
         # Don't reset autonomy_mode on clear (user preference)
         self.pending_confirmation = None
         self.last_autonomy_decision = None
@@ -207,6 +288,18 @@ class WorldState:
     def get_age_seconds(self) -> float:
         """Get seconds since last update."""
         return time.time() - self.last_updated_ts
+    
+    def get_last_target(self, index: int = 0) -> Optional["TargetRecord"]:
+        """Get target from history by index (0 = most recent)."""
+        if 0 <= index < len(self.last_targets):
+            return self.last_targets[index]
+        return None
+    
+    def get_other_target(self) -> Optional["TargetRecord"]:
+        """Get the 'other one' - second most recent distinct target."""
+        if len(self.last_targets) >= 2:
+            return self.last_targets[1]
+        return None
 
 
 # Singleton instance and lock
@@ -328,7 +421,12 @@ def update_from_tool_execution(
     resolved_summary = _summarize_resolved(resolved_info) if resolved_info else "None"
     logger.info(f"[WORLD_STATE] last_action tool={tool_name} resolved={resolved_summary}")
     
-    # Update state (including last_action)
+    # ===========================================================================
+    # Phase 10: Build TargetRecord for last_targets ring buffer
+    # ===========================================================================
+    target_record = _build_target_record(tool_name, tool_args, tool_result, target)
+    
+    # Update state (including last_action and last_targets)
     ws = get_world_state()
     with _world_state_lock:
         if tool_name:
@@ -338,7 +436,120 @@ def update_from_tool_execution(
         if summary:
             ws.last_result_summary = summary
         ws.last_action = last_action
+        ws.last_llm_reply_only = False  # This was a tool execution
+        
+        # Phase 10: Update last_targets ring buffer (max 5, no duplicates at front)
+        if target_record is not None:
+            _push_target_record(ws, target_record)
+        
         ws.last_updated_ts = time.time()
+
+
+# Maximum number of targets to keep in the ring buffer
+_MAX_LAST_TARGETS = 5
+
+
+def _push_target_record(ws: WorldState, record: TargetRecord) -> None:
+    """
+    Push a target record to the front of last_targets, avoiding duplicates.
+    
+    If the record matches the current front, skip adding.
+    Maintains max size of _MAX_LAST_TARGETS.
+    """
+    # Skip if it matches the most recent target
+    if ws.last_targets and ws.last_targets[0].matches(record):
+        return
+    
+    # Insert at front
+    ws.last_targets.insert(0, record)
+    
+    # Trim to max size
+    if len(ws.last_targets) > _MAX_LAST_TARGETS:
+        ws.last_targets = ws.last_targets[:_MAX_LAST_TARGETS]
+
+
+def _build_target_record(
+    tool_name: str,
+    tool_args: dict,
+    tool_result: dict,
+    display_name: Optional[str],
+) -> Optional[TargetRecord]:
+    """
+    Build a TargetRecord from tool execution info.
+    
+    Returns None if no meaningful target can be extracted.
+    """
+    if not display_name:
+        return None
+    
+    # Determine target type based on tool
+    target_type = "app"  # default
+    app_name = None
+    window_title = None
+    hwnd = None
+    pid = None
+    path = None
+    url = None
+    
+    # Window tools
+    if tool_name in ("close_window", "focus_window", "minimize_window", "maximize_window", "move_window"):
+        target_type = "window"
+        matched = (tool_result or {}).get("matched", {})
+        if isinstance(matched, dict):
+            app_name = matched.get("process")
+            window_title = matched.get("title")
+            hwnd = matched.get("hwnd")
+            pid = matched.get("pid")
+    
+    # App tools
+    elif tool_name in ("open_app", "close_app", "launch_app", "switch_app"):
+        target_type = "app"
+        app_name = display_name
+    
+    # Open target - could be app, file, folder, game
+    elif tool_name == "open_target":
+        resolved = (tool_result or {}).get("resolved", {})
+        if isinstance(resolved, dict):
+            r_type = resolved.get("type", "app")
+            if r_type in ("file", "folder", "drive"):
+                target_type = r_type
+                path = resolved.get("path")
+            elif r_type == "game":
+                target_type = "app"
+                app_name = resolved.get("matched_name") or display_name
+            else:
+                target_type = "app"
+                app_name = resolved.get("matched_name") or display_name
+    
+    # Website tools
+    elif tool_name in ("open_website", "open_url"):
+        target_type = "url"
+        url = (tool_args or {}).get("url") or (tool_args or {}).get("query")
+    
+    # Storage tools
+    elif tool_name == "system_storage_open":
+        target_type = "folder"
+        path = (tool_result or {}).get("path")
+    
+    # Volume tools - use app name
+    elif tool_name == "volume_control":
+        process = (tool_args or {}).get("process")
+        if process and process != "master":
+            target_type = "app"
+            app_name = process
+        else:
+            return None  # Don't track master volume as a target
+    
+    return TargetRecord(
+        type=target_type,
+        name=display_name,
+        app_name=app_name,
+        window_title=window_title,
+        hwnd=hwnd,
+        pid=pid,
+        path=path,
+        url=url,
+    )
 
 
 def _extract_resolved_info_for_replay(tool_name: str, result: dict) -> Optional[dict]:
@@ -647,6 +858,128 @@ def clear_world_state() -> None:
     ws = get_world_state()
     with _world_state_lock:
         ws.clear()
+
+
+# ============================================================================
+# PHASE 10: ENHANCED REFERENCE RESOLUTION FUNCTIONS
+# ============================================================================
+
+def update_last_intents(intents: List[Dict[str, Any]]) -> None:
+    """
+    Store the last executed intent list for "do that again".
+    
+    Args:
+        intents: List of intent dicts [{tool, args}, ...]
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        # Deep copy to avoid mutation issues
+        ws.last_intents = [dict(i) for i in intents] if intents else None
+        ws.last_llm_reply_only = False
+
+
+def update_last_active_window(
+    app_name: Optional[str] = None,
+    window_title: Optional[str] = None,
+    pid: Optional[int] = None,
+    hwnd: Optional[int] = None,
+) -> None:
+    """
+    Update the last active window info.
+    
+    Called by window watcher or after focus_window tool.
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        ws.last_active_window = {
+            "app_name": app_name,
+            "window_title": window_title,
+            "pid": pid,
+            "hwnd": hwnd,
+        }
+        # Also update legacy fields for compatibility
+        if app_name:
+            ws.active_app = app_name
+        if window_title:
+            ws.active_window_title = window_title
+        ws.last_updated_ts = time.time()
+
+
+def set_last_llm_reply_only(is_reply_only: bool) -> None:
+    """
+    Mark whether the last response was chat-only (no tools).
+    
+    Used to prevent "do that again" from repeating chat responses.
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        ws.last_llm_reply_only = is_reply_only
+
+
+def get_last_intents() -> Optional[List[Dict[str, Any]]]:
+    """
+    Get the last executed intent list for replay.
+    
+    Returns:
+        List of intent dicts or None
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        if ws.last_llm_reply_only:
+            return None  # Don't replay chat-only responses
+        return [dict(i) for i in ws.last_intents] if ws.last_intents else None
+
+
+def get_last_active_window() -> Optional[Dict[str, Any]]:
+    """
+    Get the last active window info.
+    
+    Returns:
+        Dict with app_name, window_title, pid, hwnd or None
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        return dict(ws.last_active_window) if ws.last_active_window else None
+
+
+def get_last_targets(count: int = 2) -> List[TargetRecord]:
+    """
+    Get the most recent targets from the ring buffer.
+    
+    Args:
+        count: Number of targets to return (default 2 for "the other one")
+        
+    Returns:
+        List of TargetRecord objects (may be shorter than count)
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        return list(ws.last_targets[:count])
+
+
+def update_after_tool(
+    tool_name: str,
+    args: Dict[str, Any],
+    result: Dict[str, Any],
+    success: bool,
+) -> None:
+    """
+    Phase 10 contract: Single entry point for updating world state after tool execution.
+    
+    This is the canonical function to call after any tool runs.
+    It updates all relevant fields including last_action, last_targets, etc.
+    
+    Args:
+        tool_name: Name of the tool that was executed
+        args: Arguments passed to the tool
+        result: Result returned by the tool
+        success: Whether the tool succeeded (no error)
+    """
+    if not success:
+        return  # Don't update state on failures
+    
+    # Delegate to existing update function
+    update_from_tool_execution(tool_name, args, result)
 
 
 # ============================================================================
