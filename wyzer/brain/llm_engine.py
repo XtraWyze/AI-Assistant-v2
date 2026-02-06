@@ -533,16 +533,15 @@ class LLMEngine:
             get_redaction_block,
             get_all_memories_block
         )
+        from wyzer.brain.capability_contract import get_capability_contract
         
         builder = MessageBuilder()
         
-        # 1. Core system prompt (always included)
+        # 1. Capability contract (always included)
+        builder.system(get_capability_contract() + "\n")
+
+        # 2. Core system prompt (always included)
         builder.system(SYSTEM_PROMPT)
-        
-        # 2. Session context (conversation history from RAM)
-        session_block = get_session_context_block()
-        if session_block:
-            builder.system(session_block)
         
         # 3. Promoted memory context (user-approved long-term memory)
         promoted_block = get_promoted_memory_block()
@@ -558,8 +557,13 @@ class LLMEngine:
         all_memories_block = get_all_memories_block()
         if all_memories_block:
             builder.system(all_memories_block)
+
+        # 6. Session context (conversation history from RAM)
+        session_block = get_session_context_block()
+        if session_block:
+            builder.system(session_block)
         
-        # 6. User message (the actual user input)
+        # 7. User message (the actual user input)
         builder.user(user_text)
         
         return builder.build()
@@ -626,6 +630,7 @@ class LLMEngine:
             FASTLANE_SYSTEM_PROMPT,
             estimate_tokens
         )
+        from wyzer.brain.capability_contract import get_capability_contract
         from wyzer.memory.memory_manager import get_memory_manager
         
         # Get ONLY the relevant memory for this identity query
@@ -636,7 +641,8 @@ class LLMEngine:
             memory_context = ""
         
         # Build minimal prompt
-        parts = [FASTLANE_SYSTEM_PROMPT]
+        capability_contract = get_capability_contract()
+        parts = [capability_contract, "\n", FASTLANE_SYSTEM_PROMPT]
         
         mem_chars = 0
         if memory_context and memory_context.strip():

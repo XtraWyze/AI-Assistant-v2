@@ -584,6 +584,11 @@ def get_registry():
     global _registry
     if _registry is None:
         _registry = build_default_registry()
+        try:
+            from wyzer.brain.capability_contract import get_capability_contract
+            get_capability_contract(_registry)
+        except Exception:
+            pass
     return _registry
 
 
@@ -1849,8 +1854,12 @@ def handle_user_text_streaming(
         else:
             length_instruction = "Reply in 1-2 sentences. Be direct and concise."
         
-        prompt = f"""You are Wyzer, a local voice assistant.
-{ctx['session']}{ctx['promoted']}{ctx['redaction']}{ctx['memories']}{smalltalk_directive}
+        from wyzer.brain.capability_contract import get_capability_contract
+        capability_contract = get_capability_contract(get_registry())
+
+        prompt = f"""{capability_contract}
+    You are Wyzer, a local voice assistant.
+    {ctx['promoted']}{ctx['redaction']}{ctx['memories']}{ctx['session']}{smalltalk_directive}
 {length_instruction}
 You ARE allowed to generate stories, poems, jokes, and creative content when asked - keep those spoken-friendly: no markdown, no bullet lists.
 
@@ -4055,6 +4064,7 @@ def _call_llm(user_text: str, registry) -> Dict[str, Any]:
         redaction_context=redaction_context,
         memories_context=memories_context,
         visual_context=visual_context,
+        registry=registry,
     )
     
     return _ollama_request(prompt)
@@ -4079,7 +4089,11 @@ def _call_llm_for_explicit_tool(user_text: str, tool_name: str, registry) -> Dic
     tool_desc = getattr(tool, "description", "")
     schema = getattr(tool, "args_schema", {})
 
-    prompt = f"""You are Wyzer, a local voice assistant.
+    from wyzer.brain.capability_contract import get_capability_contract
+    capability_contract = get_capability_contract(registry)
+
+    prompt = f"""{capability_contract}
+You are Wyzer, a local voice assistant.
 
 The user is making an EXPLICIT tool call and has already chosen the tool.
 Your only job is to produce VALID arguments for that exact tool.
@@ -4217,6 +4231,7 @@ def _call_llm_reply_only(user_text: str) -> Dict[str, Any]:
             prompt, mode, stats = build_fastlane_prompt(
                 user_text=user_text,
                 memories_context=memories_context,
+                registry=get_registry(),
             )
             
             # Log prompt path at INFO level
@@ -4250,8 +4265,12 @@ def _call_llm_reply_only(user_text: str) -> Dict[str, Any]:
     except Exception:
         pass
     
-    prompt = f"""You are Wyzer, a local voice assistant.
-{ctx['session']}{ctx['promoted']}{ctx['redaction']}{ctx['memories']}{smalltalk_directive}
+    from wyzer.brain.capability_contract import get_capability_contract
+    capability_contract = get_capability_contract(get_registry())
+
+    prompt = f"""{capability_contract}
+You are Wyzer, a local voice assistant.
+{ctx['promoted']}{ctx['redaction']}{ctx['memories']}{ctx['session']}{smalltalk_directive}
 Reply naturally. Be direct.
 You ARE allowed to generate stories, poems, jokes, and creative content when asked.
 Keep creative content spoken-friendly: no markdown, no bullet lists.
@@ -4301,8 +4320,12 @@ def _call_llm_with_execution_summary(
     
     summary_text = "\n".join(summary_parts)
     
-    prompt = f"""You are Wyzer, a local voice assistant.
-{ctx['session']}{ctx['promoted']}{ctx['redaction']}{ctx['memories']}
+    from wyzer.brain.capability_contract import get_capability_contract
+    capability_contract = get_capability_contract(registry)
+
+    prompt = f"""{capability_contract}
+You are Wyzer, a local voice assistant.
+{ctx['promoted']}{ctx['redaction']}{ctx['memories']}{ctx['session']}
 User asked: {user_text}
 
 Results:
@@ -4341,8 +4364,12 @@ def _call_llm_with_tool_result(
     if len(args_str) > 100:
         args_str = args_str[:100] + "..."
     
-    prompt = f"""You are Wyzer, a local voice assistant.
-{ctx['session']}{ctx['promoted']}{ctx['redaction']}{ctx['memories']}
+    from wyzer.brain.capability_contract import get_capability_contract
+    capability_contract = get_capability_contract(registry)
+
+    prompt = f"""{capability_contract}
+You are Wyzer, a local voice assistant.
+{ctx['promoted']}{ctx['redaction']}{ctx['memories']}{ctx['session']}
 User asked: {user_text}
 
 Tool: {tool_name}({args_str})

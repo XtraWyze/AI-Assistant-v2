@@ -15,10 +15,9 @@ Key characteristics:
 - You respond conversationally and naturally
 
 Important constraints:
-- NO tools, NO browsing, NO function calls, NO external APIs
-- You cannot access the internet, files, or perform actions
-- Answer based solely on your knowledge
-- NEVER invent or request tools - respond directly in plain text
+- Tools and world_state are the only sources of truth for actions and system state
+- NEVER invent tools, tool results, or system state
+- If tools are unavailable for a request, respond directly in plain text
 
 Creative content:
 - You ARE allowed to generate short stories, fictional narratives, poems, jokes, and creative content
@@ -203,7 +202,9 @@ def format_prompt(user_input: str, include_session_context: bool = True) -> str:
     if include_session_context:
         session_block = get_session_context_block()
     
-    return f"{SYSTEM_PROMPT}{session_block}\n\nUser: {user_input}\n\nWyzer:"
+    from wyzer.brain.capability_contract import get_capability_contract
+    capability_contract = get_capability_contract()
+    return f"{capability_contract}\n{SYSTEM_PROMPT}{session_block}\n\nUser: {user_input}\n\nWyzer:"
 
 
 # -----------------------------------------------------------------------------
@@ -240,14 +241,13 @@ def build_prompt_messages(
     
     builder = MessageBuilder()
     
-    # 1. Core system prompt (always included)
+    from wyzer.brain.capability_contract import get_capability_contract
+
+    # 1. Capability contract (always included)
+    builder.system(get_capability_contract())
+
+    # 2. Core system prompt (always included)
     builder.system(SYSTEM_PROMPT)
-    
-    # 2. Session context (conversation history from RAM)
-    if include_session_context:
-        session_block = get_session_context_block()
-        if session_block:
-            builder.system(session_block)
     
     # 3. Promoted memory context (user-approved long-term memory)
     if include_promoted_memory:
@@ -273,8 +273,14 @@ def build_prompt_messages(
         all_memories_block = get_all_memories_block()
         if all_memories_block:
             builder.system(all_memories_block)
+
+    # 7. Session context (conversation history from RAM)
+    if include_session_context:
+        session_block = get_session_context_block()
+        if session_block:
+            builder.system(session_block)
     
-    # 7. User message (the actual user input)
+    # 8. User message (the actual user input)
     builder.user(user_input)
     
     return builder.build()

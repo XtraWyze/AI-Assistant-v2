@@ -7,6 +7,7 @@ Phase 12: Prompt size reduction - keeps prompts under context limits.
 import re
 from typing import Tuple, List, Optional, Dict, Any
 from wyzer.core.logger import get_logger
+from wyzer.brain.capability_contract import get_capability_contract, get_tool_manifest
 
 # ============================================================================
 # TOKEN BUDGET CONSTANTS
@@ -95,50 +96,6 @@ def estimate_tokens(text: str) -> int:
 
 
 # ============================================================================
-# CANONICAL TOOL MANIFEST
-# ============================================================================
-# This is the authoritative list of all available tools. The LLM MUST ONLY use
-# tool names from this list. This prevents hallucinated/invented tool names.
-CANONICAL_TOOL_MANIFEST = """
-AVAILABLE TOOLS (use ONLY these exact names):
-- get_time: Get current time and date
-- get_system_info: Get system information (CPU, RAM, OS)
-- get_location: Get user's current location
-- get_weather_forecast: Get weather forecast for a location
-- open_target: Open an application, folder, or file by name
-- open_website: Open a URL in the default browser
-- local_library_refresh: Refresh the local application library cache
-- focus_window: Focus/bring to front a window by name
-- minimize_window: Minimize a window by name
-- maximize_window: Maximize a window by name
-- close_window: Close a window by name
-- move_window_to_monitor: Move a window to a specific monitor
-- get_window_monitor: Get which monitor a window is on
-- monitor_info: Get information about connected monitors
-- media_play_pause: Play or pause currently playing media
-- media_next: Skip to next track
-- media_previous: Go to previous track
-- volume_up: Increase system volume
-- volume_down: Decrease system volume
-- volume_mute_toggle: Toggle mute on/off
-- volume_control: Set volume to specific level (0-100)
-- get_now_playing: Get info about currently playing media
-- set_audio_output_device: Switch audio output device
-- system_storage_scan: Scan and analyze storage drives
-- system_storage_list: List all drives with space info
-- system_storage_open: Open a drive or folder
-- timer: Set a countdown timer
-- google_search_open: Search Google and open results in browser
-- get_window_context: Get info about the current foreground window/app (read-only)
-
-CRITICAL TOOL RULES:
-- You MUST ONLY use tool names from the list above
-- NEVER invent new tool names like pause_media, resume_music, define_term, explain_term, search_web, etc.
-- If no tool applies, respond with reply-only (no tools)
-- For questions, explanations, stories, or opinions: use reply-only (no tools needed)
-"""
-
-# ============================================================================
 # IN-CONTEXT EXAMPLES FOR TOOL USAGE
 # ============================================================================
 TOOL_EXAMPLES = """
@@ -188,7 +145,7 @@ FORBIDDEN BEHAVIORS:
 - Adding unsolicited advice or warnings
 """
 
-NORMAL_SYSTEM_PROMPT = """You are Wyzer, a local voice assistant. You help users with tasks and questions.
+NORMAL_SYSTEM_PROMPT_BASE = """You are Wyzer, a local voice assistant. You help users with tasks and questions.
 
 CRITICAL - Memory rules:
 - When user asks "what's my name", "my birthday", "my wife", etc., they are asking about THEMSELVES (the human user), NOT about you
@@ -196,7 +153,15 @@ CRITICAL - Memory rules:
 - Example: If memory says "name: your name is levi" and user asks "what's my name?", answer "Your name is Levi"
 - NEVER say "I don't have that information" if the answer IS in the memory block
 - You are Wyzer the assistant, the user is a different person
-""" + ANTI_HALLUCINATION_RULES + CANONICAL_TOOL_MANIFEST + """
+""" + ANTI_HALLUCINATION_RULES
+
+
+def _build_normal_system_prompt(tool_manifest: str) -> str:
+    """Build the normal system prompt with a dynamic tool manifest."""
+    return (
+        NORMAL_SYSTEM_PROMPT_BASE
+        + tool_manifest
+        + """
 Rules:
 - Reply in 1-2 sentences unless user asks for more detail
 - Be direct and helpful, no disclaimers
@@ -208,17 +173,25 @@ Response format (JSON only, no markdown):
 Direct reply: {{"reply": "your response"}}
 With tools: {{"intents": [{{"tool": "name", "args": {{}}}}], "reply": "brief message"}}
 """ + TOOL_EXAMPLES
+    )
 
-COMPACT_SYSTEM_PROMPT = """You are Wyzer, a local voice assistant.
+COMPACT_SYSTEM_PROMPT_BASE = """You are Wyzer, a local voice assistant.
 CRITICAL: When user asks "my name" or "my X", they ask about THEMSELVES. If [LONG-TERM MEMORY] exists below, USE IT to answer - never say "I don't know" if memory has the answer.
 Reply in 1-2 sentences. Be direct.
 Use {{"reply": "text"}} for questions/conversation/stories/creative content.
 
 ANTI-HALLUCINATION: Say "I don't know" if uncertain. NEVER guess or invent facts. NEVER assume system state without tool data.
+"""
 
-ONLY use these tools: get_time, get_system_info, get_location, get_weather_forecast, open_target, open_website, focus_window, minimize_window, maximize_window, close_window, move_window_to_monitor, get_window_monitor, get_window_context, monitor_info, media_play_pause, media_next, media_previous, volume_up, volume_down, volume_mute_toggle, volume_control, get_now_playing, set_audio_output_device, system_storage_scan, system_storage_list, system_storage_open, timer, google_search_open, local_library_refresh.
 
+def _build_compact_system_prompt(tool_manifest: str) -> str:
+    """Build the compact system prompt with a dynamic tool manifest."""
+    return (
+        COMPACT_SYSTEM_PROMPT_BASE
+        + tool_manifest
+        + """
 NEVER invent tools. Stories and creative content need NO tools - reply directly."""
+    )
 
 # ============================================================================
 # FAST LANE SYSTEM PROMPT (voice_fast llamacpp mode only)
@@ -249,6 +222,7 @@ class PromptBuilder:
         redaction_context: str = "",
         memories_context: str = "",
         visual_context: str = "",
+        registry: Optional[Any] = None,
     ):
         """
         Initialize prompt builder.
@@ -267,6 +241,7 @@ class PromptBuilder:
         self.redaction_context = redaction_context
         self.memories_context = memories_context
         self.visual_context = visual_context
+        self.registry = registry
         self.logger = get_logger()
     
     def build(self) -> Tuple[str, str]:
@@ -295,14 +270,12 @@ class PromptBuilder:
         """Build normal mode prompt."""
         components = ["system"]
         
-        # Start with system prompt
-        parts = [NORMAL_SYSTEM_PROMPT]
-        
-        # Add session context (limit to 3 turns in normal mode)
-        session = self._truncate_session_context(self.session_context, max_turns=3)
-        if session:
-            parts.append(f"\n--- Recent conversation ---\n{session}\n---")
-            components.append(f"history({self._count_turns(session)})")
+        capability_contract = get_capability_contract(self.registry)
+        tool_manifest = get_tool_manifest(self.registry)
+        system_prompt = _build_normal_system_prompt(tool_manifest)
+
+        # Start with capability contract, then system prompt
+        parts = [capability_contract, system_prompt]
         
         # Add promoted context (user-approved memories)
         if self.promoted_context:
@@ -323,6 +296,12 @@ class PromptBuilder:
             if memories:
                 parts.append(memories)
                 components.append(f"memories({self._count_memory_items(memories)})")
+
+        # Add session context (limit to 3 turns in normal mode)
+        session = self._truncate_session_context(self.session_context, max_turns=3)
+        if session:
+            parts.append(f"\n--- Recent conversation ---\n{session}\n---")
+            components.append(f"history({self._count_turns(session)})")
         
         # Phase 9: Add visual context (screen awareness) - always informational, read-only
         if self.visual_context and self.visual_context.strip():
@@ -342,16 +321,20 @@ class PromptBuilder:
     def _build_compact(self) -> Tuple[str, List[str]]:
         """Build compact mode prompt (minimal tokens)."""
         components = ["system-compact"]
-        
-        parts = [COMPACT_SYSTEM_PROMPT]
-        
+
+        capability_contract = get_capability_contract(self.registry)
+        tool_manifest = get_tool_manifest(self.registry)
+        system_prompt = _build_compact_system_prompt(tool_manifest)
+
+        parts = [capability_contract, system_prompt]
+
+        # Skip promoted/redaction/memories in compact mode
+
         # Only last 2 turns of session context
         session = self._truncate_session_context(self.session_context, max_turns=2)
         if session:
             parts.append(f"\nRecent:\n{session}")
             components.append(f"history({self._count_turns(session)})")
-        
-        # Skip promoted/redaction/memories in compact mode
         
         # Single format reminder instead of examples
         parts.append('\nFormat: {{"reply": "text"}} or {{"intents": [...], "reply": "text"}}')
@@ -442,6 +425,7 @@ class FastLanePromptBuilder:
         self,
         user_text: str,
         memories_context: str = "",
+        registry: Optional[Any] = None,
     ):
         """
         Initialize fast-lane prompt builder.
@@ -452,6 +436,7 @@ class FastLanePromptBuilder:
         """
         self.user_text = user_text
         self.memories_context = memories_context
+        self.registry = registry
         self.logger = get_logger()
     
     def build(self) -> Tuple[str, str, Dict[str, int]]:
@@ -462,8 +447,9 @@ class FastLanePromptBuilder:
             Tuple of (prompt_text, mode, stats_dict)
             where stats_dict has keys: sys_chars, mem_chars, tokens_est
         """
-        parts = [FASTLANE_SYSTEM_PROMPT]
-        sys_chars = len(FASTLANE_SYSTEM_PROMPT)
+        capability_contract = get_capability_contract(self.registry)
+        parts = [capability_contract, "\n", FASTLANE_SYSTEM_PROMPT]
+        sys_chars = len(capability_contract) + len(FASTLANE_SYSTEM_PROMPT) + 1
         mem_chars = 0
         
         # Only include memory if non-empty and relevant
@@ -513,6 +499,7 @@ class FastLanePromptBuilder:
 def build_fastlane_prompt(
     user_text: str,
     memories_context: str = "",
+    registry: Optional[Any] = None,
 ) -> Tuple[str, str, Dict[str, int]]:
     """
     Build an ultra-minimal fast-lane prompt for voice_fast mode.
@@ -527,6 +514,7 @@ def build_fastlane_prompt(
     builder = FastLanePromptBuilder(
         user_text=user_text,
         memories_context=memories_context,
+        registry=registry,
     )
     return builder.build()
 
@@ -538,6 +526,7 @@ def build_llm_prompt(
     redaction_context: str = "",
     memories_context: str = "",
     visual_context: str = "",
+    registry: Optional[Any] = None,
 ) -> Tuple[str, str]:
     """
     Convenience function to build an LLM prompt.
@@ -560,5 +549,6 @@ def build_llm_prompt(
         redaction_context=redaction_context,
         memories_context=memories_context,
         visual_context=visual_context,
+        registry=registry,
     )
     return builder.build()
