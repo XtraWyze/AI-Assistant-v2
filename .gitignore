@@ -16,3 +16,4 @@
 wyzer/llm_bin/cublasLt64_13.dll
 *.json
 wyzer/logs/llamacpp_server.log
+wyzer/logs/llamacpp_server.log
