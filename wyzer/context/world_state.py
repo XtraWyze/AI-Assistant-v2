@@ -245,6 +245,9 @@ class WorldState:
     # Phase 11 - Autonomy fields
     autonomy_mode: str = "off"  # off|low|normal|high
     pending_confirmation: Optional[PendingConfirmation] = None
+    # Phase 13 (local): Pending user-approved action (lightweight, non-autonomy)
+    # Used for cases like: "Can you minimize all windows?" -> "Do it."
+    pending_action: Optional[str] = None
     last_autonomy_decision: Optional[LastAutonomyDecision] = None
     
     # Phase 12 - Window Watcher fields
@@ -279,6 +282,7 @@ class WorldState:
         self.last_llm_reply_only = False
         # Don't reset autonomy_mode on clear (user preference)
         self.pending_confirmation = None
+        self.pending_action = None
         self.last_autonomy_decision = None
         # Phase 12: Clear window watcher state
         self.open_windows = []
@@ -1132,6 +1136,45 @@ def consume_pending_confirmation() -> Optional[List[Dict[str, Any]]]:
         plan = pending.plan
         ws.pending_confirmation = None
         return plan
+
+
+# =========================================================================
+# PENDING ACTION (lightweight follow-up execution)
+# =========================================================================
+
+def set_pending_action(action: str) -> None:
+    """Set a pending action string to be executed on user confirmation."""
+    ws = get_world_state()
+    with _world_state_lock:
+        ws.pending_action = (action or "").strip() or None
+
+
+def get_pending_action() -> Optional[str]:
+    """Get the current pending action, if any."""
+    ws = get_world_state()
+    with _world_state_lock:
+        return ws.pending_action
+
+
+def clear_pending_action() -> None:
+    """Clear any pending action."""
+    ws = get_world_state()
+    with _world_state_lock:
+        ws.pending_action = None
+
+
+def consume_pending_action() -> Optional[str]:
+    """Consume and clear the pending action, returning it."""
+    ws = get_world_state()
+    with _world_state_lock:
+        action = ws.pending_action
+        ws.pending_action = None
+        return action
+
+
+def has_pending_action() -> bool:
+    """True if there is a pending action."""
+    return get_pending_action() is not None
 
 
 def set_last_autonomy_decision(

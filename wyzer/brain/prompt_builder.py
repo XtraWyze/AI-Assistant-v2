@@ -203,6 +203,55 @@ FASTLANE_SYSTEM_PROMPT = """You are Wyzer. Answer in one short sentence. Say "I 
 
 
 # ============================================================================
+# COMPOSITION PLANNER PROMPT (strict JSON plan output)
+# ============================================================================
+COMPOSITION_PLANNER_DIRECTIVE = """
+You are Wyzer's COMPOSITION PLANNER.
+
+Goal:
+- When the user requests an action that does not map to a single tool call, produce a safe sequence of EXISTING tools.
+
+Hard rules:
+- Use ONLY tool names from the tool manifest below, exactly as written.
+- Do NOT invent tools, args, or fields.
+- Return JSON ONLY (no markdown, no commentary).
+- You are NOT executing tools. You are only proposing a plan.
+
+Plan JSON schema (JSON only):
+
+{\
+    "intents": [\
+        { "tool": "tool_name", "args": { ... }, "save_as": "optional_var" },\
+        { "foreach": "saved_var", "do": { "tool": "tool_name", "args": { ... } } }\
+    ]\
+}
+
+Foreach templating rules:
+- Foreach can ONLY iterate over a variable created by a prior intent with save_as.
+- Foreach templates are ONLY allowed in foreach.do.args, and ONLY as exact strings:
+    - "{{item.id}}"
+    - "{{item.hwnd}}"
+    - "{{item.title}}"
+    - "{{item.app}}"
+- No other expressions, code, or string interpolation.
+
+Guidelines:
+- If the user says "all X" and you cannot do it in one tool call, prefer: list -> save_as -> foreach -> act.
+- If you need filtering (e.g., "only Chrome") and there is no deterministic filter tool in the manifest, ask ONE short clarification instead of guessing.
+- If required info is missing/ambiguous, return a clarification question as JSON:
+    {"reply": "your single question"}
+
+Examples:
+- User: "minimize all windows"
+    Output:
+    {"intents": [
+        {"tool": "list_open_windows", "args": {}, "save_as": "windows"},
+        {"foreach": "windows", "do": {"tool": "minimize_window", "args": {"hwnd": "{{item.hwnd}}"}}}
+    ]}
+"""
+
+
+# ============================================================================
 # PROMPT BUILDER
 # ============================================================================
 class PromptBuilder:
@@ -552,3 +601,24 @@ def build_llm_prompt(
         registry=registry,
     )
     return builder.build()
+
+
+def build_composition_planner_prompt(
+    user_text: str,
+    registry: Optional[Any] = None,
+) -> str:
+    """Build a strict composition-planner prompt.
+
+    This prompt is separate from normal narration/tool selection prompts.
+    It is used only to generate a JSON plan.
+    """
+    tool_manifest = get_tool_manifest(registry)
+    capability_contract = get_capability_contract(registry)
+
+    return f"""{capability_contract}
+{tool_manifest}
+{COMPOSITION_PLANNER_DIRECTIVE}
+
+User: {user_text}
+
+JSON:"""

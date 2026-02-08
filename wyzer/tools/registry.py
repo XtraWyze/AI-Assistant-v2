@@ -78,7 +78,8 @@ def build_default_registry() -> ToolRegistry:
         MinimizeWindowTool,
         MaximizeWindowTool,
         CloseWindowTool,
-        MoveWindowToMonitorTool
+        MoveWindowToMonitorTool,
+        ListOpenWindowsTool,
     )
     
     # Switch app tool (deterministic app switching using focus history)
@@ -144,6 +145,7 @@ def build_default_registry() -> ToolRegistry:
     registry.register(MaximizeWindowTool())
     registry.register(CloseWindowTool())
     registry.register(MoveWindowToMonitorTool())
+    registry.register(ListOpenWindowsTool())
     
     # Register switch app tool (deterministic app switching)
     registry.register(SwitchAppTool())

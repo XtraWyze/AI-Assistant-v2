@@ -390,13 +390,11 @@ class TestFocusedWindowPriority:
         result = _check_window_watcher_commands("what's on monitor 1", time.perf_counter())
         
         assert result is not None
-        # Chrome is focused and should be first (with arrow prefix)
+        # Chrome is focused and should be first.
         lines = result["reply"].split("\n")
-        # Find the first window line (after "Monitor 1 has X windows:")
-        window_lines = [l for l in lines if l.startswith("→ ") or l.startswith("• ")]
+        window_lines = [l for l in lines if l.startswith("Focused: ")]
         assert len(window_lines) >= 1
-        assert window_lines[0].startswith("→ "), "Focused window should have arrow prefix"
-        assert "Chrome" in window_lines[0], "Focused window (Chrome) should be first"
+        assert "Chrome" in window_lines[0], "Focused window (Chrome) should be listed first"
 
 
 # ============================================================================

@@ -434,6 +434,10 @@ class FocusWindowTool(ToolBase):
         self._args_schema = {
             "type": "object",
             "properties": {
+                "hwnd": {
+                    "type": "integer",
+                    "description": "Exact window handle (HWND) to target"
+                },
                 "title": {
                     "type": "string",
                     "description": "Window title (substring match)"
@@ -449,20 +453,33 @@ class FocusWindowTool(ToolBase):
     
     def run(self, **kwargs) -> Dict[str, Any]:
         start_time = time.perf_counter()
-        
+        hwnd = kwargs.get("hwnd")
+
         title = kwargs.get("title")
         process = kwargs.get("process")
-        
-        if not title and not process:
+
+        if hwnd is None and not title and not process:
             return {
                 "error": {
                     "type": "invalid_args",
-                    "message": "Must specify either 'title' or 'process'"
+                    "message": "Must specify 'hwnd' or either 'title' or 'process'"
                 }
             }
         
         try:
-            hwnd, learned_alias, _ = _resolve_window_handle(title=title, process=process)
+            learned_alias = None
+
+            if hwnd is not None:
+                if not isinstance(hwnd, int) or hwnd <= 0:
+                    return {
+                        "error": {
+                            "type": "invalid_args",
+                            "message": "'hwnd' must be a positive integer"
+                        }
+                    }
+            else:
+                hwnd, learned_alias, _ = _resolve_window_handle(title=title, process=process)
+
             if not hwnd:
                 end_time = time.perf_counter()
                 return {
@@ -512,6 +529,10 @@ class MinimizeWindowTool(ToolBase):
         self._args_schema = {
             "type": "object",
             "properties": {
+                "hwnd": {
+                    "type": "integer",
+                    "description": "Exact window handle (HWND) to target"
+                },
                 "title": {
                     "type": "string",
                     "description": "Window title (substring match)"
@@ -527,20 +548,33 @@ class MinimizeWindowTool(ToolBase):
     
     def run(self, **kwargs) -> Dict[str, Any]:
         start_time = time.perf_counter()
-        
+        hwnd = kwargs.get("hwnd")
+
         title = kwargs.get("title")
         process = kwargs.get("process")
-        
-        if not title and not process:
+
+        if hwnd is None and not title and not process:
             return {
                 "error": {
                     "type": "invalid_args",
-                    "message": "Must specify either 'title' or 'process'"
+                    "message": "Must specify 'hwnd' or either 'title' or 'process'"
                 }
             }
         
         try:
-            hwnd, learned_alias, _ = _resolve_window_handle(title=title, process=process)
+            learned_alias = None
+
+            if hwnd is not None:
+                if not isinstance(hwnd, int) or hwnd <= 0:
+                    return {
+                        "error": {
+                            "type": "invalid_args",
+                            "message": "'hwnd' must be a positive integer"
+                        }
+                    }
+            else:
+                hwnd, learned_alias, _ = _resolve_window_handle(title=title, process=process)
+
             if not hwnd:
                 end_time = time.perf_counter()
                 return {
@@ -588,6 +622,10 @@ class MaximizeWindowTool(ToolBase):
         self._args_schema = {
             "type": "object",
             "properties": {
+                "hwnd": {
+                    "type": "integer",
+                    "description": "Exact window handle (HWND) to target"
+                },
                 "title": {
                     "type": "string",
                     "description": "Window title (substring match)"
@@ -603,20 +641,33 @@ class MaximizeWindowTool(ToolBase):
     
     def run(self, **kwargs) -> Dict[str, Any]:
         start_time = time.perf_counter()
-        
+        hwnd = kwargs.get("hwnd")
+
         title = kwargs.get("title")
         process = kwargs.get("process")
-        
-        if not title and not process:
+
+        if hwnd is None and not title and not process:
             return {
                 "error": {
                     "type": "invalid_args",
-                    "message": "Must specify either 'title' or 'process'"
+                    "message": "Must specify 'hwnd' or either 'title' or 'process'"
                 }
             }
         
         try:
-            hwnd, learned_alias, _ = _resolve_window_handle(title=title, process=process)
+            learned_alias = None
+
+            if hwnd is not None:
+                if not isinstance(hwnd, int) or hwnd <= 0:
+                    return {
+                        "error": {
+                            "type": "invalid_args",
+                            "message": "'hwnd' must be a positive integer"
+                        }
+                    }
+            else:
+                hwnd, learned_alias, _ = _resolve_window_handle(title=title, process=process)
+
             if not hwnd:
                 end_time = time.perf_counter()
                 return {
@@ -664,6 +715,10 @@ class CloseWindowTool(ToolBase):
         self._args_schema = {
             "type": "object",
             "properties": {
+                "hwnd": {
+                    "type": "integer",
+                    "description": "Exact window handle (HWND) to target"
+                },
                 "title": {
                     "type": "string",
                     "description": "Window title (substring match)"
@@ -686,16 +741,17 @@ class CloseWindowTool(ToolBase):
         from wyzer.core.config import Config
         
         start_time = time.perf_counter()
-        
+        hwnd = kwargs.get("hwnd")
+
         title = kwargs.get("title")
         process = kwargs.get("process")
         force = kwargs.get("force", False)
-        
-        if not title and not process:
+
+        if hwnd is None and not title and not process:
             return {
                 "error": {
                     "type": "invalid_args",
-                    "message": "Must specify either 'title' or 'process'"
+                    "message": "Must specify 'hwnd' or either 'title' or 'process'"
                 }
             }
         
@@ -710,7 +766,25 @@ class CloseWindowTool(ToolBase):
             }
         
         try:
-            hwnd, learned_alias, effective_process = _resolve_window_handle(title=title, process=process)
+            learned_alias = None
+            effective_process = process
+
+            if hwnd is not None:
+                if not isinstance(hwnd, int) or hwnd <= 0:
+                    return {
+                        "error": {
+                            "type": "invalid_args",
+                            "message": "'hwnd' must be a positive integer"
+                        }
+                    }
+                # best-effort: infer effective_process from current window info
+                try:
+                    effective_process = (_get_window_info(hwnd) or {}).get("process") or effective_process
+                except Exception:
+                    pass
+            else:
+                hwnd, learned_alias, effective_process = _resolve_window_handle(title=title, process=process)
+
             if not hwnd:
                 end_time = time.perf_counter()
                 return {
@@ -772,6 +846,10 @@ class MoveWindowToMonitorTool(ToolBase):
         self._args_schema = {
             "type": "object",
             "properties": {
+                "hwnd": {
+                    "type": "integer",
+                    "description": "Exact window handle (HWND) to target"
+                },
                 "title": {
                     "type": "string",
                     "description": "Window title (substring match)"
@@ -800,17 +878,17 @@ class MoveWindowToMonitorTool(ToolBase):
 
     def run(self, **kwargs) -> Dict[str, Any]:
         start_time = time.perf_counter()
-
+        hwnd = kwargs.get("hwnd")
         title = kwargs.get("title")
         process = kwargs.get("process")
         monitor_spec = kwargs.get("monitor", 0)
         position = kwargs.get("position", "preserve")
 
-        if not title and not process:
+        if hwnd is None and not title and not process:
             return {
                 "error": {
                     "type": "invalid_args",
-                    "message": "Must specify either 'title' or 'process'"
+                    "message": "Must specify 'hwnd' or either 'title' or 'process'"
                 }
             }
 
@@ -852,7 +930,17 @@ class MoveWindowToMonitorTool(ToolBase):
 
                 monitor = monitors[monitor_index]
 
-            hwnd, learned_alias, _ = _resolve_window_handle(title=title, process=process)
+            learned_alias = None
+            if hwnd is not None:
+                if not isinstance(hwnd, int) or hwnd <= 0:
+                    return {
+                        "error": {
+                            "type": "invalid_args",
+                            "message": "'hwnd' must be a positive integer"
+                        }
+                    }
+            else:
+                hwnd, learned_alias, _ = _resolve_window_handle(title=title, process=process)
             if not hwnd:
                 end_time = time.perf_counter()
                 return {
@@ -983,3 +1071,58 @@ def _enumerate_monitors() -> List[Dict[str, Any]]:
         user32.EnumDisplayMonitors(0, 0, enum_func, 0)
     
     return monitors
+
+
+class ListOpenWindowsTool(ToolBase):
+    """Read-only tool to list all visible windows.
+
+    Returns a list suitable for composition-planner foreach:
+    - id: stable identifier (mirrors hwnd)
+    - hwnd: window handle
+    - title: window title (may be empty)
+    - app: process name (e.g., chrome.exe)
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._name = "list_open_windows"
+        self._description = "List all visible windows (read-only). Returns windows with id/hwnd/title/app fields."
+        self._args_schema = {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        }
+
+    def run(self, **kwargs) -> Dict[str, Any]:
+        start_time = time.perf_counter()
+        try:
+            windows = _enumerate_windows()
+            normalized = []
+            for w in windows:
+                hwnd = w.get("hwnd")
+                if not isinstance(hwnd, int):
+                    continue
+                normalized.append(
+                    {
+                        "id": hwnd,
+                        "hwnd": hwnd,
+                        "title": w.get("title") or "",
+                        "app": w.get("process") or "",
+                        "pid": w.get("pid") or 0,
+                    }
+                )
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            return {
+                "windows": normalized,
+                "count": len(normalized),
+                "latency_ms": latency_ms,
+            }
+        except Exception as e:
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            return {
+                "windows": [],
+                "count": 0,
+                "error": {"type": "execution_error", "message": str(e)},
+                "latency_ms": latency_ms,
+            }

@@ -11,6 +11,7 @@ Receives requests from core via core_to_brain_q and sends results/logs via brain
 from __future__ import annotations
 
 import os
+import re
 import sys
 import queue
 import threading
@@ -128,6 +129,104 @@ def _read_wav_to_float32(wav_path: str) -> np.ndarray:
         raise ValueError(f"Unsupported sample width: {sample_width}")
 
     return audio
+
+
+def _normalize_for_tool_routing(text: str) -> str:
+    """Normalize polite/capability phrasing into a tool-friendly imperative.
+
+    Used ONLY for routing prechecks (hybrid_router.decide) before we choose the
+    STREAM_TTS reply-only path.
+
+    Dev sanity examples:
+      - "Can you get the time for me?" -> "get the time"
+      - "Could you open YouTube?" -> "open youtube"
+      - "Would you list my windows?" -> "list my windows"
+    """
+
+    original = text
+    if not isinstance(text, str):
+        return original
+
+    t = text.strip().lower()
+    if not t:
+        return original
+
+    # Normalize whitespace early.
+    t = re.sub(r"\s+", " ", t)
+
+    # Remove leading wake/filler phrases (repeatable).
+    # e.g., "hey wyzer, can you ..." -> "can you ..."
+    wake_re = re.compile(r"^(?:hey\s+wyzer|wyzer|hey)\b[\s,]*")
+    while True:
+        new_t = wake_re.sub("", t)
+        if new_t == t:
+            break
+        t = new_t.strip()
+
+    # Remove leading capability prefixes (repeatable).
+    # Supported: can/could/would/will you|u, are you able (to)
+    cap_res = [
+        re.compile(r"^(?:can|could|would|will)\s+(?:you|u)\b[\s,]*"),
+        re.compile(r"^are\s+you\s+able\s+to\b[\s,]*"),
+        re.compile(r"^are\s+you\s+able\b[\s,]*"),
+    ]
+    changed = True
+    while changed:
+        changed = False
+        for cre in cap_res:
+            new_t = cre.sub("", t)
+            if new_t != t:
+                t = new_t.strip()
+                changed = True
+
+    # Strip common leading request verbs that often precede otherwise-deterministic
+    # tool phrases. Keep conservative and only strip at the very start.
+    # Examples:
+    #   "get the time" -> "the time" (matches hybrid_router time fragment)
+    #   "tell me the time" -> "the time"
+    #   "show me my windows" -> "my windows" (still tool-keyword heavy)
+    t = re.sub(r"^(?:please\s+)?(?:tell\s+me|show\s+me|give\s+me|get\s+me|check|get|fetch)\s+", "", t).strip()
+
+    # Conservative rewrite: monitor/app inventory questions are often tool-capable
+    # but phrased as questions that won't match deterministic tool plans.
+    # Example: "what apps are on my second monitor" -> force non-streaming by
+    # normalizing to an existing deterministic window-inventory query.
+    # NOTE: This rewrite is for routing-precheck only; execution may still use the
+    # original user text (see STREAM_OVERRIDE logic).
+    if re.match(
+        r"^(?:what|which)\s+(?:apps?|applications?|windows?)\s+(?:are\s+)?on\s+(?:my\s+)?(?:[a-z0-9\-]+\s+){0,3}(?:monitor|screen|display)\b",
+        t,
+    ):
+        t = "what windows are open"
+
+    # Trim trailing punctuation before removing politeness tails.
+    t = re.sub(r"[?.!,]+$", "", t).strip()
+
+    # Remove trailing politeness phrases (repeatable).
+    tail_res = [
+        re.compile(r"\bfor me\b$"),
+        re.compile(r"\bplease\b$"),
+        re.compile(r"\bright now\b$"),
+        re.compile(r"\breal quick\b$"),
+        re.compile(r"\bquickly\b$"),
+        re.compile(r"\bif you can\b$"),
+    ]
+    changed = True
+    while changed:
+        changed = False
+        for tre in tail_res:
+            new_t = tre.sub("", t).strip(" ,")
+            if new_t != t:
+                t = new_t.strip()
+                changed = True
+        # Also strip trailing punctuation that might remain after removals.
+        t = re.sub(r"[?.!,]+$", "", t).strip()
+
+    # Final whitespace collapse.
+    t = re.sub(r"\s+", " ", t).strip()
+
+    # Safety: if normalization empties the string, return original input.
+    return original if not t else t
 
 
 class _TTSController:
@@ -1082,6 +1181,64 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
             # This prevents the sentinel from being treated as a conversational query.
             force_non_streaming = is_replay_sentinel(user_text)
 
+            # =========================================================================
+            # STREAMING OVERRIDE: TOOL-CAPABLE QUERIES (before streaming decision)
+            # =========================================================================
+            # Streaming reply-only must NEVER swallow tool-capable intents.
+            # If the hybrid router yields a high-confidence tool plan, force the
+            # non-streaming orchestrator path so tools can execute.
+            STREAMING_TOOL_OVERRIDE_CONF = 0.75
+            best_tool_routing_text: Optional[str] = None
+            best_tool_routing_label: Optional[str] = None
+            try:
+                from wyzer.core import hybrid_router
+
+                norm_resolved = _normalize_for_tool_routing(user_text)
+                norm_original = _normalize_for_tool_routing(original_user_text)
+
+                d_resolved = hybrid_router.decide(user_text)
+                d_original = hybrid_router.decide(original_user_text)
+                d_norm_resolved = hybrid_router.decide(norm_resolved)
+                d_norm_original = hybrid_router.decide(norm_original)
+
+                candidates = [
+                    ("resolved", user_text, d_resolved),
+                    ("original", original_user_text, d_original),
+                    ("norm_resolved", norm_resolved, d_norm_resolved),
+                    ("norm_original", norm_original, d_norm_original),
+                ]
+
+                def _conf(decision) -> float:
+                    try:
+                        return float(getattr(decision, "confidence", 0.0) or 0.0)
+                    except Exception:
+                        return 0.0
+
+                best_label, best_text, best_decision = max(candidates, key=lambda c: _conf(c[2]))
+                best_conf = _conf(best_decision)
+
+                if (
+                    getattr(best_decision, "mode", None) == "tool_plan"
+                    and bool(getattr(best_decision, "intents", None))
+                    and best_conf >= STREAMING_TOOL_OVERRIDE_CONF
+                ):
+                    best_tool_routing_text = best_text
+                    best_tool_routing_label = best_label
+                    if not force_non_streaming:
+                        logger.info(
+                            "[STREAM_OVERRIDE] "
+                            f"best={best_label} conf={best_conf:.2f} "
+                            f"intents={len(getattr(best_decision, 'intents', []) or [])} "
+                            f"original=\"{original_user_text}\" "
+                            f"resolved=\"{user_text}\" "
+                            f"norm_original=\"{norm_original}\" "
+                            f"norm_resolved=\"{norm_resolved}\""
+                        )
+                    force_non_streaming = True
+            except Exception:
+                # Never break the worker loop because of a routing precheck.
+                logger.debug("[STREAM_OVERRIDE] hybrid_router precheck failed", exc_info=True)
+
             # Check if we should use streaming TTS for this request
             # Streaming is ONLY for conversational/reply-only queries, NOT for tool commands
             # Phase 10.1: Also skip streaming if this is a replay request
@@ -1112,7 +1269,28 @@ def run_brain_worker(core_to_brain_q, brain_to_core_q, config_dict: Dict[str, An
                 result_streamed = (result_dict or {}).get("meta", {}).get("streamed", False)
             else:
                 # Non-streaming path (tools, hybrid router, etc.)
-                result_dict = handle_user_text(user_text)
+                # If the streaming precheck selected a normalized variant as the
+                # best tool-capable interpretation, route using that text so the
+                # deterministic router can actually fire.
+                tool_routing_text = user_text
+                try:
+                    bt = (best_tool_routing_text or "").strip()
+                    bl = (best_tool_routing_label or "").strip()
+                    # Only substitute the execution text when the "best" variant
+                    # is a pure trimming/normalization of the user's utterance.
+                    # If normalization rewrote semantics (e.g., monitor questions),
+                    # keep the original resolved text so orchestrator can choose
+                    # the right multi-step tool plan.
+                    if force_non_streaming and bt:
+                        bt_l = bt.lower()
+                        orig_l = (original_user_text or "").lower()
+                        resolved_l = (user_text or "").lower()
+                        is_trim_only = (bt_l in orig_l) or (bt_l in resolved_l)
+                        if bl.startswith("norm_") and is_trim_only:
+                            tool_routing_text = bt
+                except Exception:
+                    tool_routing_text = user_text
+                result_dict = handle_user_text(tool_routing_text)
             
             llm_ms = now_ms() - llm_start
 

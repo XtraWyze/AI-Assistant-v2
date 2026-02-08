@@ -1,0 +1,393 @@
+WYTER / WYZER DESKTOP “GROUND TRUTH” HANDOFF (for GPT‑5.2)
+Date: 2026‑02‑07
+Goal: make Wyzer able to *see* and *control* the Windows desktop reliably, with verifiable ground truth (no guessing).
+
+====================================================================
+0) How to use this document
+====================================================================
+You (GPT‑5.2) are being asked to propose / generate code changes to this repo so Wyzer can:
+- Control: click, type, hotkeys, open app/URL, scroll, wait
+- Perceive: active window/app, UI text detection, “is there a button that says Install/Play?”, download progress, error dialogs
+- Record world state + event log: every action emits structured events (“clicked Install”, “progress 40%”, “UAC prompt appeared”)
+- Answer: “what’s on screen right now?” and “did install succeed?” WITHOUT hallucinating.
+
+IMPORTANT: Wyzer already enforces strong determinism boundaries (see ARCHITECTURE_LOCK.md). Any “desktop vision” should be implemented in a way that keeps these boundaries intact.
+
+
+====================================================================
+1) Repo overview (what Wyzer is)
+====================================================================
+Wyzer is a local Windows voice assistant with a deterministic tool layer and an optional LLM “brain”.
+The core loop:
+- STT (Whisper) -> Orchestrator routes -> Tools execute -> optional LLM narration -> TTS
+
+Multiprocess architecture (per ARCHITECTURE_LOCK.md):
+- Process A: realtime core (mic/VAD/hotword/state machine)
+- Process B: brain worker (STT, orchestrator, LLM calls, TTS)
+- Tool Worker Pool: separate worker processes for tool execution (JSON in/out)
+
+Key architectural rule: tools + deterministic state are the ONLY sources of truth for actions/state.
+
+
+====================================================================
+2) Architectural boundaries you must respect
+====================================================================
+See: ARCHITECTURE_LOCK.md
+
+Key rules (current code is built around these):
+- Tools are stateless and JSON-only:
+  - Implemented in wyzer/tools/
+  - Must return JSON-serializable dicts
+  - Must return {"error": {...}} instead of raising
+  - No state stored in tool objects between calls
+- World state is RAM-only and must be written deterministically (NOT by LLM).
+- Hybrid router fast-path is deterministic (regex, no LLM).
+- Window Watcher (wyzer/world/) is explicitly “NO OCR, NO screenshots” and only tracks metadata.
+
+If you add screenshots/OCR/UIA tree scraping, do NOT put it into the Window Watcher module. Create a separate subsystem (see section 8) so Phase 12 “metadata only” stays intact.
+
+
+====================================================================
+3) Entry points / main execution flow
+====================================================================
+Primary entry:
+- run.py (CLI args, config wiring, starts assistant)
+
+Orchestrator:
+- wyzer/core/orchestrator.py
+  - handle_user_text(text):
+    - deterministic reference resolution (Phase 10)
+    - deterministic autonomy commands (Phase 11)
+    - deterministic window watcher commands (Phase 12)
+    - hybrid_router fast-path
+    - LLM fallback (llamacpp/ollama) for planning or reply
+  - _execute_tool(): validates args, executes tool (worker pool if enabled), logs, updates WorldState
+  - _execute_intents(): sequential tool execution w/ continue_on_error
+
+Hybrid router:
+- wyzer/core/hybrid_router.py
+  - returns either a tool plan (intents) or “use LLM”
+  - conservative regex/keyword routing
+
+Tool registry:
+- wyzer/tools/registry.py
+  - build_default_registry() registers all tools
+
+Tool worker pool:
+- wyzer/core/tool_worker_pool.py
+  - workers run build_default_registry() too
+  - tools must be fully importable and JSON-in/out across processes
+
+Prompt building:
+- wyzer/brain/prompt_builder.py
+  - injects a tool manifest + strict anti-hallucination rules
+  - injects READ‑ONLY visual context (foreground app + title only)
+
+Observability (already exists):
+- wyzer/policy/llm_observability.py
+  - [TOOL_OBS] logs tool execution success/failure/latency
+  - [LLM_OBS] logs LLM outcome
+
+
+====================================================================
+4) Current “desktop” capabilities (what exists today)
+====================================================================
+4.1 Read-only visual context
+- wyzer/tools/get_window_context.py -> uses wyzer/vision/window_context.py
+  - returns foreground app, title, pid (no OCR, no screenshot)
+
+4.2 Always-on window metadata watcher (Phase 12)
+- wyzer/world/window_watcher.py (NO OCR, NO screenshots)
+- wyzer/context/world_state.py has fields:
+  - open_windows, windows_by_monitor, focused_window, recent_window_events, detected_monitor_count
+- Orchestrator has deterministic commands:
+  - “what’s on monitor 2”
+  - “close all on screen 1” (uses pending confirmation)
+  - “what did I just open”
+  - “where am I”
+
+4.3 Window management tools (control, but NOT UI-level)
+- wyzer/tools/window_manager.py
+  - focus_window, minimize_window, maximize_window, close_window, move_window_to_monitor, list_open_windows
+  - uses pywin32 if available, else ctypes
+  - includes a window-handle cache for better reliability
+
+4.4 Deterministic app switching
+- wyzer/tools/switch_app.py
+  - uses focus history (focus_stack) maintained in WorldState
+
+4.5 Open app/file/game vs open website
+- open_target (LocalLibrary resolution)
+- open_website
+
+LIMITATION TODAY:
+- Wyzer can’t read UI content (buttons, dialogs, progress bars) or interact at UI-control level (click/type/hotkeys).
+- As a result, it cannot provide ground-truth answers like “install succeeded” unless a tool explicitly returns that.
+
+
+====================================================================
+5) WorldState (what it tracks and how to extend it)
+====================================================================
+- wyzer/context/world_state.py
+  - Central RAM-only singleton.
+  - Updated by orchestrator after tool execution (or via window watcher update).
+
+Important patterns:
+- Orchestrator calls update_from_tool_execution() via _update_world_state_from_result()
+- Window watcher pushes snapshots via update_window_watcher_state()
+- Focus stack is updated deterministically on focus changes.
+
+For M1 (desktop ground truth), you should add:
+A) A structured event log (ring buffer)
+B) A “last_perception” snapshot (what was last seen on screen)
+C) Action correlation IDs so “click -> perception -> verify” is traceable.
+
+Do NOT let the LLM write these; only tools / deterministic orchestrator code may.
+
+
+====================================================================
+6) The core problem: reliability requires ground truth
+====================================================================
+Wyzer’s existing anti-hallucination policy assumes:
+- tools are the source of truth
+- system state is never assumed
+
+Desktop automation must follow the same rule:
+- Every “control” action needs a measurable outcome
+- Every claim (“Install clicked”, “progress 40%”, “error dialog”) must be backed by a perception tool output.
+
+This implies:
+- Add perception tools that return structured data (NOT screenshots-only)
+- Add verification patterns (action -> perceive -> assert)
+
+
+====================================================================
+7) What to build (Minimum viable ground-truth stack)
+====================================================================
+You want the simplest stack that provides reliable answers.
+
+7.1 Control tools (low-level)
+Add tools that can:
+- click at coordinates (or better: click a UI element)
+- type text
+- hotkeys
+- scroll
+- wait
+- open app/URL (already exists)
+
+Suggested tool names (examples):
+- desktop_click {x,y, button, clicks}
+- desktop_type {text, interval_ms}
+- desktop_hotkey {keys:["CTRL","L"]}
+- desktop_scroll {dx,dy}
+- wait_ms {ms}
+
+BUT coordinates are brittle. Prefer UI element targeting if possible:
+- desktop_click_uia {name:"Install", control_type:"Button", scope:"focused_window"}
+
+7.2 Perception tools (ground truth)
+Add tools that can:
+- report foreground window (already exists)
+- enumerate UIA tree for the focused window (names, control types, bounding rectangles)
+- optionally do OCR on a region or on the focused window/screen
+- detect common dialogs (UAC, installer errors)
+- detect progress indicators (either via UIA ValuePattern or OCR of percentage)
+
+Suggested tool names (examples):
+- perceive_uia_focused_window {max_nodes, include_rects:true}
+- perceive_ocr_region {monitor:1, rect:[l,t,r,b]} OR {hwnd:..., rect:...}
+- perceive_dialogs {include_uac:true}
+
+Outputs must be JSON and small enough for prompt injection.
+Return:
+- normalized text lines
+- detected controls: [{name, control_type, rect, is_enabled, patterns...}]
+- warnings/errors: e.g., access denied, elevation required
+
+7.3 Verification helpers
+Add deterministic “assert” style tools or orchestrator-side checks:
+- assert_text_present {text:"Install", source:"uia|ocr"}
+- assert_no_error_dialog
+- assert_progress_at_least {percent:40}
+
+Alternative: keep “asserts” in orchestrator as deterministic checks on perception-tool output.
+But a small set of assert tools can simplify composition planning.
+
+
+====================================================================
+8) Where to put new functionality (so it fits Wyzer’s architecture)
+====================================================================
+Do NOT modify Phase 12 WindowWatcher to include OCR/screenshot.
+Instead, introduce a separate package, e.g.:
+- wyzer/desktop/
+  - input.py (click/type/hotkeys)
+  - uia.py (UI Automation wrappers)
+  - ocr.py (OCR wrappers)
+  - screenshot.py (capture monitor/window to a temp file)
+
+Then implement Tools that call these wrappers:
+- wyzer/tools/desktop_click.py
+- wyzer/tools/perceive_uia_focused_window.py
+etc.
+
+Register them in wyzer/tools/registry.py build_default_registry().
+
+Reason: tools can be executed in worker processes, and the rest of Wyzer expects tools to be stateless and deterministic.
+
+
+====================================================================
+9) Event log design (required for “did it succeed?”)
+====================================================================
+Add a new ring buffer in WorldState, e.g.:
+- ws.event_log: Deque[Dict[str,Any]] maxlen=200
+
+Event schema suggestion:
+{
+  "ts": 1234567890.12,
+  "kind": "tool_start|tool_end|perception|ui_action|assertion",
+  "tool": "desktop_click" (optional),
+  "action_id": "uuid",          # correlates a multi-step task
+  "step_id": "uuid",            # correlates a single tool call
+  "details": {...},
+  "ok": true/false (optional),
+  "error": {...} (optional)
+}
+
+Where to emit events:
+- Orchestrator _execute_tool(): emit tool_start/tool_end
+- Perception tools: emit perception snapshots (small, structured)
+- Control tools: emit ui_action (“clicked”, “typed”, “sent hotkey”)
+- Verification: emit assertion results
+
+This provides the “ground truth ledger” Wyzer can summarize deterministically.
+
+Note: Wyzer already logs [TOOL_OBS] via logger. That’s good for logs, but not queryable state.
+The event log in WorldState is queryable and can be injected into prompts.
+
+
+====================================================================
+10) Answering “What’s on screen right now?”
+====================================================================
+Today Wyzer can only answer:
+- active window title/process
+- open windows per monitor (metadata)
+
+With ground truth perception you can answer:
+- focused window UI elements (buttons, text)
+- dialog presence
+- progress
+
+Implement:
+- A tool “perceive_focused_window_summary” returning:
+  - app/title
+  - key UI elements: top N text labels + buttons + progress
+  - detected errors/dialogs
+
+Keep it deterministic:
+- no freeform “interpretation”; return a structured list.
+
+
+====================================================================
+11) Answering “Did install succeed?”
+====================================================================
+A reliable pattern:
+1) Control action (click Install)
+2) Perceive state (UIA or OCR)
+3) Verify success condition
+4) If not met, capture error dialog text and report.
+
+Example success conditions:
+- UIA: Install button disappears and “Play” appears
+- UIA: progress bar reaches 100% and status text includes “Complete”
+- OCR: find “Installation complete” text
+
+All of these must be tool-backed.
+
+
+====================================================================
+12) Windows-specific gotchas (must handle)
+====================================================================
+- DPI scaling: coordinates must be DPI-aware. WindowWatcher already sets DPI awareness for monitor rect accuracy; you’ll need similar handling for screenshots and input.
+- UAC prompts: often on “secure desktop”; UI automation may fail without elevation. You must detect UAC (perception tool) and respond “I need elevation” rather than guessing.
+- Worker processes: tools run in separate processes. Ensure the automation libraries work from spawned processes.
+- Foreground restrictions: SetForegroundWindow can fail; window_manager/switch_app already handle some cases.
+
+
+====================================================================
+13) Suggested libraries (Windows)
+====================================================================
+Keep dependencies minimal and stable.
+
+UI Automation:
+- pywinauto (UIA backend) OR uiautomation (pure python UIA)
+
+Screenshots:
+- mss (fast monitor capture) or PIL.ImageGrab
+
+OCR:
+- pytesseract + Tesseract install OR a Windows OCR API wrapper (harder).
+
+Input:
+- pyautogui (simple) but coordinate-based
+- Prefer pywinauto click_input / UIA InvokePattern when possible
+
+Remember: tool results must be JSON-serializable.
+If you capture images, write them to a temp file and return a path + hash, not raw bytes.
+
+
+====================================================================
+14) Where to update risk policy
+====================================================================
+Autonomy confirmation uses risk classification:
+- wyzer/policy/risk.py (classify_plan)
+
+New tools should be categorized:
+- click/type/hotkey: at least MEDIUM risk (can cause side effects)
+- bulk operations: HIGH risk
+- perception tools: LOW risk (read-only)
+- wait_ms: LOW risk
+
+Even if autonomy mode is OFF by default, risk tags are needed for future use.
+
+
+====================================================================
+15) What to modify first (recommended order)
+====================================================================
+1) Add wait_ms tool (easy, helps sequencing)
+2) Add perception via UIA for focused window (most reliable vs OCR)
+3) Add click by UIA element name (invoke button) (more reliable than coordinates)
+4) Add OCR region as fallback (for apps without UIA)
+5) Add WorldState event_log ring buffer + a tool to query it (e.g., get_recent_events)
+6) Update composition planner patterns to prefer action -> perceive -> assert
+
+
+====================================================================
+16) Key files (map for quick navigation)
+====================================================================
+- ARCHITECTURE_LOCK.md
+- run.py
+- wyzer/core/orchestrator.py
+- wyzer/core/hybrid_router.py
+- wyzer/tools/registry.py
+- wyzer/tools/tool_base.py
+- wyzer/core/tool_worker_pool.py
+- wyzer/context/world_state.py
+- wyzer/world/window_watcher.py
+- wyzer/tools/window_manager.py
+- wyzer/tools/switch_app.py
+- wyzer/vision/window_context.py
+- wyzer/brain/prompt_builder.py
+- wyzer/policy/risk.py
+
+
+====================================================================
+17) Acceptance criteria (M1)
+====================================================================
+Wyzer must be able to answer with tool-backed truth:
+- “What’s on screen right now?” -> returns a structured summary of focused window UI (not guesses)
+- “Is there a button that says Install/Play?” -> true/false with evidence (UIA/OCR match)
+- “Did install succeed?” -> success/failure based on explicit verification checks
+- Every control action emits a structured event into an event log
+
+
+END

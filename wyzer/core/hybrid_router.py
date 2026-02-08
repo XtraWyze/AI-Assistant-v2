@@ -23,6 +23,32 @@ def _strip_trailing_punct(text: str) -> str:
     return (text or "").strip().rstrip(".?!,;:\"'")
 
 
+_ROUTING_NORMALIZE_PUNCT_RE = re.compile(r"[^a-z0-9\s]+", re.IGNORECASE)
+
+
+def _normalize_text_for_routing(text: str) -> str:
+    """Normalize text for deterministic routing checks.
+
+    Keep this conservative: we only use it for lightweight keyword detection,
+    not for the primary anchored command regexes.
+    """
+    tl = (text or "").strip().lower()
+    if not tl:
+        return ""
+    # Replace punctuation with spaces so multi-sentence utterances can be scanned.
+    tl = _ROUTING_NORMALIZE_PUNCT_RE.sub(" ", tl)
+    tl = re.sub(r"\s+", " ", tl).strip()
+    if not tl:
+        return ""
+    # Collapse adjacent repeats: "time time time" -> "time time" -> "time"
+    tokens = tl.split()
+    collapsed: List[str] = []
+    for tok in tokens:
+        if not collapsed or collapsed[-1] != tok:
+            collapsed.append(tok)
+    return " ".join(collapsed)
+
+
 def _extract_volume_percent(text: str) -> Optional[int]:
     m = re.search(r"\b(\d{1,3})\s*%?\b", text or "")
     if not m:
@@ -130,7 +156,7 @@ _REASONING_RE = re.compile(
     r"(?:"
     r"^why\s+|"                                    # "why is the sky blue"
     r"^how\s+(?:do|does|can|could|would|should|to)\s+|"  # "how do I...", "how to..."
-    r"^what\s+(?:is|are|does|do|should|would|could)\s+(?!the\s+time|the\s+date|my\s+|the\s+weather|the\s+temp|[a-z]+\s+volume)|"  # General "what is X" (but not time/weather/date/volume)
+    r"^what\s+(?:is|are|does|do|should|would|could)\s+(?!the\s+time|the\s+date|today\b|today\s*(?:'s)?\s+date|the\s+day\b|day\s+of\s+the\s+week|my\s+|the\s+weather|the\s+temp|[a-z]+\s+volume)|"  # General "what is X" (but not time/weather/date/day/volume)
     r"^explain\s+|"                                # "explain how..."
     r"^tell\s+me\s+(?:about|why|how)|"            # "tell me about...", "tell me why..."
     r"^can\s+you\s+(?:explain|help|tell)|"        # "can you explain..."
@@ -267,9 +293,243 @@ def looks_multi_intent(text: str) -> bool:
 
 # Anchored time patterns: only match whole-utterance variants.
 _TIME_RE = re.compile(
-    r"^(what\s+(?:time|'s\s+the\s+time)|what's\s+the\s+time|time\s+is\s+it|current\s+time|what\s+time\s+is\s+it)\??$",
+    r"^(?:what\s+time(?:\s+is\s+it)?|(?:what\s+s|whats|what'?s)\s+the\s+time|time(?:\s+is\s+it)?|current\s+time|the\s+time)\??$",
     re.IGNORECASE,
 )
+
+# Time keywords inside longer utterances (e.g., "Time. What time is it?").
+# Keep this narrowly focused on *asking the current time*, not conceptual "what is time".
+_TIME_KEYWORDS_ANYWHERE_RE = re.compile(
+    r"\b(?:what\s+time(?:\s+is\s+it)?|(?:what\s+s|whats|what'?s)\s+the\s+time|current\s+time|time\s+is\s+it)\b",
+    re.IGNORECASE,
+)
+
+# Common time *request* phrases that can appear inside longer utterances.
+# Intentionally does NOT match conceptual questions like "what is time".
+_TIME_REQUEST_ANYWHERE_RE = re.compile(
+    r"\b(?:"
+    r"(?:can\s+you\s+)?tell\s+me\s+(?:the\s+)?time|"
+    r"check\s+(?:the\s+)?time|"
+    r"get\s+(?:the\s+)?time|"
+    r"give\s+me\s+(?:the\s+)?time|"
+    r"say\s+(?:the\s+)?time|"
+    r"what\s+time(?:\s+is\s+it)?|"
+    r"(?:what\s+s|whats|what'?s)\s+the\s+time|"
+    r"current\s+time|"
+    r"time\s+is\s+it"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+# Anchored date/day patterns: only match whole-utterance variants.
+_DATE_RE = re.compile(
+    r"^(?:"
+    r"what\s+is\s+today|"
+    r"(?:what\s+s|whats|what'?s)\s+today|"
+    r"what\s+day(?:\s+of\s+the\s+week)?\s+is\s+it|"
+    r"what\s+date\s+is\s+it|"
+    r"what\s+is\s+the\s+date|"
+    r"what\s+is\s+today\s+s\s+date|"
+    r"what\s+is\s+todays\s+date|"
+    r"(?:what\s+s|whats|what'?s)\s+the\s+date|"
+    r"(?:what\s+s|whats|what'?s)\s+today\s+s\s+date|"
+    r"(?:what\s+s|whats|what'?s)\s+todays\s+date|"
+    r"today\s+s\s+date|"
+    r"todays\s+date|"
+    r"current\s+date|"
+    r"the\s+date|"
+    r"day\s+of\s+the\s+week"
+    r")\??$",
+    re.IGNORECASE,
+)
+
+# Date/day keywords inside longer utterances (e.g., "hey wyzer, what is today").
+_DATE_KEYWORDS_ANYWHERE_RE = re.compile(
+    r"\b(?:"
+    r"what\s+is\s+today|"
+    r"(?:what\s+s|whats|what'?s)\s+today|"
+    r"what\s+day(?:\s+of\s+the\s+week)?\s+is\s+it|"
+    r"what\s+date\s+is\s+it|"
+    r"what\s+is\s+the\s+date|"
+    r"(?:what\s+s|whats|what'?s)\s+the\s+date|"
+    r"today\s+s\s+date|"
+    r"todays\s+date|"
+    r"current\s+date|"
+    r"day\s+of\s+the\s+week|"
+    r"time\s+and\s+date|"
+    r"date\s+and\s+time"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Common date/day *request* phrases that can appear inside longer utterances.
+_DATE_REQUEST_ANYWHERE_RE = re.compile(
+    r"\b(?:"
+    r"(?:can\s+you\s+)?tell\s+me\s+(?:the\s+)?(?:current\s+)?date|"
+    r"(?:can\s+you\s+)?tell\s+me\s+what\s+day\s+it\s+is|"
+    r"tell\s+me\s+today\s+s\s+date|"
+    r"check\s+(?:the\s+)?date|"
+    r"get\s+(?:the\s+)?date|"
+    r"give\s+me\s+(?:the\s+)?date"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_leftover_around_date(raw_text: str, normalized: str) -> str:
+    """Extract non-date leftover from an utterance that also asks today's date/day.
+
+    Used to support mixed queries like "What's the date and tell me a story?"
+    by returning get_time as a tool_plan plus an LLM leftover.
+    """
+    raw = (raw_text or "").strip()
+    if not raw:
+        return ""
+
+    n = (normalized or "").strip().lower()
+    if not n or not (_DATE_KEYWORDS_ANYWHERE_RE.search(n) or _DATE_REQUEST_ANYWHERE_RE.search(n)):
+        return ""
+
+    splitter = re.compile(r"\s+(?:and|then|also|plus)\s+", re.IGNORECASE)
+    parts = splitter.split(raw, maxsplit=1)
+    if len(parts) == 2:
+        a, b = parts[0].strip(), parts[1].strip()
+        a_n = _normalize_text_for_routing(a)
+        b_n = _normalize_text_for_routing(b)
+        a_has_date = bool(_DATE_KEYWORDS_ANYWHERE_RE.search(a_n) or _DATE_REQUEST_ANYWHERE_RE.search(a_n))
+        b_has_date = bool(_DATE_KEYWORDS_ANYWHERE_RE.search(b_n) or _DATE_REQUEST_ANYWHERE_RE.search(b_n))
+        if a_has_date and b and not b_has_date:
+            return b
+        if b_has_date and a and not a_has_date:
+            return a
+
+    cleaned = raw
+    cleaned = re.sub(_DATE_REQUEST_ANYWHERE_RE, " ", cleaned)
+    cleaned = re.sub(_DATE_KEYWORDS_ANYWHERE_RE, " ", cleaned)
+    cleaned = re.sub(r"\b(?:and|then|also|plus)\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t\r\n,;:.?!")
+    return cleaned.strip()
+
+
+def _looks_like_date_fragment(normalized: str) -> bool:
+    """Return True for short/fragment utterances that should map to get_time.
+
+    Examples:
+    - "today"
+    - "date"
+    - "today's date" (normalized: "today s date")
+    - "day of the week"
+    """
+    n = (normalized or "").strip().lower()
+    if not n:
+        return False
+
+    if n in {
+        "today",
+        "date",
+        "the date",
+        "current date",
+        "todays date",
+        "today s date",
+        "day of week",
+        "day of the week",
+        "what is today",
+        "what day is it",
+        "what date is it",
+        "what s the date",
+        "whats the date",
+        "what's the date",
+        "time and date",
+        "date and time",
+    }:
+        return True
+
+    toks = n.split()
+    if toks and all(t == "today" for t in toks):
+        return True
+    if toks and all(t == "date" for t in toks):
+        return True
+
+    # Allow small filler around "today"/"date": "uh today please", "hey date".
+    if ("today" in toks or "date" in toks) and len(toks) <= 4:
+        filler = {"uh", "um", "please", "pls", "hey", "yo", "ok", "okay"}
+        non_key = [t for t in toks if t not in {"today", "date"}]
+        if non_key and all(t in filler for t in non_key):
+            return True
+
+    return False
+
+
+def _extract_leftover_around_time(raw_text: str, normalized: str) -> str:
+    """Extract non-time leftover from an utterance that also asks the current time.
+
+    Used to support mixed queries like "What's the time and give me a short story?"
+    by returning get_time as a tool_plan plus an LLM leftover.
+    """
+    raw = (raw_text or "").strip()
+    if not raw:
+        return ""
+
+    n = (normalized or "").strip().lower()
+    if not n or not (_TIME_KEYWORDS_ANYWHERE_RE.search(n) or _TIME_REQUEST_ANYWHERE_RE.search(n)):
+        return ""
+
+    # Prefer splitting on common conjunctions to preserve user phrasing.
+    splitter = re.compile(r"\s+(?:and|then|also|plus)\s+", re.IGNORECASE)
+    parts = splitter.split(raw, maxsplit=1)
+    if len(parts) == 2:
+        a, b = parts[0].strip(), parts[1].strip()
+        a_n = _normalize_text_for_routing(a)
+        b_n = _normalize_text_for_routing(b)
+        a_has_time = bool(_TIME_KEYWORDS_ANYWHERE_RE.search(a_n) or _TIME_REQUEST_ANYWHERE_RE.search(a_n))
+        b_has_time = bool(_TIME_KEYWORDS_ANYWHERE_RE.search(b_n) or _TIME_REQUEST_ANYWHERE_RE.search(b_n))
+        if a_has_time and b and not b_has_time:
+            return b
+        if b_has_time and a and not a_has_time:
+            return a
+
+    # Fallback: remove time-keyword phrases and cleanup separators.
+    cleaned = raw
+    cleaned = re.sub(_TIME_REQUEST_ANYWHERE_RE, " ", cleaned)
+    cleaned = re.sub(_TIME_KEYWORDS_ANYWHERE_RE, " ", cleaned)
+    cleaned = re.sub(r"\b(?:and|then|also|plus)\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t\r\n,;:.?!")
+    return cleaned.strip()
+
+
+def _looks_like_time_fragment(normalized: str) -> bool:
+    """Return True for short/fragment utterances that should map to get_time.
+
+    Examples:
+    - "time"
+    - "time what is it"
+    - repeated: "time time time"
+    """
+    n = (normalized or "").strip().lower()
+    if not n:
+        return False
+
+    if n in {"time", "the time", "current time", "what time", "whats the time", "what's the time", "time is it"}:
+        return True
+
+    toks = n.split()
+    if toks and all(t == "time" for t in toks):
+        return True
+
+    # "time what is it" (common STT fragment)
+    if toks and toks[0] == "time" and set(toks[1:]) <= {"what", "is", "it"}:
+        return True
+
+    # Allow small filler around "time": "uh time please", "hey time".
+    # Keep conservative by restricting to short utterances and a small filler set.
+    if "time" in toks and len(toks) <= 4:
+        filler = {"uh", "um", "please", "pls", "hey", "yo", "ok", "okay"}
+        non_time = [t for t in toks if t != "time"]
+        if non_time and all(t in filler for t in non_time):
+            return True
+
+    return False
 
 # Weather patterns: match queries about weather, temperature, forecast
 # Also includes implicit weather queries about clothing/outdoor activities
@@ -338,6 +598,23 @@ _WINDOW_CONTEXT_RE = re.compile(
     r"tell\s+me\s+(?:about\s+)?(?:the\s+)?(?:active|current|foreground)\s+(?:window|app)|"  # "tell me the active window"
     r"(?:current|active|focused)\s+(?:window|app|application)(?:\s+info)?"  # "active window", "current app"
     r")\??$",
+    re.IGNORECASE,
+)
+
+# "what's on my screen/monitor" -> get_window_context (foreground)
+_WHATS_ON_MY_SCREEN_RE = re.compile(
+    r"^(?:what(?:'?s|\s+is)\s+on\s+(?:my\s+)?(?:screen|monitor)(?:\s+right\s+now)?|"
+    r"what\s+am\s+i\s+seeing|"
+    r"what\s+is\s+on\s+(?:my\s+)?(?:screen|monitor))\??$",
+    re.IGNORECASE,
+)
+
+# "what windows are open" / "what's open" -> list_open_windows
+_LIST_OPEN_WINDOWS_RE = re.compile(
+    r"^(?:what\s+windows\s+are\s+open|"
+    r"what(?:'?s|\s+is)\s+open|"
+    r"what\s+do\s+i\s+have\s+open|"
+    r"what\s+windows\s+do\s+i\s+have\s+open)\??$",
     re.IGNORECASE,
 )
 
@@ -588,7 +865,17 @@ def _decide_single_clause(text: str) -> HybridDecision:
         return HybridDecision(mode="llm", intents=None, reply="", confidence=0.8)
 
     # Time queries.
-    if _TIME_RE.match(clause.strip()):
+    clause_norm = _normalize_text_for_routing(_strip_trailing_punct(clause))
+    if clause_norm and (_TIME_RE.match(clause_norm) or _looks_like_time_fragment(clause_norm)):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "get_time", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.95,
+        )
+
+    # Date/day-of-week queries.
+    if clause_norm and (_DATE_RE.match(clause_norm) or _looks_like_date_fragment(clause_norm)):
         return HybridDecision(
             mode="tool_plan",
             intents=[{"tool": "get_time", "args": {}, "continue_on_error": False}],
@@ -783,6 +1070,22 @@ def _decide_single_clause(text: str) -> HybridDecision:
     # Phase 9: Window context queries - "what am I looking at", "what app is active"
     # Screen awareness (READ-ONLY) - NO OCR, NO screenshots, NO automation
     # ═══════════════════════════════════════════════════════════════════════
+    if _WHATS_ON_MY_SCREEN_RE.match(clause):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "get_window_context", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.95,
+        )
+
+    if _LIST_OPEN_WINDOWS_RE.match(clause):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "list_open_windows", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.95,
+        )
+
     if _WINDOW_CONTEXT_RE.match(clause):
         return HybridDecision(
             mode="tool_plan",
@@ -1090,6 +1393,12 @@ def _decide_single_clause(text: str) -> HybridDecision:
         if not target or target.lower() in {"it", "this", "that", "something", "anything"}:
             return HybridDecision(mode="llm", intents=None, reply="", confidence=0.4)
 
+        # Guard: "minimize all windows/applications/everything" is a bulk command.
+        # Do NOT map to minimize_window(title="all windows"); let orchestrator handle.
+        target_l = re.sub(r"\s+", " ", target.lower()).strip()
+        if re.search(r"\b(?:all\s+(?:windows|apps?|applications)|everything)\b", target_l):
+            return HybridDecision(mode="llm", intents=None, reply="", confidence=0.6)
+
         # Extra defense: if target includes other action verbs, defer to LLM.
         target_l = re.sub(r"\s+", " ", target.lower()).strip()
         if any(v in target_l.split() for v in ["play", "pause", "resume", "then", "and", "also", "plus"]):
@@ -1394,39 +1703,110 @@ def decide(text: str) -> HybridDecision:
     if not raw:
         return HybridDecision(mode="llm", intents=None, reply="", confidence=0.0)
 
-    # Check for reasoning/explanation questions first - these always go to LLM
-    if needs_reasoning(raw):
-        return HybridDecision(mode="llm", intents=None, reply="", confidence=0.85)
+    # Normalize for lightweight keyword detection.
+    normalized = _normalize_text_for_routing(raw)
 
-    # Try multi-intent parsing: handle "open steam and chrome" directly without LLM
+    # Time queries: handle fragments and multi-sentence utterances.
+    # Must run before needs_reasoning() so short fragments like "Time." don't
+    # get treated as conversational streaming reply-only.
+    is_creative = _is_creative_request(raw)
+    has_time_keyword = bool(
+        normalized
+        and (
+            _TIME_KEYWORDS_ANYWHERE_RE.search(normalized)
+            or _TIME_REQUEST_ANYWHERE_RE.search(normalized)
+        )
+    )
+    is_time_fragment = bool(normalized and _looks_like_time_fragment(normalized))
+
+    # - Strong time-keyword phrases ("what's the time", "current time") should route
+    #   to tools even if the utterance also contains creative requests.
+    # - Bare fragments ("time") should NOT override creative content requests.
+    if has_time_keyword or (is_time_fragment and not is_creative):
+        leftover = ""
+        if has_time_keyword and is_creative:
+            leftover = _extract_leftover_around_time(raw, normalized)
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "get_time", "args": {}, "continue_on_error": False}],
+            reply=(f"__LEFTOVER__:{leftover}" if leftover else ""),
+            confidence=0.95,
+        )
+
+    # Date/day-of-week queries: handle fragments and multi-sentence utterances.
+    # Must run before needs_reasoning() so "What is today?" doesn't get routed
+    # to LLM reply-only streaming.
+    has_date_keyword = bool(
+        normalized
+        and (
+            _DATE_KEYWORDS_ANYWHERE_RE.search(normalized)
+            or _DATE_REQUEST_ANYWHERE_RE.search(normalized)
+        )
+    )
+    is_date_fragment = bool(normalized and _looks_like_date_fragment(normalized))
+
+    # - Strong date/day phrases should route to tools even if the utterance also
+    #   contains creative requests.
+    # - Bare fragments ("today", "date") should NOT override creative content requests.
+    if has_date_keyword or (is_date_fragment and not is_creative):
+        leftover = ""
+        if has_date_keyword and is_creative:
+            leftover = _extract_leftover_around_date(raw, normalized)
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "get_time", "args": {}, "continue_on_error": False}],
+            reply=(f"__LEFTOVER__:{leftover}" if leftover else ""),
+            confidence=0.95,
+        )
+
+    # Window perception queries are safe, deterministic, and should NOT be swallowed
+    # by the generic reasoning-question heuristic.
+    if _WHATS_ON_MY_SCREEN_RE.match(raw):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "get_window_context", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.93,
+        )
+    if _LIST_OPEN_WINDOWS_RE.match(raw):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "list_open_windows", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.93,
+        )
+
+    # Try multi-intent parsing: handle mixed tool+LLM utterances like
+    # "open notepad and tell me a story" without getting blocked by needs_reasoning().
     if looks_multi_intent(raw):
         try:
             from wyzer.core.multi_intent_parser import parse_multi_intent_with_fallback, parse_multi_intent_partial
+
             result = parse_multi_intent_with_fallback(raw)
             if result is not None:
                 intents, confidence = result
                 return HybridDecision(mode="tool_plan", intents=intents, reply="", confidence=confidence)
-            
-            # Try partial parsing: "Open Chrome, Open Chrome, and what's a VPN?"
-            # This returns tool intents + leftover text for LLM
+
+            # Try partial parsing: tool intents + leftover text for LLM
             partial_result = parse_multi_intent_partial(raw)
             if partial_result is not None:
                 intents, leftover_text, confidence = partial_result
                 if intents and leftover_text:
-                    # Return with special marker indicating partial + leftover
                     return HybridDecision(
                         mode="tool_plan",
                         intents=intents,
-                        reply=f"__LEFTOVER__:{leftover_text}",  # Special marker for orchestrator
-                        confidence=confidence
+                        reply=f"__LEFTOVER__:{leftover_text}",
+                        confidence=confidence,
                     )
                 elif intents:
                     return HybridDecision(mode="tool_plan", intents=intents, reply="", confidence=confidence)
         except Exception:
-            # If multi-intent parser fails, fall back to LLM
+            # If multi-intent parser fails, fall back to the normal logic below.
             pass
-        
-        # If multi-intent parsing didn't work, use LLM for reasoning/splitting
-        return HybridDecision(mode="llm", intents=None, reply="", confidence=0.2)
+
+    # Check for reasoning/explanation questions - these go to LLM when we couldn't
+    # deterministically extract any tool intents.
+    if needs_reasoning(raw):
+        return HybridDecision(mode="llm", intents=None, reply="", confidence=0.85)
 
     return _decide_single_clause(raw)

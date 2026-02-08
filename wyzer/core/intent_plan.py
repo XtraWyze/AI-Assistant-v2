@@ -136,7 +136,8 @@ def normalize_tool_aliases(intents: List["Intent"], tool_registry) -> Tuple[List
                 normalized.append(Intent(
                     tool=canonical,
                     args=intent.args,
-                    continue_on_error=intent.continue_on_error
+                    continue_on_error=intent.continue_on_error,
+                    meta=getattr(intent, "meta", {}) or {},
                 ))
             else:
                 # Canonical doesn't exist - leave as-is for unknown-tool filtering
@@ -154,6 +155,9 @@ class Intent:
     tool: str
     args: Dict[str, Any] = field(default_factory=dict)
     continue_on_error: bool = False
+    # Optional metadata that should not be passed to tool execution.
+    # Used for deterministic reply formatting hints and internal routing.
+    meta: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -210,7 +214,8 @@ def normalize_plan(model_output: Dict[str, Any]) -> IntentPlan:
                         intents_list.append(Intent(
                             tool=tool_name,
                             args=raw_intent.get("args", {}),
-                            continue_on_error=raw_intent.get("continue_on_error", False)
+                            continue_on_error=raw_intent.get("continue_on_error", False),
+                            meta=raw_intent.get("meta", {}) if isinstance(raw_intent.get("meta", {}), dict) else {},
                         ))
     
     # Check for legacy single intent format ({"intent": {...}})

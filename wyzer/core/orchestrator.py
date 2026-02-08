@@ -114,6 +114,14 @@ _CONFIRM_NO_RE = re.compile(
     re.IGNORECASE
 )
 
+# Bulk window commands (deterministic orchestrator handlers)
+_MINIMIZE_ALL_WINDOWS_TOKEN_RE = re.compile(
+    r"\b(?:all\s+(?:windows|apps?|applications)|everything)\b",
+    re.IGNORECASE,
+)
+_MINIMIZE_VERB_RE = re.compile(r"\bminimi[sz]e\b", re.IGNORECASE)
+_PENDING_ACTION_QUESTION_RE = re.compile(r"^(?:can|could|would|will)\s+you\b", re.IGNORECASE)
+
 # ============================================================================
 # PHASE 12: WINDOW WATCHER COMMAND PATTERNS (deterministic, no LLM)
 # ============================================================================
@@ -873,6 +881,13 @@ def handle_user_text(text: str) -> Dict[str, Any]:
     window_watcher_result = _check_window_watcher_commands(text, start_time)
     if window_watcher_result is not None:
         return window_watcher_result
+
+    # =========================================================================
+    # BULK WINDOW COMMANDS (deterministic, no LLM)
+    # =========================================================================
+    bulk_minimize_result = _check_minimize_all_windows_commands(text, start_time)
+    if bulk_minimize_result is not None:
+        return bulk_minimize_result
     
     # =========================================================================
     # PHASE 11: CONFIRMATION FLOW (deterministic)
@@ -882,6 +897,13 @@ def handle_user_text(text: str) -> Dict[str, Any]:
     confirmation_result = _check_confirmation_response(text, start_time)
     if confirmation_result is not None:
         return confirmation_result
+
+    # =========================================================================
+    # PENDING ACTION (lightweight deterministic follow-up)
+    # =========================================================================
+    pending_action_result = _check_pending_action_response(text, start_time)
+    if pending_action_result is not None:
+        return pending_action_result
     
     # =========================================================================
     # CONTINUATION PHRASE PRE-PASS (deterministic topic continuity)
@@ -921,6 +943,10 @@ def handle_user_text(text: str) -> Dict[str, Any]:
     
     try:
         registry = get_registry()
+
+        # Peek hybrid router BEFORE reply-only. This prevents informational-query
+        # heuristics from hijacking deterministic commands (e.g., window/screen perception).
+        hybrid_decision = hybrid_router.decide(text)
         
         # =====================================================================
         # REPLY-ONLY FAST-PATH: Skip tools for conversational queries
@@ -933,7 +959,12 @@ def handle_user_text(text: str) -> Dict[str, Any]:
         # This prevents tool hallucinations on conversational/knowledge queries.
         # Future refactors: DO NOT add "plan first" logic before this check.
         # =====================================================================
-        use_reply_only = is_continuation or is_info_query
+        has_registered_hybrid_plan = (
+            hybrid_decision.mode == "tool_plan"
+            and bool(hybrid_decision.intents)
+            and _hybrid_tool_plan_is_registered(hybrid_decision.intents, registry)
+        )
+        use_reply_only = (is_continuation or is_info_query) and not has_registered_hybrid_plan
         if use_reply_only:
             reason = "continuation" if is_continuation else "informational query"
             logger.info(f"[REPLY-ONLY] Using reply-only mode ({reason})")
@@ -1067,11 +1098,16 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 llm_reply = llm_response.get("reply", "").strip()
             
             # Step 4: Combine replies (tool result + leftover tools or LLM answer)
+            primary_tool = executed_intents[0].tool if executed_intents else None
+
             if leftover_reply:
                 combined_reply = f"{tool_reply} {leftover_reply}"
             elif llm_reply:
-                # Combine with natural flow
-                combined_reply = f"{tool_reply} {llm_reply}"
+                # Combine with natural flow, but don't let LLM restate/override deterministic time/date.
+                if primary_tool == "get_time" and _llm_reply_seems_like_time_date_answer(llm_reply):
+                    combined_reply = tool_reply
+                else:
+                    combined_reply = f"{tool_reply} {llm_reply}"
             else:
                 combined_reply = tool_reply
             
@@ -1102,7 +1138,6 @@ def handle_user_text(text: str) -> Dict[str, Any]:
             }
 
         # Hybrid router FIRST: deterministic tool plans for obvious commands; LLM otherwise.
-        hybrid_decision = hybrid_router.decide(text)
         if hybrid_decision.mode == "tool_plan" and hybrid_decision.intents:
             if _hybrid_tool_plan_is_registered(hybrid_decision.intents, registry):
                 logger.info(f"[HYBRID] route=tool_plan confidence={hybrid_decision.confidence:.2f}")
@@ -1290,7 +1325,11 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                             leftover_llm_reply = llm_response.get("reply", "").strip()
                         
                         if leftover_llm_reply:
-                            reply = f"{reply} {leftover_llm_reply}"
+                            primary_tool = executed_intents[0].tool if executed_intents else None
+                            if primary_tool == "get_time" and _llm_reply_seems_like_time_date_answer(leftover_llm_reply):
+                                logger.info("[HYBRID] Suppressed leftover LLM time/date restatement after get_time")
+                            else:
+                                reply = f"{reply} {leftover_llm_reply}"
                     elif leftover_text and not all_intents_succeeded:
                         logger.info(f'[HYBRID] Skipping leftover (prior intent failed): "{leftover_text[:40]}..."')
 
@@ -1463,6 +1502,66 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                     "hybrid_confidence": 0.0,
                 },
             }
+
+        # ====================================================================
+        # COMPOSITION PLANNER (Phase: tool composition reasoning)
+        # ====================================================================
+        # When hybrid router didn't produce a deterministic tool_plan and this
+        # is not a reply-only query, ask the LLM for a strict JSON composition
+        # plan, then validate + execute deterministically.
+        #
+        # HARD RULES:
+        # - LLM proposes plan only; deterministic code validates and executes.
+        # - Plan may ONLY reference registered tools.
+        # - Final spoken reply must be grounded in execution_summary.
+        # ====================================================================
+        if _looks_like_action_command(text):
+            composition = _call_llm_composition_plan(text, registry)
+            # Clarification path
+            if isinstance(composition, dict) and isinstance(composition.get("reply"), str) and composition.get("reply", "").strip() and not composition.get("intents"):
+                end_time = time.perf_counter()
+                latency_ms = int((end_time - start_time) * 1000)
+                return {
+                    "reply": composition.get("reply", "").strip(),
+                    "latency_ms": latency_ms,
+                    "meta": {
+                        "hybrid_route": "llm",
+                        "hybrid_confidence": float(hybrid_decision.confidence or 0.0),
+                        "composition_planner": "clarification",
+                    },
+                }
+
+            if isinstance(composition, dict) and composition.get("intents"):
+                exec_summary = _execute_composition_plan(composition, registry)
+
+                # If execution produced no runnable intents, fall back to normal LLM path.
+                if exec_summary is not None and exec_summary.ran:
+                    final_response = _call_llm_with_execution_summary(text, exec_summary, registry)
+                    end_time = time.perf_counter()
+                    latency_ms = int((end_time - start_time) * 1000)
+                    return {
+                        "reply": final_response.get("reply", "I executed the action."),
+                        "latency_ms": latency_ms,
+                        "execution_summary": {
+                            "ran": [
+                                {
+                                    "tool": r.tool,
+                                    "ok": r.ok,
+                                    "result": r.result,
+                                    "error": r.error,
+                                }
+                                for r in exec_summary.ran
+                            ],
+                            "stopped_early": exec_summary.stopped_early,
+                        },
+                        "meta": {
+                            "hybrid_route": "llm",
+                            "hybrid_confidence": float(hybrid_decision.confidence or 0.0),
+                            "composition_planner": True,
+                        },
+                    }
+                else:
+                    logger.info("[COMPOSE] No runnable intents from composition planner; falling back to normal LLM")
         
         # ====================================================================
         # PHASE 12: SAFETY GATE FOR UNGROUNDED META-QUESTIONS
@@ -1676,6 +1775,45 @@ def should_use_streaming_tts(text: str) -> bool:
     Returns:
         True if streaming TTS should be used, False otherwise
     """
+    def _normalize_for_streaming_gate(raw_text: str) -> str:
+        """Light normalization to expose tool-capable phrasing.
+
+        This is intentionally conservative and only used to decide whether we
+        are allowed to take the STREAM_TTS reply-only path.
+        """
+
+        if not isinstance(raw_text, str):
+            return ""
+        t = raw_text.strip().lower()
+        if not t:
+            return ""
+
+        t = re.sub(r"\s+", " ", t)
+
+        # Strip leading wake words.
+        t = re.sub(r"^(?:hey\s+wyzer|wyzer|hey)\b[\s,]*", "", t).strip()
+
+        # Strip leading capability/politeness wrappers.
+        t = re.sub(r"^(?:can|could|would|will)\s+(?:you|u)\b[\s,]*", "", t).strip()
+        t = re.sub(r"^please\b[\s,]*", "", t).strip()
+
+        # Trim trailing punctuation.
+        t = re.sub(r"[?.!,]+$", "", t).strip()
+
+        return re.sub(r"\s+", " ", t).strip()
+
+    def _clause_starts_like_command(clause: str) -> bool:
+        c = (clause or "").strip().lower()
+        if not c:
+            return False
+        # Only treat explicit imperatives as "tool-capable".
+        return bool(
+            re.match(
+                r"^(?:open|launch|start|close|exit|quit|focus|activate|switch\s+to|minimize|maximize|fullscreen|move|pause|play|resume|mute|unmute|set|switch|change|refresh|scan|rebuild|weather|forecast|location|system\s+info|monitor\s+info|time)\b",
+                c,
+            )
+        )
+
     # Check global config flag first
     if not getattr(Config, "OLLAMA_STREAM_TTS", False):
         return False
@@ -1716,11 +1854,80 @@ def should_use_streaming_tts(text: str) -> bool:
         # Block streaming for ANY input when pending confirmation exists
         # The brain worker's resolve_pending() will handle it deterministically
         return False
-    
-    # Check hybrid router - if it returns a tool_plan, don't stream
-    hybrid_decision = hybrid_router.decide(text)
-    if hybrid_decision.mode == "tool_plan" and hybrid_decision.intents:
+
+    # Pending action follow-ups must be deterministic (e.g., "do it" / "go ahead")
+    from wyzer.context.world_state import get_pending_action
+    pending_action = get_pending_action()
+    if pending_action is not None and (_CONFIRM_YES_RE.match(text_stripped) or _CONFIRM_NO_RE.match(text_stripped)):
         return False
+
+    # ---------------------------------------------------------------------
+    # Broad tool-capability gate (fast, deterministic)
+    # ---------------------------------------------------------------------
+    # If the input appears to contain a command token, try the conservative
+    # fastpath parser and deterministic tool+text splitter. If either finds a
+    # runnable tool intent, we must NOT stream (streaming is reply-only).
+    registry = None
+    try:
+        normalized = _normalize_for_streaming_gate(text_stripped)
+        candidates = [text_stripped]
+        if normalized and normalized != text_stripped:
+            candidates.append(normalized)
+
+        from wyzer.core.deterministic_splitter import get_split_intents
+
+        for cand in candidates:
+            if not cand:
+                continue
+
+            # Only pay the cost of registry parsing if the text looks command-like.
+            if not _FASTPATH_COMMAND_TOKEN_RE.search(cand):
+                continue
+
+            if registry is None:
+                registry = get_registry()
+
+            # 1) Tool+text split (e.g., "pause music and what's a VPN?")
+            if get_split_intents(cand, registry) is not None:
+                return False
+
+            # 2) Full fastpath parse (all clauses must be tool commands)
+            try:
+                intents = _try_fastpath_intents(cand, registry)
+            except Exception:
+                intents = None
+            if intents:
+                return False
+
+            # 3) Partial fastpath: if ANY leading clause is a runnable tool,
+            # block streaming so the non-streaming path can execute the tool
+            # and then handle leftover text.
+            parts = [p.strip() for p in _FASTPATH_SPLIT_RE.split(cand) if p and p.strip()]
+            for part in parts[:3]:  # keep bounded
+                if not _clause_starts_like_command(part):
+                    continue
+                try:
+                    part_intents = _fastpath_parse_clause(part)
+                except Exception:
+                    part_intents = None
+                if part_intents and all(registry.has_tool(i.tool) for i in part_intents):
+                    return False
+    except Exception:
+        # Never break routing because of a streaming precheck.
+        pass
+    
+    # Check hybrid router - if it returns a tool_plan (including normalized variants), don't stream
+    try:
+        hybrid_decision = hybrid_router.decide(text)
+        if hybrid_decision.mode == "tool_plan" and hybrid_decision.intents:
+            return False
+        normalized = _normalize_for_streaming_gate(text)
+        if normalized and normalized != (text or ""):
+            hybrid_norm = hybrid_router.decide(normalized)
+            if hybrid_norm.mode == "tool_plan" and hybrid_norm.intents:
+                return False
+    except Exception:
+        hybrid_decision = hybrid_router.decide(text)
     
     # Stream for any LLM-routed query (conversational responses)
     # The hybrid router already determined this should go to LLM, so stream it
@@ -2035,6 +2242,9 @@ def execute_tool_plan(intents: List[Dict[str, Any]], registry) -> Tuple[Executio
         tool = (raw or {}).get("tool")
         args = (raw or {}).get("args")
         continue_on_error = bool((raw or {}).get("continue_on_error", False))
+        meta = (raw or {}).get("meta")
+        if not isinstance(meta, dict):
+            meta = {}
         
         if not isinstance(tool, str) or not tool.strip():
             continue
@@ -2058,6 +2268,7 @@ def execute_tool_plan(intents: List[Dict[str, Any]], registry) -> Tuple[Executio
             "tool": tool.strip(),
             "args": args,
             "continue_on_error": continue_on_error,
+            "meta": meta,
         })
     
     # If any intent needs clarification, return early with a failed result
@@ -2078,7 +2289,10 @@ def execute_tool_plan(intents: List[Dict[str, Any]], registry) -> Tuple[Executio
         tool = raw.get("tool")
         args = raw.get("args", {})
         continue_on_error = raw.get("continue_on_error", False)
-        converted.append(Intent(tool=tool, args=args, continue_on_error=continue_on_error))
+        meta = raw.get("meta")
+        if not isinstance(meta, dict):
+            meta = {}
+        converted.append(Intent(tool=tool, args=args, continue_on_error=continue_on_error, meta=meta))
 
     # Store intents for "do that again" before execution
     update_last_intents(resolved_intents)
@@ -3075,6 +3289,41 @@ def _fastpath_parse_clause(clause: str) -> Optional[List[Intent]]:
     return None
 
 
+def _llm_reply_seems_like_time_date_answer(text: str) -> bool:
+    """Heuristic: detect when an LLM reply is (re)answering time/date.
+
+    Used to prevent leftover LLM text from confusing/overriding deterministic
+    tool replies for get_time.
+    """
+
+    if not isinstance(text, str):
+        return False
+    s = text.strip()
+    if not s:
+        return False
+
+    has_time = bool(re.search(r"\b\d{1,2}:\d{2}\b", s)) or bool(
+        re.search(r"\b\d{1,2}\s*(?:AM|PM)\b", s, re.IGNORECASE)
+    )
+    has_date = bool(re.search(r"\b\d{4}-\d{2}-\d{2}\b", s)) or bool(
+        re.search(
+            r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\b",
+            s,
+            re.IGNORECASE,
+        )
+    )
+    if not (has_time or has_date):
+        return False
+
+    return bool(
+        re.search(
+            r"\b(?:it\s+is|it'?s|today\s+is|the\s+date\s+is|current\s+time)\b",
+            s,
+            re.IGNORECASE,
+        )
+    )
+
+
 def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summary: ExecutionSummary) -> str:
     # =========================================================================
     # PHASE 10: Handle clarification_needed errors from reference resolution
@@ -3085,11 +3334,109 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
             error = first_result.error
             if isinstance(error, dict) and error.get("type") == "clarification_needed":
                 return error.get("message", "Which one do you mean?")
-    
+
+    def _format_time_12h(time_str: Any) -> Optional[str]:
+        if not isinstance(time_str, str):
+            return None
+
+        s = time_str.strip()
+        if not s:
+            return None
+
+        # Already in 12-hour format like "3:05 PM" (optionally with seconds)
+        m = re.match(r"^(?P<h>\d{1,2}):(?P<m>\d{2})(?::(?P<s>\d{2}))?\s*(?P<ap>[AaPp][Mm])$", s)
+        if m:
+            hour = int(m.group("h"))
+            minute = int(m.group("m"))
+            ap = m.group("ap").upper()
+            if 1 <= hour <= 12 and 0 <= minute <= 59:
+                return f"{hour}:{minute:02d} {ap}"
+
+        # 24-hour input like "13:05" or "13:05:00"
+        m = re.match(r"^(?P<h>\d{1,2}):(?P<m>\d{2})(?::(?P<s>\d{2}))?$", s)
+        if not m:
+            return None
+
+        hour24 = int(m.group("h"))
+        minute = int(m.group("m"))
+        if not (0 <= hour24 <= 23 and 0 <= minute <= 59):
+            return None
+
+        ap = "AM" if hour24 < 12 else "PM"
+        hour12 = hour24 % 12
+        if hour12 == 0:
+            hour12 = 12
+        return f"{hour12}:{minute:02d} {ap}"
+
+    def _format_date_long(date_str: Any) -> Optional[str]:
+        if not isinstance(date_str, str):
+            return None
+        s = date_str.strip()
+        if not s:
+            return None
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(s, "%Y-%m-%d")
+        except Exception:
+            return None
+        # Example: "Friday, February 7, 2026"
+        return f"{dt:%A}, {dt:%B} {dt.day}, {dt.year}"
+
+    def _choose_time_format(user_text: str, intent_meta: Optional[Dict[str, Any]] = None) -> str:
+        meta = intent_meta or {}
+        fmt = meta.get("format")
+        if isinstance(fmt, str):
+            fmt_norm = fmt.strip().lower()
+            if fmt_norm in {"time_only", "date_only", "time_and_date"}:
+                return fmt_norm
+
+        t = (user_text or "").lower()
+        if not t.strip():
+            return "time_only"
+
+        has_date = bool(re.search(r"\b(today|date|day\s+of\s+the\s+week|weekday|what\s+day)\b", t))
+        has_time = bool(re.search(r"\b(time|clock)\b", t))
+        if re.search(r"\b(time\s+and\s+date|date\s+and\s+time)\b", t):
+            return "time_and_date"
+        if has_date and has_time:
+            return "time_and_date"
+        if has_date:
+            return "date_only"
+        if has_time:
+            return "time_only"
+        return "time_only"
+
     def format_info(tool: str, args: Dict[str, Any], result: Dict[str, Any]) -> Optional[str]:
         if tool == "get_time":
-            t = result.get("time")
-            return f"It is {t}." if t else "Here's the current time."
+            # Use ONLY tool output fields: time (HH:MM:SS) and date (YYYY-MM-DD).
+            t_raw = result.get("time")
+            d_raw = result.get("date")
+            t12 = _format_time_12h(t_raw)
+            d_long = _format_date_long(d_raw)
+
+            intent_meta = {}
+            if intents:
+                intent_meta = getattr(intents[0], "meta", {}) or {}
+            mode = _choose_time_format(user_text, intent_meta=intent_meta)
+
+            if mode == "date_only":
+                if d_long:
+                    return f"Today is {d_long}."
+                return f"Today is {d_raw}." if d_raw else "Here's today's date."
+
+            if mode == "time_and_date":
+                if t12 and d_long:
+                    return f"It is {t12} on {d_long}."
+                if t12 and d_raw:
+                    return f"It is {t12} on {d_raw}."
+                if t12:
+                    return f"It is {t12}."
+                if d_long:
+                    return f"Today is {d_long}."
+                return "Here's the current time and date."
+
+            # Default: time_only
+            return f"It is {t12}." if t12 else (f"It is {t_raw}." if t_raw else "Here's the current time.")
 
         if tool == "get_system_info":
             os_name = result.get("os")
@@ -3142,6 +3489,39 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
                     title = title[:57] + "..."
                 return f"The active window is: {title}."
             return "I couldn't detect the active window."
+
+        # Read-only: list all visible windows
+        if tool == "list_open_windows":
+            windows = result.get("windows")
+            count = result.get("count")
+            if not isinstance(windows, list):
+                windows = []
+            if not isinstance(count, int):
+                count = len(windows)
+
+            if count == 0:
+                return "I don't see any open windows."
+
+            # Keep the old per-window bullet list available for debugging.
+            import os
+            verbose_env = os.environ.get("WYZER_WINDOWS_VERBOSE") or os.environ.get("WYZER_LIST_OPEN_WINDOWS_VERBOSE")
+            verbose = isinstance(verbose_env, str) and verbose_env.strip().lower() in ("1", "true", "yes", "on")
+
+            from wyzer.core.window_summary import (
+                format_windows_summary,
+                format_windows_verbose_list,
+                summarize_windows,
+            )
+
+            if verbose:
+                return format_windows_verbose_list(windows, count=count)
+
+            summary = summarize_windows(windows)
+            # If filtering removed everything but we still have windows, fall back to verbose.
+            if not summary.get("apps") and windows:
+                return format_windows_verbose_list(windows, count=count)
+
+            return format_windows_summary(summary)
 
         if tool == "get_location":
             city = result.get("city")
@@ -3926,6 +4306,26 @@ def _format_replay_success_reply(tool_name: str, args: dict, result: dict) -> st
 def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a tool with validation and logging (pool-aware)"""
     logger = get_logger_instance()
+
+    # Phase 14 (local): Desktop Ground Truth - structured event log
+    try:
+        from wyzer.context.world_state import emit_world_event, set_last_perception
+    except Exception:
+        emit_world_event = None
+        set_last_perception = None
+
+    perf_start = time.perf_counter()
+    if emit_world_event is not None:
+        try:
+            emit_world_event(
+                "tool_start",
+                {
+                    "tool": tool_name,
+                    "args": dict(tool_args or {}),
+                },
+            )
+        except Exception:
+            pass
     
     # Check tool exists
     tool = registry.get(tool_name)
@@ -3974,6 +4374,17 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
                     logger.info(f"[TOOLS] Pool result {result}")
                     # Phase 10: Update world state for reference resolution
                     _update_world_state_from_result(tool_name, full_args, result)
+
+                    # Phase 14: Perception/action hooks + tool_end event
+                    if emit_world_event is not None:
+                        _maybe_emit_ground_truth_events(
+                            tool_name=tool_name,
+                            tool_args=full_args,
+                            result=result,
+                            duration_ms=int((time.perf_counter() - perf_start) * 1000),
+                            emit_world_event=emit_world_event,
+                            set_last_perception=set_last_perception,
+                        )
                     return result
                 else:
                     # Timeout, fall back to in-process
@@ -3994,6 +4405,17 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
         
         # Phase 10: Update world state for reference resolution
         _update_world_state_from_result(tool_name, full_args, result)
+
+        # Phase 14: Perception/action hooks + tool_end event
+        if emit_world_event is not None:
+            _maybe_emit_ground_truth_events(
+                tool_name=tool_name,
+                tool_args=full_args,
+                result=result,
+                duration_ms=int((time.perf_counter() - perf_start) * 1000),
+                emit_world_event=emit_world_event,
+                set_last_perception=set_last_perception,
+            )
         
         return result
     except Exception as e:
@@ -4004,7 +4426,333 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
             }
         }
         logger.info(f"[TOOLS] Result {error_result}")
+
+        # Phase 14: tool_end on exception
+        if emit_world_event is not None:
+            try:
+                emit_world_event(
+                    "tool_end",
+                    {
+                        "tool": tool_name,
+                        "ok": False,
+                        "duration_ms": int((time.perf_counter() - perf_start) * 1000),
+                        "error": {"type": "execution_error", "message": str(e)[:200]},
+                    },
+                )
+            except Exception:
+                pass
         return error_result
+
+
+def _maybe_emit_ground_truth_events(
+    *,
+    tool_name: str,
+    tool_args: Dict[str, Any],
+    result: Dict[str, Any],
+    duration_ms: int,
+    emit_world_event,
+    set_last_perception,
+) -> None:
+    """Emit structured WorldState events for tools (Phase 14 local).
+
+    Rules:
+    - Always emit tool_end
+    - Emit perception/ui_action events for known desktop ground-truth tools
+    - Update last_perception only for perception tools
+    """
+    has_error = isinstance(result, dict) and "error" in result
+
+    try:
+        emit_world_event(
+            "tool_end",
+            {
+                "tool": tool_name,
+                "ok": not has_error,
+                "duration_ms": int(duration_ms),
+                "error": (result.get("error") if has_error else None),
+            },
+        )
+    except Exception:
+        pass
+
+    perception_tools = {
+        "get_active_window": "active_window",
+        "perceive_uia_focused_window": "uia",
+        "screenshot_focused_window": "screenshot",
+        "ocr_region": "ocr",
+    }
+    action_tools = {
+        "desktop_click_uia": "click_uia",
+        "wait_ms": "wait_ms",
+        "hotkey": "hotkey",
+        "type_text": "type_text",
+        "click_xy": "click_xy",
+        "scroll": "scroll",
+    }
+
+    # Perception tools: update last_perception + emit 'perception'
+    if tool_name in perception_tools and not has_error:
+        source = perception_tools[tool_name]
+        try:
+            if set_last_perception is not None:
+                # Keep last_perception small: store tool + timestamp + a shallow snapshot
+                snapshot = {"tool": tool_name, "source": source, "ts": time.time()}
+                if tool_name == "perceive_uia_focused_window":
+                    controls = result.get("controls") or []
+                    snapshot["window"] = result.get("window")
+                    snapshot["found_controls_count"] = len(controls) if isinstance(controls, list) else None
+                    names = []
+                    if isinstance(controls, list):
+                        for c in controls[:8]:
+                            n = (c or {}).get("name")
+                            if n:
+                                names.append(str(n)[:40])
+                    snapshot["found_names_sample"] = names
+                    if isinstance(result.get("progress"), dict):
+                        snapshot["progress"] = result.get("progress")
+                elif tool_name == "get_active_window":
+                    snapshot["window"] = result
+                elif tool_name == "screenshot_focused_window":
+                    snapshot["image_path"] = result.get("image_path")
+                    snapshot["rect"] = result.get("rect")
+                    snapshot["hwnd"] = result.get("hwnd")
+                elif tool_name == "ocr_region":
+                    full_text = (result.get("full_text") or "")
+                    snapshot["full_text_preview"] = full_text[:200]
+                    snapshot["source_image"] = result.get("source_image")
+
+                set_last_perception(snapshot)
+        except Exception:
+            pass
+
+        try:
+            payload = {"event": "perception", "source": source, "tool": tool_name}
+            if tool_name == "perceive_uia_focused_window":
+                controls = result.get("controls") or []
+                payload["found_controls_count"] = len(controls) if isinstance(controls, list) else None
+                payload["progress"] = result.get("progress") if isinstance(result.get("progress"), dict) else None
+            emit_world_event("perception", payload)
+        except Exception:
+            pass
+
+    # Action tools: emit 'ui_action'
+    if tool_name in action_tools:
+        try:
+            emit_world_event(
+                "ui_action",
+                {
+                    "event": "ui_action",
+                    "kind": action_tools[tool_name],
+                    "tool": tool_name,
+                    "args": dict(tool_args or {}),
+                    "success": (not has_error) and bool((result or {}).get("clicked", True) if tool_name == "desktop_click_uia" else True),
+                    "matched": (result.get("matched") if isinstance(result, dict) else None),
+                },
+            )
+        except Exception:
+            pass
+
+
+_ACTION_COMMAND_RE = re.compile(
+    r"\b(open|launch|start|run|close|minimi[sz]e|maximi[sz]e|focus|switch|move|set|mute|unmute|pause|resume|play|stop|refresh|scan)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_action_command(user_text: str) -> bool:
+    """Heuristic gate to avoid invoking composition planning for pure Q&A."""
+    return bool(_ACTION_COMMAND_RE.search(user_text or ""))
+
+
+def _call_llm_composition_plan(user_text: str, registry) -> Dict[str, Any]:
+    """Call LLM to produce a strict JSON composition plan (no narration)."""
+    from wyzer.brain.prompt_builder import build_composition_planner_prompt
+
+    prompt = build_composition_planner_prompt(user_text=user_text, registry=registry)
+    return _ollama_request(prompt, user_text=user_text)
+
+
+def _execute_composition_plan(plan_json: Dict[str, Any], registry) -> Optional[ExecutionSummary]:
+    """Execute a composition plan deterministically.
+
+    Returns:
+        ExecutionSummary if plan was valid/executed, else None (caller may fall back).
+    """
+    logger = get_logger_instance()
+    from wyzer.core.intent_plan import ExecutionResult, ExecutionSummary
+    from wyzer.core.plan_expander import (
+        MAX_COMPOSED_TOOL_CALLS,
+        validate_plan,
+        apply_templates,
+    )
+
+    ok, error_msg = validate_plan(plan_json, registry)
+    if not ok:
+        logger.info(f"[COMPOSE] Plan rejected: {error_msg}")
+        return None
+
+    def _extract_list(value: Any) -> Optional[List[Dict[str, Any]]]:
+        if isinstance(value, dict) and isinstance(value.get("windows"), list):
+            raw = value.get("windows")
+        elif isinstance(value, list):
+            raw = value
+        else:
+            return None
+        items: List[Dict[str, Any]] = []
+        for it in raw:
+            if not isinstance(it, dict):
+                return None
+            items.append(it)
+        return items
+
+    results: List[ExecutionResult] = []
+    stopped_early = False
+    saved_vars: Dict[str, Any] = {}
+    tool_calls = 0
+
+    intents = plan_json.get("intents") or []
+    for raw in intents:
+        if tool_calls >= MAX_COMPOSED_TOOL_CALLS:
+            stopped_early = True
+            break
+
+        if not isinstance(raw, dict):
+            continue
+
+        # Foreach macro
+        if "foreach" in raw:
+            var_name = raw.get("foreach")
+            do_obj = raw.get("do")
+            if not isinstance(var_name, str) or not isinstance(do_obj, dict):
+                results.append(
+                    ExecutionResult(
+                        tool="__foreach__",
+                        ok=False,
+                        result=None,
+                        error={"type": "invalid_plan", "message": "Invalid foreach structure"},
+                    )
+                )
+                stopped_early = True
+                break
+
+            items = _extract_list(saved_vars.get(var_name))
+            if items is None:
+                results.append(
+                    ExecutionResult(
+                        tool="__foreach__",
+                        ok=False,
+                        result=None,
+                        error={"type": "invalid_plan", "message": f"foreach variable '{var_name}' is not a list"},
+                    )
+                )
+                stopped_early = True
+                break
+
+            tool_name = do_obj.get("tool")
+            do_args = do_obj.get("args", {})
+            if not isinstance(tool_name, str) or not tool_name.strip() or not isinstance(do_args, dict):
+                results.append(
+                    ExecutionResult(
+                        tool="__foreach__",
+                        ok=False,
+                        result=None,
+                        error={"type": "invalid_plan", "message": "foreach.do must include tool and args"},
+                    )
+                )
+                stopped_early = True
+                break
+
+            tool_name = tool_name.strip()
+            tool = registry.get(tool_name)
+            schema = getattr(tool, "args_schema", {}) if tool is not None else {}
+
+            for item in items:
+                if tool_calls >= MAX_COMPOSED_TOOL_CALLS:
+                    stopped_early = True
+                    break
+
+                try:
+                    concrete_args = apply_templates(do_args, item)
+                except Exception as e:
+                    results.append(
+                        ExecutionResult(
+                            tool=tool_name,
+                            ok=False,
+                            result=None,
+                            error={"type": "invalid_args", "message": str(e)},
+                        )
+                    )
+                    continue
+
+                is_valid, err = validate_args(schema, concrete_args)
+                if not is_valid:
+                    results.append(
+                        ExecutionResult(
+                            tool=tool_name,
+                            ok=False,
+                            result=None,
+                            error=err or {"type": "invalid_args", "message": "invalid args"},
+                        )
+                    )
+                    continue
+
+                tool_calls += 1
+                tool_result = _execute_tool(registry, tool_name, concrete_args)
+                has_error = isinstance(tool_result, dict) and ("error" in tool_result)
+                results.append(
+                    ExecutionResult(
+                        tool=tool_name,
+                        ok=not has_error,
+                        result=tool_result if not has_error else None,
+                        error=tool_result.get("error") if has_error else None,
+                    )
+                )
+            continue
+
+        # Normal intent
+        tool_name = raw.get("tool")
+        args = raw.get("args", {})
+        save_as = raw.get("save_as")
+
+        if not isinstance(tool_name, str) or not tool_name.strip() or not isinstance(args, dict):
+            continue
+        tool_name = tool_name.strip()
+
+        tool = registry.get(tool_name)
+        schema = getattr(tool, "args_schema", {}) if tool is not None else {}
+        is_valid, err = validate_args(schema, args)
+        if not is_valid:
+            results.append(
+                ExecutionResult(
+                    tool=tool_name,
+                    ok=False,
+                    result=None,
+                    error=err or {"type": "invalid_args", "message": "invalid args"},
+                )
+            )
+            stopped_early = True
+            break
+
+        tool_calls += 1
+        tool_result = _execute_tool(registry, tool_name, args)
+        has_error = isinstance(tool_result, dict) and ("error" in tool_result)
+        results.append(
+            ExecutionResult(
+                tool=tool_name,
+                ok=not has_error,
+                result=tool_result if not has_error else None,
+                error=tool_result.get("error") if has_error else None,
+            )
+        )
+
+        if not has_error and isinstance(save_as, str) and save_as.strip():
+            saved_vars[save_as.strip()] = tool_result
+
+        if has_error:
+            stopped_early = True
+            break
+
+    return ExecutionSummary(ran=results, stopped_early=stopped_early)
 
 
 def _call_llm(user_text: str, registry) -> Dict[str, Any]:
@@ -4301,45 +5049,188 @@ def _call_llm_with_execution_summary(
     Returns:
         Dict with {"reply": "..."}
     """
-    ctx = _gather_context_blocks(user_text, max_session_turns=2)
-    
-    # Build a concise summary of what was executed
-    summary_parts = []
-    for result in execution_summary.ran:
-        if result.ok:
-            # Truncate long results
-            result_str = json.dumps(result.result)
-            if len(result_str) > 200:
-                result_str = result_str[:200] + "..."
-            summary_parts.append(f"- {result.tool}: OK - {result_str}")
+    logger = get_logger_instance()
+
+    def _safe_str(value: Any, max_len: int = 140) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (int, float, bool)):
+            text = str(value)
+        elif isinstance(value, str):
+            text = value
         else:
-            summary_parts.append(f"- {result.tool}: FAILED - {result.error}")
-    
+            try:
+                text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+            except Exception:
+                text = str(value)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) > max_len:
+            return text[:max_len].rstrip() + "..."
+        return text
+
+    def _narration_safe_kv_pairs(result_dict: Dict[str, Any]) -> str:
+        # Stable order and small whitelist only
+        whitelist = [
+            "status",
+            "app",
+            "window",
+            "target",
+            "action",
+            "value",
+            "text",
+            "latency_ms",
+            "error",
+        ]
+        parts: List[str] = []
+        for key in whitelist:
+            if key not in result_dict:
+                continue
+            val = result_dict.get(key)
+            # Avoid nested/unbounded blobs
+            if isinstance(val, (dict, list)):
+                continue
+            sval = _safe_str(val, max_len=90)
+            if not sval:
+                continue
+            parts.append(f"{key}={sval}")
+        return ", ".join(parts)
+
+    def _narration_safe_result_summary(result_value: Any) -> str:
+        # Deterministic narration-safe extraction; never include full raw JSON.
+        if isinstance(result_value, dict):
+            spoken = result_value.get("spoken")
+            if isinstance(spoken, str) and spoken.strip():
+                return _safe_str(spoken, max_len=160)
+
+            status = result_value.get("status")
+            message = result_value.get("message")
+            status_s = _safe_str(status, max_len=60) if status is not None else ""
+            message_s = _safe_str(message, max_len=120) if message is not None else ""
+            if status_s or message_s:
+                if status_s and message_s:
+                    return f"status={status_s}, message={message_s}"
+                if status_s:
+                    return f"status={status_s}"
+                return f"message={message_s}"
+
+            kv = _narration_safe_kv_pairs(result_value)
+            return kv if kv else "OK"
+
+        if isinstance(result_value, str) and result_value.strip():
+            return _safe_str(result_value, max_len=160)
+        return "OK"
+
+    def _narration_safe_error_summary(error_value: Any) -> str:
+        if error_value is None:
+            return "failed"
+        if isinstance(error_value, dict):
+            msg = error_value.get("message")
+            if isinstance(msg, str) and msg.strip():
+                return _safe_str(msg, max_len=160)
+            typ = error_value.get("type")
+            if isinstance(typ, str) and typ.strip():
+                return _safe_str(typ, max_len=80)
+            return _safe_str(error_value, max_len=160) or "failed"
+        return _safe_str(error_value, max_len=160) or "failed"
+
+    def _limit_to_two_sentences(text: str) -> str:
+        text = re.sub(r"\s+", " ", (text or "")).strip()
+        if not text:
+            return ""
+        # Keep at most 2 sentence-ish segments.
+        segments = re.split(r"(?<=[.!?])\s+", text)
+        if len(segments) <= 2:
+            return text
+        return " ".join(segments[:2]).strip()
+
+    def _deterministic_fallback_reply(any_ok: bool) -> str:
+        return "Done." if any_ok else "That didn't work."
+
+    def _validate_narration_reply(raw: Any, allowed_tools: set, registry_obj) -> Dict[str, Any]:
+        any_ok_local = any(r.ok for r in execution_summary.ran)
+        if not isinstance(raw, dict):
+            return {"reply": _deterministic_fallback_reply(any_ok_local)}
+        reply = raw.get("reply")
+        if not isinstance(reply, str) or not reply.strip():
+            return {"reply": _deterministic_fallback_reply(any_ok_local)}
+
+        reply = _limit_to_two_sentences(reply)
+
+        # If the model mentions tool names that were NOT executed, fall back.
+        try:
+            tool_names_in_registry = {t.get("name") for t in (registry_obj.list_tools() or []) if isinstance(t, dict)}
+            tool_names_in_registry = {n for n in tool_names_in_registry if isinstance(n, str) and n}
+        except Exception:
+            tool_names_in_registry = set()
+
+        if tool_names_in_registry:
+            tokens = set(re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]{2,}\b", reply))
+            mentioned_tools = {tok for tok in tokens if tok in tool_names_in_registry}
+            bad_mentions = {t for t in mentioned_tools if t not in allowed_tools}
+            if bad_mentions:
+                logger.debug(f"[NARRATION_VALIDATE] bad_tool_mentions={sorted(bad_mentions)}")
+                return {"reply": _deterministic_fallback_reply(any_ok_local)}
+
+        return {"reply": reply}
+
+    # Gather ONLY minimal non-memory context for narration grounding.
+    ctx = _gather_context_blocks(user_text, max_session_turns=0)
+
+    # Build deterministic narration-safe Results section
+    summary_parts: List[str] = []
+    allowed_tools = set()
+    spoken_lines: List[str] = []
+    for result in (execution_summary.ran or []):
+        allowed_tools.add(result.tool)
+        if result.ok:
+            summary = _narration_safe_result_summary(result.result)
+            # Capture spoken lines for an even-more-grounded deterministic path
+            if isinstance(result.result, dict):
+                spoken = result.result.get("spoken")
+                if isinstance(spoken, str) and spoken.strip():
+                    spoken_lines.append(_safe_str(spoken, max_len=160))
+            summary_parts.append(f"- {result.tool}: OK - {summary}")
+        else:
+            err = _narration_safe_error_summary(result.error)
+            summary_parts.append(f"- {result.tool}: FAILED - {err}")
+
     if execution_summary.stopped_early:
         summary_parts.append("- Stopped early")
-    
-    summary_text = "\n".join(summary_parts)
+
+    summary_text = "\n".join(summary_parts).strip() or "(no results)"
+
+    # If tools provided authoritative spoken text, prefer deterministic narration.
+    # This avoids the LLM adding any extra facts beyond tool output.
+    if spoken_lines and all(r.ok for r in (execution_summary.ran or [])):
+        reply_text = _limit_to_two_sentences(" ".join(spoken_lines))
+        if reply_text:
+            return {"reply": reply_text}
     
     from wyzer.brain.capability_contract import get_capability_contract
     capability_contract = get_capability_contract(registry)
 
     prompt = f"""{capability_contract}
 You are Wyzer, a local voice assistant.
-{ctx['promoted']}{ctx['redaction']}{ctx['memories']}{ctx['session']}
+{ctx['promoted']}{ctx['redaction']}
 User asked: {user_text}
 
 Results:
 {summary_text}
 
-Reply naturally in 1-2 sentences based on results.
+NARRATION RULES (hard constraints):
+- You may ONLY mention facts that appear in the Results section.
+- If a fact is not explicitly present in Results, you MUST NOT mention it.
+- Do not infer system state (e.g., “it is now focused”) unless Results explicitly says so.
+- If all tools failed, say they failed and offer one short next step.
+
+Reply in 1-2 short sentences, based strictly on Results.
 
 JSON: {{"reply": "your response"}}
 
 JSON:"""
 
-    return _ollama_request(prompt)
-
-
+    raw = _ollama_request(prompt)
+    return _validate_narration_reply(raw, allowed_tools=allowed_tools, registry_obj=registry)
 def _call_llm_with_tool_result(
     user_text: str,
     tool_name: str,
@@ -4835,6 +5726,146 @@ def _check_confirmation_response(text: str, start_time: float) -> Optional[Dict[
     return None
 
 
+def _check_minimize_all_windows_commands(text: str, start_time: float) -> Optional[Dict[str, Any]]:
+    """Deterministic handler for: minimize all windows/applications/everything."""
+    logger = get_logger_instance()
+    raw = (text or "").strip()
+    if not raw:
+        return None
+
+    # Token checks
+    if not _MINIMIZE_VERB_RE.search(raw):
+        return None
+    if not _MINIMIZE_ALL_WINDOWS_TOKEN_RE.search(raw):
+        return None
+
+    from wyzer.context.world_state import set_pending_action
+
+    # If phrased as a question, stage as pending_action for follow-up "do it".
+    is_question = bool(_PENDING_ACTION_QUESTION_RE.match(raw)) or raw.endswith("?")
+    if is_question:
+        set_pending_action("minimize all windows")
+        end_time = time.perf_counter()
+        return {
+            "reply": "I can minimize all windows. Say 'do it' to proceed.",
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"pending_action": "minimize all windows", "needs_user_confirm": True},
+        }
+
+    logger.info("[CMD] minimize_all_windows matched")
+
+    registry = get_registry()
+    list_result = _execute_tool(registry, "list_open_windows", {})
+    windows = list_result.get("windows") if isinstance(list_result, dict) else None
+
+    if not isinstance(windows, list):
+        err = list_result.get("error") if isinstance(list_result, dict) else None
+        reply = "I couldn't list your open windows." if not err else _tool_error_to_speech(err, "list_open_windows", {})
+        end_time = time.perf_counter()
+        return {
+            "reply": reply,
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"bulk_window_command": "minimize_all", "error": True},
+        }
+
+    max_actions = int(getattr(Config, "WINDOW_BULK_MAX_ACTIONS", 25))
+
+    targets: List[int] = []
+    for w in windows:
+        hwnd = w.get("hwnd") or w.get("id")
+        app = (w.get("app") or "").lower()
+        if not isinstance(hwnd, int) or hwnd <= 0:
+            continue
+        if "wyzer" in app or app.startswith("python") or "python.exe" in app:
+            continue
+        targets.append(hwnd)
+
+    attempted = 0
+    ok_count = 0
+    ran = []
+    stopped_early = False
+
+    for hwnd in targets:
+        if attempted >= max_actions:
+            stopped_early = True
+            break
+        attempted += 1
+        res = _execute_tool(registry, "minimize_window", {"hwnd": hwnd})
+        ok = isinstance(res, dict) and not res.get("error")
+        if ok:
+            ok_count += 1
+        ran.append(
+            {
+                "tool": "minimize_window",
+                "ok": ok,
+                "result": res if ok else None,
+                "error": res.get("error") if isinstance(res, dict) else None,
+            }
+        )
+
+    if ok_count <= 0:
+        reply = "I couldn't minimize any windows."
+    else:
+        reply = f"Minimized {ok_count} window{'s' if ok_count != 1 else ''}."
+        if stopped_early:
+            reply += f" Stopped after {max_actions}."
+
+    end_time = time.perf_counter()
+    return {
+        "reply": reply,
+        "latency_ms": int((end_time - start_time) * 1000),
+        "execution_summary": {"ran": ran, "stopped_early": stopped_early},
+        "meta": {
+            "bulk_window_command": "minimize_all",
+            "attempted": attempted,
+            "minimized": ok_count,
+            "stopped_early": stopped_early,
+            "max_actions": max_actions,
+        },
+    }
+
+
+def _check_pending_action_response(text: str, start_time: float) -> Optional[Dict[str, Any]]:
+    """Execute/cancel a pending_action on short confirmations like 'do it'."""
+    logger = get_logger_instance()
+    raw = (text or "").strip()
+    if not raw:
+        return None
+
+    from wyzer.context.world_state import get_pending_action, consume_pending_action, clear_pending_action
+
+    pending_action = get_pending_action()
+    if pending_action is None:
+        return None
+
+    if _CONFIRM_NO_RE.match(raw):
+        clear_pending_action()
+        end_time = time.perf_counter()
+        return {
+            "reply": "Okay, cancelled.",
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"pending_action": "cancelled"},
+        }
+
+    if not _CONFIRM_YES_RE.match(raw):
+        return None
+
+    action = (consume_pending_action() or "").strip().lower()
+    logger.info(f"[PENDING_ACTION] confirmed -> executing action={action!r}")
+
+    # Currently only one deterministic pending_action is supported.
+    if _MINIMIZE_VERB_RE.search(action) and _MINIMIZE_ALL_WINDOWS_TOKEN_RE.search(action):
+        return _check_minimize_all_windows_commands("minimize all windows", start_time)
+
+    clear_pending_action()
+    end_time = time.perf_counter()
+    return {
+        "reply": "I no longer have enough context to do that.",
+        "latency_ms": int((end_time - start_time) * 1000),
+        "meta": {"pending_action": "unknown"},
+    }
+
+
 # ============================================================================
 # PHASE 12: WINDOW WATCHER COMMAND HANDLERS (deterministic, no LLM)
 # ============================================================================
@@ -4886,7 +5917,6 @@ def _check_window_watcher_commands(text: str, start_time: float) -> Optional[Dic
     
     # Known junk process names to exclude
     JUNK_PROCESSES = frozenset({
-        "explorer.exe",
         "applicationframehost.exe",
         "textinputhost.exe",
         "searchhost.exe",
@@ -4901,6 +5931,16 @@ def _check_window_watcher_commands(text: str, start_time: float) -> Optional[Dic
         """Check if a window is junk that should be excluded from listings."""
         title = (w.get("title") or "").strip()
         process = (w.get("process") or "").lower()
+
+        # Explorer is special: allow meaningful titled windows (e.g., File Explorer),
+        # but still exclude empty shell windows unless focused.
+        if process == "explorer.exe":
+            if not title and not is_focused:
+                return True
+            # Filter known junk explorer title(s)
+            if title.lower() in JUNK_TITLES:
+                return True
+            return False
         
         # Empty titles are junk UNLESS this is the focused window
         if not title and not is_focused:
@@ -4957,27 +5997,33 @@ def _check_window_watcher_commands(text: str, start_time: float) -> Optional[Dic
         if not filtered_windows:
             reply = f"Monitor {monitor} appears empty."
         else:
-            # Format window list (show titles, max 6), prioritize focused window
-            # Sort: focused window first, then by title
+            # Format compact list (max 6), prioritize focused window.
+            # Output stays deterministic and stays under ~2 lines for speech.
             sorted_windows = sorted(
                 filtered_windows,
-                key=lambda w: (0 if w.get("hwnd") == focused_hwnd else 1, w.get("title", "").lower())
+                key=lambda w: (0 if w.get("hwnd") == focused_hwnd else 1, (w.get("title") or "").lower())
             )
-            
-            lines = []
-            for w in sorted_windows[:6]:
-                title = w.get("title", "Untitled")[:40]
-                if len(w.get("title", "")) > 40:
+
+            shown = sorted_windows[:6]
+            titles: List[str] = []
+            for w in shown:
+                raw_title = (w.get("title") or "Untitled")
+                title = raw_title[:40]
+                if len(raw_title) > 40:
                     title += "..."
-                is_focused = w.get("hwnd") == focused_hwnd
-                prefix = "→ " if is_focused else "• "
-                lines.append(f"{prefix}{title}")
-            
-            extra = len(filtered_windows) - 6
-            if extra > 0:
-                lines.append(f"...and {extra} more")
-            
-            reply = f"Monitor {monitor} has {len(filtered_windows)} windows:\n" + "\n".join(lines)
+                titles.append(title)
+
+            extra = len(filtered_windows) - len(shown)
+            suffix = f" ...and {extra} more" if extra > 0 else ""
+
+            # Focused window first with arrow, then comma-separated remainder.
+            focused_title = titles[0] if titles else ""
+            rest = titles[1:]
+            rest_str = (", " + ", ".join(rest)) if rest else ""
+            reply = (
+                f"Monitor {monitor} has {len(filtered_windows)} windows:\n"
+                f"Focused: {focused_title}{rest_str}{suffix}"
+            )
         
         end_time = time.perf_counter()
         return {
