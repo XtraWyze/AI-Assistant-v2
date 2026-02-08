@@ -199,6 +199,11 @@ class WorldState:
     Tracks recent actions and context for resolving vague follow-up phrases
     like "close it", "do that again", etc.
     
+    Desktop Ground Truth (Phase 14):
+    - event_log: Ring buffer of structured events (tool_start, tool_end,
+      perception, ui_action, warning) with timestamps.
+    - last_perception: Most recent perception snapshot (UIA / screenshot / OCR).
+    
     Fields:
         last_tool: Name of the last executed tool (e.g., "open_app")
         last_target: Target of the last action (e.g., "Chrome", "Spotify")
@@ -264,6 +269,10 @@ class WorldState:
     focus_stack: Deque[Dict[str, Any]] = field(default_factory=lambda: deque(maxlen=10))
     # Current position in focus_stack for "next app" cycling (round-robin)
     focus_stack_index: int = 0
+
+    # Phase 14 - Desktop Ground Truth: structured event log + perception
+    event_log: Deque[Dict[str, Any]] = field(default_factory=lambda: deque(maxlen=200))
+    last_perception: Optional[Dict[str, Any]] = None
     
     def clear(self) -> None:
         """Reset all state fields."""
@@ -294,6 +303,9 @@ class WorldState:
         # Clear focus stack
         self.focus_stack = deque(maxlen=10)
         self.focus_stack_index = 0
+        # Phase 14: Clear event log + perception
+        self.event_log = deque(maxlen=200)
+        self.last_perception = None
     
     def has_last_action(self) -> bool:
         """Check if there's a valid last action for reference."""
@@ -1489,3 +1501,63 @@ def get_current_focused_app() -> Optional[Dict[str, Any]]:
         if ws.focus_stack:
             return dict(ws.focus_stack[0])
         return None
+
+
+# ============================================================================
+# PHASE 14: DESKTOP GROUND TRUTH – EVENT LOG + PERCEPTION
+# ============================================================================
+
+def emit_event(event_type: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Emit a structured event into WorldState.event_log (ring buffer, maxlen=200).
+
+    Every tool execution, perception result, UI action, or warning should flow
+    through here so the LLM can narrate *observed* facts only.
+
+    Args:
+        event_type: One of 'tool_start', 'tool_end', 'perception',
+                    'ui_action', 'warning', or any custom string.
+        payload:    Arbitrary dict merged into the event record.
+
+    Returns:
+        The event dict that was appended (useful for tests).
+    """
+    event: Dict[str, Any] = {
+        "event": event_type,
+        "ts": time.time(),
+    }
+    if payload:
+        event.update(payload)
+
+    ws = get_world_state()
+    with _world_state_lock:
+        ws.event_log.append(event)
+    return event
+
+
+def update_last_perception(perception: Dict[str, Any]) -> None:
+    """
+    Store the latest perception snapshot in WorldState.
+
+    Called by perception tools (UIA, screenshot+OCR) after a successful read.
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        ws.last_perception = dict(perception) if perception else None
+
+
+def get_event_log(limit: int = 50) -> List[Dict[str, Any]]:
+    """
+    Return the most recent *limit* events (newest last).
+    """
+    ws = get_world_state()
+    with _world_state_lock:
+        items = list(ws.event_log)
+    return items[-limit:] if len(items) > limit else items
+
+
+def get_last_perception() -> Optional[Dict[str, Any]]:
+    """Return the most recent perception snapshot, or None."""
+    ws = get_world_state()
+    with _world_state_lock:
+        return dict(ws.last_perception) if ws.last_perception else None

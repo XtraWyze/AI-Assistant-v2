@@ -124,6 +124,22 @@ def build_default_registry() -> ToolRegistry:
     # Phase 9 - Screen Awareness (READ-ONLY)
     from wyzer.tools.get_window_context import GetWindowContextTool
     
+    # Phase 14 - Desktop Ground Truth Tools
+    from wyzer.tools.desktop.get_active_window import GetActiveWindowTool
+    from wyzer.tools.desktop.perceive_uia import PerceiveUIAFocusedWindowTool
+    from wyzer.tools.desktop.describe_screen import DescribeScreenTool
+    from wyzer.tools.desktop.desktop_click_uia import DesktopClickUIATool
+    from wyzer.tools.desktop.screenshot_tool import ScreenshotFocusedWindowTool
+    from wyzer.tools.desktop.ocr_tool import OCRRegionTool
+    from wyzer.tools.desktop.assertions import UIFindTextTool, InstallSucceededCheckTool
+    from wyzer.tools.desktop.input_actions import (
+        WaitMsTool,
+        HotkeyTool,
+        TypeTextTool,
+        ClickXYTool,
+        ScrollTool,
+    )
+    
     registry = ToolRegistry()
     
     # Register default tools
@@ -184,5 +200,20 @@ def build_default_registry() -> ToolRegistry:
     
     # Register Phase 9 - Screen Awareness tool (READ-ONLY)
     registry.register(GetWindowContextTool())
+    
+    # Register Phase 14 - Desktop Ground Truth Tools
+    registry.register(GetActiveWindowTool())
+    registry.register(PerceiveUIAFocusedWindowTool())
+    registry.register(DescribeScreenTool())
+    registry.register(DesktopClickUIATool())
+    registry.register(ScreenshotFocusedWindowTool())
+    registry.register(OCRRegionTool())
+    registry.register(UIFindTextTool())
+    registry.register(InstallSucceededCheckTool())
+    registry.register(WaitMsTool())
+    registry.register(HotkeyTool())
+    registry.register(TypeTextTool())
+    registry.register(ClickXYTool())
+    registry.register(ScrollTool())
     
     return registry

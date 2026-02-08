@@ -61,6 +61,7 @@ INFO_TOOLS = frozenset({
     "get_window_context",
     "get_window_monitor",
     "monitor_info",
+    "describe_screen",
     "system_storage_scan",
     "system_storage_list",
     "timer",  # Timer status needs feedback

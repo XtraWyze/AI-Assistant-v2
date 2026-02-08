@@ -1023,6 +1023,35 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 }
             # ================================================================
             
+            # ================================================================
+            # SAFETY GUARD: Block LLM from describing the screen without tool
+            # evidence.  If the reply-only path would handle a screen-vision
+            # query, refuse gracefully instead of hallucinating.
+            # ================================================================
+            from wyzer.core.hybrid_router import _match_screen_describe_intent, _match_verify_element_intent, _match_click_intent, _normalize_text_for_routing as _hr_normalize
+            _guard_norm = _hr_normalize(text)
+            if _match_screen_describe_intent(_guard_norm) is not None or _match_verify_element_intent(_guard_norm) is not None:
+                logger.warning("[SAFETY] Screen-vision query reached reply-only path; refusing LLM hallucination")
+                end_time = time.perf_counter()
+                latency_ms = int((end_time - start_time) * 1000)
+                return {
+                    "reply": "I can't verify what's on screen right now because the perception tools aren't available in reply-only mode. Try focusing the window and ask again.",
+                    "latency_ms": latency_ms,
+                    "meta": {"reply_only": True, "reason": "screen_vision_blocked", "original_text": original_text},
+                }
+
+            # SAFETY GUARD: Block LLM from narrating click/press actions it
+            # didn't actually perform.
+            if _match_click_intent(text) is not None:
+                logger.warning("[SAFETY] Click command reached reply-only path; refusing LLM hallucination")
+                end_time = time.perf_counter()
+                latency_ms = int((end_time - start_time) * 1000)
+                return {
+                    "reply": "I couldn't perform that click because the desktop interaction tools aren't available right now.",
+                    "latency_ms": latency_ms,
+                    "meta": {"reply_only": True, "reason": "click_action_blocked", "original_text": original_text},
+                }
+
             # Use reply-only LLM call (no tools)
             llm_response = _call_llm_reply_only(text)
             reply = llm_response.get("reply", "")
@@ -3469,6 +3498,26 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
                 return f"I found {app_name} but couldn't determine which monitor it's on."
             return "Here's the window monitor information."
 
+        # Phase 14+: describe_screen — deterministic screen summary
+        if tool == "describe_screen":
+            summary = result.get("summary") or ""
+            if summary:
+                return summary
+            # Fallback: build from parts
+            win = result.get("window") or {}
+            title = win.get("title", "")
+            exe = win.get("exe", "").replace(".exe", "").capitalize()
+            highlights = result.get("highlights") or []
+            if exe and title:
+                base = f"The focused window is {exe}: \"{title}\"."
+            elif exe:
+                base = f"The focused window is {exe}."
+            else:
+                base = "I couldn't identify the focused window."
+            if highlights:
+                base += " Notable items: " + ", ".join(highlights[:6]) + "."
+            return base
+
         # Phase 9: Screen Awareness - get_window_context
         if tool == "get_window_context":
             app = result.get("app", "").replace(".exe", "") if result.get("app") else None
@@ -3695,6 +3744,10 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
             
             return "Timer updated."
 
+        # Generic: any tool that provides a deterministic summary
+        if isinstance(result, dict) and result.get("summary"):
+            return result["summary"]
+
         return None
 
     # Prefer first failure.
@@ -3759,6 +3812,10 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
 
         if tool in {"media_play_pause", "media_next", "media_previous", "volume_up", "volume_down", "volume_mute_toggle"}:
             return "OK."
+
+        # Generic summary field: any tool can provide a deterministic spoken reply
+        if isinstance(result, dict) and result.get("summary"):
+            return result["summary"]
 
         if tool == "volume_control":
             action = str(args.get("action") or "").lower()
@@ -4306,26 +4363,6 @@ def _format_replay_success_reply(tool_name: str, args: dict, result: dict) -> st
 def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
     """Execute a tool with validation and logging (pool-aware)"""
     logger = get_logger_instance()
-
-    # Phase 14 (local): Desktop Ground Truth - structured event log
-    try:
-        from wyzer.context.world_state import emit_world_event, set_last_perception
-    except Exception:
-        emit_world_event = None
-        set_last_perception = None
-
-    perf_start = time.perf_counter()
-    if emit_world_event is not None:
-        try:
-            emit_world_event(
-                "tool_start",
-                {
-                    "tool": tool_name,
-                    "args": dict(tool_args or {}),
-                },
-            )
-        except Exception:
-            pass
     
     # Check tool exists
     tool = registry.get(tool_name)
@@ -4358,6 +4395,15 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
     # Log BEFORE execution
     logger.info(f"[TOOLS] Executing {tool_name} args={full_args}")
     
+    # Phase 14: Emit tool_start event
+    try:
+        from wyzer.context.world_state import emit_event as _emit_event
+        _emit_event("tool_start", {"tool": tool_name, "args": {k: v for k, v in full_args.items() if not k.startswith("_")}})
+    except Exception:
+        pass
+    
+    _tool_exec_start = time.perf_counter()
+    
     # Try to use worker pool if enabled
     pool = _tool_pool
     if pool is not None:
@@ -4374,17 +4420,6 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
                     logger.info(f"[TOOLS] Pool result {result}")
                     # Phase 10: Update world state for reference resolution
                     _update_world_state_from_result(tool_name, full_args, result)
-
-                    # Phase 14: Perception/action hooks + tool_end event
-                    if emit_world_event is not None:
-                        _maybe_emit_ground_truth_events(
-                            tool_name=tool_name,
-                            tool_args=full_args,
-                            result=result,
-                            duration_ms=int((time.perf_counter() - perf_start) * 1000),
-                            emit_world_event=emit_world_event,
-                            set_last_perception=set_last_perception,
-                        )
                     return result
                 else:
                     # Timeout, fall back to in-process
@@ -4403,19 +4438,15 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
         # Log AFTER execution
         logger.info(f"[TOOLS] Result {result}")
         
+        # Phase 14: Emit tool_end event
+        try:
+            _duration_ms = int((time.perf_counter() - _tool_exec_start) * 1000)
+            _emit_event("tool_end", {"tool": tool_name, "success": True, "duration_ms": _duration_ms})
+        except Exception:
+            pass
+        
         # Phase 10: Update world state for reference resolution
         _update_world_state_from_result(tool_name, full_args, result)
-
-        # Phase 14: Perception/action hooks + tool_end event
-        if emit_world_event is not None:
-            _maybe_emit_ground_truth_events(
-                tool_name=tool_name,
-                tool_args=full_args,
-                result=result,
-                duration_ms=int((time.perf_counter() - perf_start) * 1000),
-                emit_world_event=emit_world_event,
-                set_last_perception=set_last_perception,
-            )
         
         return result
     except Exception as e:
@@ -4426,131 +4457,15 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
             }
         }
         logger.info(f"[TOOLS] Result {error_result}")
-
-        # Phase 14: tool_end on exception
-        if emit_world_event is not None:
-            try:
-                emit_world_event(
-                    "tool_end",
-                    {
-                        "tool": tool_name,
-                        "ok": False,
-                        "duration_ms": int((time.perf_counter() - perf_start) * 1000),
-                        "error": {"type": "execution_error", "message": str(e)[:200]},
-                    },
-                )
-            except Exception:
-                pass
+        
+        # Phase 14: Emit tool_end event for failure
+        try:
+            _duration_ms = int((time.perf_counter() - _tool_exec_start) * 1000)
+            _emit_event("tool_end", {"tool": tool_name, "success": False, "duration_ms": _duration_ms, "error": str(e)[:100]})
+        except Exception:
+            pass
+        
         return error_result
-
-
-def _maybe_emit_ground_truth_events(
-    *,
-    tool_name: str,
-    tool_args: Dict[str, Any],
-    result: Dict[str, Any],
-    duration_ms: int,
-    emit_world_event,
-    set_last_perception,
-) -> None:
-    """Emit structured WorldState events for tools (Phase 14 local).
-
-    Rules:
-    - Always emit tool_end
-    - Emit perception/ui_action events for known desktop ground-truth tools
-    - Update last_perception only for perception tools
-    """
-    has_error = isinstance(result, dict) and "error" in result
-
-    try:
-        emit_world_event(
-            "tool_end",
-            {
-                "tool": tool_name,
-                "ok": not has_error,
-                "duration_ms": int(duration_ms),
-                "error": (result.get("error") if has_error else None),
-            },
-        )
-    except Exception:
-        pass
-
-    perception_tools = {
-        "get_active_window": "active_window",
-        "perceive_uia_focused_window": "uia",
-        "screenshot_focused_window": "screenshot",
-        "ocr_region": "ocr",
-    }
-    action_tools = {
-        "desktop_click_uia": "click_uia",
-        "wait_ms": "wait_ms",
-        "hotkey": "hotkey",
-        "type_text": "type_text",
-        "click_xy": "click_xy",
-        "scroll": "scroll",
-    }
-
-    # Perception tools: update last_perception + emit 'perception'
-    if tool_name in perception_tools and not has_error:
-        source = perception_tools[tool_name]
-        try:
-            if set_last_perception is not None:
-                # Keep last_perception small: store tool + timestamp + a shallow snapshot
-                snapshot = {"tool": tool_name, "source": source, "ts": time.time()}
-                if tool_name == "perceive_uia_focused_window":
-                    controls = result.get("controls") or []
-                    snapshot["window"] = result.get("window")
-                    snapshot["found_controls_count"] = len(controls) if isinstance(controls, list) else None
-                    names = []
-                    if isinstance(controls, list):
-                        for c in controls[:8]:
-                            n = (c or {}).get("name")
-                            if n:
-                                names.append(str(n)[:40])
-                    snapshot["found_names_sample"] = names
-                    if isinstance(result.get("progress"), dict):
-                        snapshot["progress"] = result.get("progress")
-                elif tool_name == "get_active_window":
-                    snapshot["window"] = result
-                elif tool_name == "screenshot_focused_window":
-                    snapshot["image_path"] = result.get("image_path")
-                    snapshot["rect"] = result.get("rect")
-                    snapshot["hwnd"] = result.get("hwnd")
-                elif tool_name == "ocr_region":
-                    full_text = (result.get("full_text") or "")
-                    snapshot["full_text_preview"] = full_text[:200]
-                    snapshot["source_image"] = result.get("source_image")
-
-                set_last_perception(snapshot)
-        except Exception:
-            pass
-
-        try:
-            payload = {"event": "perception", "source": source, "tool": tool_name}
-            if tool_name == "perceive_uia_focused_window":
-                controls = result.get("controls") or []
-                payload["found_controls_count"] = len(controls) if isinstance(controls, list) else None
-                payload["progress"] = result.get("progress") if isinstance(result.get("progress"), dict) else None
-            emit_world_event("perception", payload)
-        except Exception:
-            pass
-
-    # Action tools: emit 'ui_action'
-    if tool_name in action_tools:
-        try:
-            emit_world_event(
-                "ui_action",
-                {
-                    "event": "ui_action",
-                    "kind": action_tools[tool_name],
-                    "tool": tool_name,
-                    "args": dict(tool_args or {}),
-                    "success": (not has_error) and bool((result or {}).get("clicked", True) if tool_name == "desktop_click_uia" else True),
-                    "matched": (result.get("matched") if isinstance(result, dict) else None),
-                },
-            )
-        except Exception:
-            pass
 
 
 _ACTION_COMMAND_RE = re.compile(

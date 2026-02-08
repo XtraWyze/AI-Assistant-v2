@@ -98,6 +98,11 @@ TOOL_ALIAS_MAP: Dict[str, str] = {
     # Monitor aliases
     "get_monitors": "monitor_info",
     "list_monitors": "monitor_info",
+    
+    # Screen description aliases
+    "read_screen": "describe_screen",
+    "screen_describe": "describe_screen",
+    "perceive_screen": "describe_screen",
 }
 
 

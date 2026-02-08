@@ -11,9 +11,12 @@ This module is intentionally conservative.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Literal, TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from wyzer.core.multi_intent_parser import parse_multi_intent_with_fallback
@@ -35,7 +38,9 @@ def _normalize_text_for_routing(text: str) -> str:
     tl = (text or "").strip().lower()
     if not tl:
         return ""
-    # Replace punctuation with spaces so multi-sentence utterances can be scanned.
+    # Remove apostrophes first so contractions stay joined: "what's" -> "whats"
+    tl = tl.replace("'", "").replace("\u2019", "")
+    # Replace remaining punctuation with spaces so multi-sentence utterances can be scanned.
     tl = _ROUTING_NORMALIZE_PUNCT_RE.sub(" ", tl)
     tl = re.sub(r"\s+", " ", tl).strip()
     if not tl:
@@ -618,6 +623,215 @@ _LIST_OPEN_WINDOWS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 14: Desktop Ground Truth patterns
+# ═══════════════════════════════════════════════════════════════════════════
+
+# "what's on screen right now" -> describe_screen (formatted UIA perception)
+_WHATS_ON_SCREEN_DEEP_RE = re.compile(
+    r"^(?:what(?:'?s|\s+is)\s+on\s+(?:the\s+)?screen\s+right\s+now|"
+    r"describe\s+(?:the\s+)?screen|"
+    r"describe\s+what(?:'?s|\s+is)\s+on\s+(?:my\s+)?screen|"
+    r"read\s+(?:the\s+)?screen|"
+    r"what\s+(?:controls?|buttons?|elements?)\s+(?:are|do\s+i\s+see)\s+on\s+(?:the\s+)?screen|"
+    r"what\s+(?:do\s+i|can\s+i)\s+see\s+on\s+(?:the\s+)?screen)\??$",
+    re.IGNORECASE,
+)
+
+# "is there a button that says X" / "do you see a button called X"
+_BUTTON_CHECK_RE = re.compile(
+    r"^(?:is\s+there\s+a\s+button\s+(?:that\s+says?|called|named|labelled?|saying)\s+(.+)|"
+    r"do\s+you\s+see\s+(?:a\s+)?(?:button\s+)?(?:that\s+says?|called|named)\s+(.+)|"
+    r"can\s+you\s+(?:see|find)\s+(?:a\s+)?(?:button\s+)?(?:that\s+says?|called|named)\s+(.+)|"
+    r"(?:is|are)\s+there\s+(?:an?\s+)?(.+?)\s+button)\??$",
+    re.IGNORECASE,
+)
+
+# "did install succeed" / "did it install" / "is install done"
+_INSTALL_CHECK_RE = re.compile(
+    r"^(?:did\s+(?:the\s+)?install\s+(?:succeed|work|finish|complete)|"
+    r"did\s+it\s+install(?:\s+successfully)?|"
+    r"is\s+(?:the\s+)?install\s+(?:done|complete|finished)|"
+    r"did\s+(?:the\s+)?(?:download|installation|setup)\s+(?:succeed|work|finish|complete)|"
+    r"is\s+it\s+installed|"
+    r"was\s+(?:the\s+)?install\s+successful)\??$",
+    re.IGNORECASE,
+)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 14b: Broad screen-description & element-verify via normalized text
+# These use phrase-containment on normalized text (no anchoring) so they
+# catch natural speech like "Oh, what's on my screen? Can you describe it?"
+# ═══════════════════════════════════════════════════════════════════════════
+
+_SCREEN_DESCRIBE_PHRASES = [
+    "whats on my screen",
+    "what is on my screen",
+    "describe my screen",
+    "describe the screen",
+    "can you describe it",
+    "what do you see",
+    "what is on the screen",
+    "whats on screen",
+    "screen right now",
+    "describe whats on",
+    "read the screen",
+    "read my screen",
+    "what can you see",
+    "whats on the screen",
+    "tell me whats on my screen",
+    "tell me whats on the screen",
+    "whats showing on my screen",
+    "whats currently on my screen",
+    "whats currently on screen",
+]
+
+# Verb-phrases that indicate the user is asking about element existence.
+_VERIFY_ELEMENT_TRIGGERS_RE = re.compile(
+    r"(?:"
+    r"\bis\s+there\b|"
+    r"\bdo\s+you\s+see\b|"
+    r"\bcan\s+you\s+see\b|"
+    r"^you\s+see\b|"
+    r"\bi\s+see\b"
+    r")",
+    re.IGNORECASE,
+)
+
+# Labels that strongly suggest UIA element queries.
+_ELEMENT_LABEL_WORDS = {
+    "button", "install", "play", "next", "close", "ok", "okay", "cancel",
+    "yes", "no", "submit", "save", "apply", "open", "start", "stop",
+    "download", "update", "continue", "accept", "decline", "retry",
+    "back", "forward", "settings", "menu", "checkbox", "link",
+}
+
+
+def _match_screen_describe_intent(normalized: str) -> Optional[HybridDecision]:
+    """Check if normalized text contains a screen-description phrase.
+
+    Returns a HybridDecision routing to describe_screen, or None.
+    """
+    if not normalized:
+        return None
+    for phrase in _SCREEN_DESCRIBE_PHRASES:
+        if phrase in normalized:
+            logger.info(
+                "[ROUTER] matched=screen_describe tool=describe_screen "
+                f"reason=phrase '{phrase}' found in normalized text"
+            )
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{"tool": "describe_screen", "args": {}, "continue_on_error": False}],
+                reply="",
+                confidence=0.94,
+            )
+    return None
+
+
+def _extract_element_label(normalized: str) -> Optional[str]:
+    """Extract the target label from a verify-element query.
+
+    Rules (applied in order):
+    1. Quoted string -> use it.
+    2. "button that says X" -> X
+    3. "an X button" / "a X button" / "X button" -> X
+    4. Last 1-4 tokens after see/says as fallback.
+    """
+    # 1. Quoted text
+    m = re.search(r'["\'](.+?)["\']', normalized)
+    if m:
+        return m.group(1).strip()
+
+    # 2. "button that says X" / "button called X" / "button named X"
+    m = re.search(r"button\s+(?:that\s+says?|called|named|labelled?)\s+(.+)", normalized)
+    if m:
+        return m.group(1).strip()
+
+    # 3. "an X button" / "a X button" / "the X button"
+    m = re.search(r"(?:an?|the)\s+(.+?)\s+button", normalized)
+    if m:
+        return m.group(1).strip()
+
+    # 3b. "X button" (no article)
+    m = re.search(r"(\w+)\s+button", normalized)
+    if m:
+        label = m.group(1).strip()
+        # Avoid capturing trigger words as the label
+        if label not in {"a", "an", "the", "any", "some", "this", "that"}:
+            return label
+
+    # 4. Fallback: last 1-4 tokens after "see" or "says"
+    m = re.search(r"(?:see|says?)\s+(.+)", normalized)
+    if m:
+        tokens = m.group(1).strip().split()
+        # Strip leading articles/filler
+        while tokens and tokens[0] in {"a", "an", "the", "that", "some"}:
+            tokens = tokens[1:]
+        if tokens:
+            return " ".join(tokens[:4])
+
+    return None
+
+
+def _match_verify_element_intent(normalized: str) -> Optional[HybridDecision]:
+    """Check if normalized text is asking whether a UI element exists.
+
+    Triggers on phrases like:
+      - "is there a button that says Install"
+      - "do you see an install button"
+      - "you see a play button"
+      - "can you see the close button"
+
+    Returns a HybridDecision routing to ui_find_text, or None.
+    """
+    if not normalized:
+        return None
+    if not _VERIFY_ELEMENT_TRIGGERS_RE.search(normalized):
+        return None
+
+    # Must mention "button" OR contain a well-known element label OR have a
+    # quoted target — otherwise it might be a generic "is there/do you see" query.
+    has_button_word = "button" in normalized
+    tokens_set = set(normalized.split())
+    has_label_word = bool(tokens_set & _ELEMENT_LABEL_WORDS)
+    has_quoted = bool(re.search(r'["\']', normalized))
+
+    if not (has_button_word or has_label_word or has_quoted):
+        return None
+
+    label = _extract_element_label(normalized)
+    if not label:
+        # If we matched the trigger + button/label but couldn't extract,
+        # still route to tool with a broad search.
+        label = ""
+        # Try one more time: take first label-word found
+        for tok in normalized.split():
+            if tok in _ELEMENT_LABEL_WORDS and tok != "button":
+                label = tok
+                break
+        if not label:
+            return None
+
+    logger.info(
+        "[ROUTER] matched=verify_element tool=ui_find_text "
+        f"reason=trigger + label '{label}' found in normalized text"
+    )
+    # When the user mentions "button", narrow to Button type + exact/word mode
+    args: Dict[str, Any] = {"text": label, "method": "uia"}
+    if has_button_word:
+        args["control_type"] = "Button"
+        args["match_mode"] = "exact"
+    else:
+        args["match_mode"] = "word"
+    return HybridDecision(
+        mode="tool_plan",
+        intents=[{"tool": "ui_find_text", "args": args, "continue_on_error": False}],
+        reply="",
+        confidence=0.93,
+    )
+
+
 # Anchored open/launch/start.
 _OPEN_RE = re.compile(r"^(open|launch|start)\s+(.+)$", re.IGNORECASE)
 
@@ -629,6 +843,119 @@ _MINIMIZE_RE = re.compile(r"^(minimize|shrink)\s+(.+)$", re.IGNORECASE)
 
 # Anchored maximize/fullscreen/expand.
 _MAXIMIZE_RE = re.compile(r"^(maximize|fullscreen|expand|full\s+screen)\s+(.+)$", re.IGNORECASE)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Click / press / UI-action patterns
+# ═══════════════════════════════════════════════════════════════════════════
+# "click the Maximize button" / "click Maximize" / "press the Close button"
+_CLICK_WINCTL_RE = re.compile(
+    r"^(?:click|press|hit|tap)\s+(?:the\s+|on\s+(?:the\s+)?)?"  # verb + optional article
+    r"(maximize|minimise|minimize|close|restore)"
+    r"(?:\s+button)?\s*$",
+    re.IGNORECASE,
+)
+
+# Generic "click X" / "click the X button" / "press the X button"
+_CLICK_GENERIC_RE = re.compile(
+    r"^(?:click|press|hit|tap)\s+(?:the\s+|on\s+(?:the\s+)?)?(.+)$",
+    re.IGNORECASE,
+)
+
+# Map well-known window-control names to the native window-management tools
+_WINCTL_TOOL_MAP = {
+    "maximize": "maximize_window",
+    "minimise": "minimize_window",
+    "minimize": "minimize_window",
+    "close": "close_window",
+    "restore": "maximize_window",   # restore uses the same underlying API
+}
+
+
+def _match_click_intent(text: str) -> Optional[HybridDecision]:
+    """Route 'click X' / 'press the X button' to deterministic tools.
+
+    - Well-known window controls (Maximize, Minimize, Close) ->
+      native window-management tools.
+    - Generic click -> desktop_click_uia.
+
+    Returns a HybridDecision or None.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return None
+
+    # 1. Well-known window controls first
+    m = _CLICK_WINCTL_RE.match(raw)
+    if m:
+        ctl = m.group(1).strip().lower()
+        tool = _WINCTL_TOOL_MAP.get(ctl)
+        if tool:
+            logger.info(
+                f"[ROUTER] matched=click_winctl tool={tool} target={ctl}"
+            )
+            # For window controls we use the native tool with an empty title
+            # (meaning "focused window").
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{
+                    "tool": tool,
+                    "args": {"title": ""},
+                    "continue_on_error": False,
+                }],
+                reply="",
+                confidence=0.95,
+            )
+
+    # 2. Generic "click X" / "click the X button"
+    m = _CLICK_GENERIC_RE.match(raw)
+    if m:
+        target_raw = m.group(1).strip().rstrip("?. ")
+        if not target_raw:
+            return None
+
+        # Strip trailing " button" to get the control name
+        target_name = re.sub(r"\s+button\s*$", "", target_raw, flags=re.IGNORECASE).strip()
+        if not target_name:
+            target_name = target_raw
+
+        # Guard: don't swallow multi-action sentences
+        target_l = target_name.lower()
+        if any(v in target_l.split() for v in ["then", "and", "also", "plus"]):
+            return None
+
+        # Check if it's a window control name that slipped past the anchored regex
+        ctl_lower = target_name.lower()
+        if ctl_lower in _WINCTL_TOOL_MAP:
+            tool = _WINCTL_TOOL_MAP[ctl_lower]
+            logger.info(
+                f"[ROUTER] matched=click_winctl tool={tool} target={ctl_lower}"
+            )
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{
+                    "tool": tool,
+                    "args": {"title": ""},
+                    "continue_on_error": False,
+                }],
+                reply="",
+                confidence=0.95,
+            )
+
+        logger.info(
+            f"[ROUTER] matched=click tool=desktop_click_uia target={target_name}"
+        )
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{
+                "tool": "desktop_click_uia",
+                "args": {"name": target_name, "control_type": "Button"},
+                "continue_on_error": False,
+            }],
+            reply="",
+            confidence=0.90,
+        )
+
+    return None
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Switch app patterns: deterministic app switching using focus history
@@ -1094,6 +1421,48 @@ def _decide_single_clause(text: str) -> HybridDecision:
             confidence=0.95,
         )
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # Phase 14: Desktop Ground Truth deterministic routes
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # "what's on screen right now" -> describe_screen (formatted UIA summary)
+    if _WHATS_ON_SCREEN_DEEP_RE.match(clause):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "describe_screen", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.95,
+        )
+
+    # "is there a button that says X" -> ui_find_text (exact + Button filter)
+    m = _BUTTON_CHECK_RE.match(clause)
+    if m:
+        # Extract the button name from whichever capture group matched
+        btn_name = (m.group(1) or m.group(2) or m.group(3) or m.group(4) or "").strip().rstrip("?. ")
+        if btn_name:
+            # Determine match_mode: "button that says X" -> exact; "X button" -> exact
+            args = {
+                "text": btn_name,
+                "method": "uia",
+                "control_type": "Button",
+                "match_mode": "exact",
+            }
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{"tool": "ui_find_text", "args": args, "continue_on_error": False}],
+                reply="",
+                confidence=0.93,
+            )
+
+    # "did install succeed" -> install_succeeded_check
+    if _INSTALL_CHECK_RE.match(clause):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "install_succeeded_check", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.93,
+        )
+
     # Get window monitor queries: "what monitor is X on"
     m = _GET_WINDOW_MONITOR_RE.match(clause)
     if m:
@@ -1443,6 +1812,11 @@ def _decide_single_clause(text: str) -> HybridDecision:
             confidence=0.85,
         )
 
+    # Click / press / hit / tap X -> desktop_click_uia (or native win-ctl).
+    click_decision = _match_click_intent(clause_stripped)
+    if click_decision is not None:
+        return click_decision
+
     # Move window to monitor: "move X to monitor 2" / "send chrome to monitor next"
     m = _MOVE_MONITOR_RE.match(clause_stripped)
     if m:
@@ -1776,6 +2150,57 @@ def decide(text: str) -> HybridDecision:
             confidence=0.93,
         )
 
+    # Phase 14: Desktop Ground Truth early-exit routes
+    if _WHATS_ON_SCREEN_DEEP_RE.match(raw):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "describe_screen", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.93,
+        )
+    m = _BUTTON_CHECK_RE.match(raw)
+    if m:
+        btn_name = (m.group(1) or m.group(2) or m.group(3) or m.group(4) or "").strip().rstrip("?. ")
+        if btn_name:
+            args = {
+                "text": btn_name,
+                "method": "uia",
+                "control_type": "Button",
+                "match_mode": "exact",
+            }
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{"tool": "ui_find_text", "args": args, "continue_on_error": False}],
+                reply="",
+                confidence=0.93,
+            )
+    if _INSTALL_CHECK_RE.match(raw):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "install_succeeded_check", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.93,
+        )
+
+    # Phase 14c: Click / press commands -> desktop_click_uia
+    click_decision = _match_click_intent(raw)
+    if click_decision is not None:
+        return click_decision
+
+    # =====================================================================
+    # Phase 14b: Broad screen-description & element-verify via normalized text.
+    # These use phrase-containment (not anchored regex) so they catch natural
+    # speech like "Oh, what's on my screen? Can you describe it?"
+    # MUST run BEFORE needs_reasoning() to prevent LLM fallthrough.
+    # =====================================================================
+    screen_decision = _match_screen_describe_intent(normalized)
+    if screen_decision is not None:
+        return screen_decision
+
+    element_decision = _match_verify_element_intent(normalized)
+    if element_decision is not None:
+        return element_decision
+
     # Try multi-intent parsing: handle mixed tool+LLM utterances like
     # "open notepad and tell me a story" without getting blocked by needs_reasoning().
     if looks_multi_intent(raw):
@@ -1807,6 +2232,13 @@ def decide(text: str) -> HybridDecision:
     # Check for reasoning/explanation questions - these go to LLM when we couldn't
     # deterministically extract any tool intents.
     if needs_reasoning(raw):
+        logger.debug("[ROUTER] no_match -> LLM (needs_reasoning=True)")
         return HybridDecision(mode="llm", intents=None, reply="", confidence=0.85)
 
-    return _decide_single_clause(raw)
+    result = _decide_single_clause(raw)
+    if result.mode == "tool_plan":
+        tool_name = result.intents[0]["tool"] if result.intents else "?"
+        logger.debug(f"[ROUTER] matched=single_clause tool={tool_name} reason=_decide_single_clause")
+    else:
+        logger.debug("[ROUTER] no_match -> LLM (single_clause fallthrough)")
+    return result

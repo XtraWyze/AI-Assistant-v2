@@ -72,5 +72,8 @@ tqdm==4.67.0
 # Testing
 pytest==9.0.0
 
+# UI Automation (Phase 14 - Desktop Ground Truth)
+pywinauto>=0.6.8,<0.7
+
 # Development
 setuptools==75.0.0
