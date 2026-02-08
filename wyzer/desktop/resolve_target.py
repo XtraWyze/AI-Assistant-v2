@@ -171,8 +171,10 @@ def _score_text_match(target: str, label: str) -> float:
     if re.search(r"\b" + re.escape(target) + r"\b", label):
         return 70.0
 
-    # 4. Simple substring
-    if target in label or label in target:
+    # 4. Simple substring — require the shorter side to be >= 3 chars
+    #    so single-letter controls like 'p' don't match 'keep'.
+    shorter_len = min(len(target), len(label))
+    if shorter_len >= 3 and (target in label or label in target):
         return 55.0
 
     # 5. Fuzzy (SequenceMatcher)

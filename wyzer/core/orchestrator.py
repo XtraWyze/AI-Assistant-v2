@@ -1231,8 +1231,7 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 logger.info("[INTENT] Success: click_and_type")
             else:
                 logger.warning(
-                    "[INTENT] Failed: click_and_type — ok=%s clicked=%s errors=%s",
-                    cat_ok, cat_clicked, cat_errors,
+                    f"[INTENT] Failed: click_and_type — ok={cat_ok} clicked={cat_clicked} errors={cat_errors}"
                 )
 
             end_time = time.perf_counter()

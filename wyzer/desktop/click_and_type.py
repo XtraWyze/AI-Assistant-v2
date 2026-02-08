@@ -149,103 +149,33 @@ def execute_click_and_type(
             if ocr_resolve.best and not ocr_resolve.ambiguous and ocr_resolve.best.score >= SCORE_MIN:
                 chosen_candidate = ocr_resolve.best
                 method = "ocr"
-            elif ocr_resolve.ambiguous or (uia_resolve.ambiguous and uia_resolve.candidates):
-                # Merge and use the best set for disambiguation
-                method = "ocr" if ocr_resolve.best and (
-                    not uia_resolve.best or ocr_resolve.best.score > uia_resolve.best.score
-                ) else "uia"
+            elif ocr_resolve.best:
+                # OCR fallback: always auto-pick the best OCR candidate
+                # (no overlay for OCR — the user didn't ask to choose)
+                chosen_candidate = ocr_resolve.best
+                method = "ocr"
         else:
             ocr_resolve = uia_resolve  # no OCR available, keep UIA results
 
-        # ── Step 4: Disambiguation overlay ──────────────────────────
+        # ── Step 4: Auto-pick best candidate (no overlay) ───────────
+        # Always pick the highest-scoring candidate automatically.
         if chosen_candidate is None:
-            # Pick the resolve result with more candidates
-            resolve_for_overlay = (
-                ocr_resolve if len(ocr_resolve.candidates) > len(uia_resolve.candidates)
-                else uia_resolve
-            )
-
-            top3 = resolve_for_overlay.candidates[:3]
-            if not top3:
-                errors.append(f"No candidates found for '{target}' via UIA or OCR")
-                result["errors"] = errors
-                result["summary"] = f"I couldn't find '{target}' on screen."
-                return result
-
-            sid = _step("disambiguation_overlay")
-            overlay_options = []
-            for c in top3:
-                rect = c.rect
-                hint = ""
-                if rect:
-                    cx = (rect.get("l", 0) + rect.get("r", 0)) // 2
-                    cy = (rect.get("t", 0) + rect.get("b", 0)) // 2
-                    # Location hint: left/right and top/bottom of screen
-                    try:
-                        import ctypes
-                        sw = ctypes.windll.user32.GetSystemMetrics(0) or 1920
-                        sh = ctypes.windll.user32.GetSystemMetrics(1) or 1080
-                    except Exception:
-                        sw, sh = 1920, 1080
-                    h_pos = "left sidebar" if cx < sw * 0.3 else ("right panel" if cx > sw * 0.7 else "main panel")
-                    v_pos = "top" if cy < sh * 0.3 else ("bottom" if cy > sh * 0.7 else "middle")
-                    hint = f"{v_pos} / {h_pos}"
-                ct_display = c.control_type
-                if c.promotion:
-                    ct_display += f" (from {c.promotion.get('promoted_from', '?')})"
-                overlay_options.append({
-                    "label": c.name,
-                    "hint": hint,
-                    "control_type": ct_display,
-                    "source": c.source,
-                    "internal_id": c.id,
-                })
-
-            try:
-                from wyzer.tools.desktop.overlay import show_overlay, wait_overlay_choice
-                ov = show_overlay(
-                    prompt=f'Which "{target}" did you mean?',
-                    options=overlay_options,
-                )
-                if ov.get("error"):
-                    errors.append(f"overlay error: {ov['error']}")
-                    _step_end(sid, "disambiguation_overlay", {"error": ov["error"]})
-                    # Fall back to best candidate anyway
-                    if top3:
-                        chosen_candidate = top3[0]
+            # Prefer UIA best if available, else OCR best
+            best_uia = uia_resolve.best
+            best_ocr = ocr_resolve.best if ocr_resolve is not uia_resolve else None
+            if best_uia and best_ocr:
+                if best_uia.score >= best_ocr.score:
+                    chosen_candidate = best_uia
+                    method = "uia"
                 else:
-                    ov_id = ov["overlay_id"]
-                    choice_result = wait_overlay_choice(ov_id, timeout_ms=15000)
-                    _step_end(sid, "disambiguation_overlay", {
-                        "choice": choice_result.get("choice"),
-                        "timed_out": choice_result.get("timed_out", False),
-                        "cancelled": choice_result.get("cancelled", False),
-                    })
-
-                    choice_idx = choice_result.get("choice")
-                    if choice_result.get("cancelled") or choice_result.get("timed_out"):
-                        errors.append("User cancelled or timed out")
-                        result["disambiguation"] = {"used": True, "choice": None,
-                                                     "timed_out": choice_result.get("timed_out", False)}
-                        result["errors"] = errors
-                        result["summary"] = "Cancelled — no action taken."
-                        return result
-
-                    if choice_idx and 1 <= choice_idx <= len(top3):
-                        chosen_candidate = top3[choice_idx - 1]
-                        result["disambiguation"] = {"used": True, "choice": choice_idx}
-                        method = chosen_candidate.source
-                    else:
-                        errors.append(f"Invalid overlay choice: {choice_idx}")
-                        result["errors"] = errors
-                        result["summary"] = "Invalid selection — no action taken."
-                        return result
-            except Exception as e:
-                errors.append(f"overlay exception: {e}")
-                _step_end(sid, "disambiguation_overlay", {"error": str(e)})
-                # Fall back to best candidate
-                if top3:
-                    chosen_candidate = top3[0]
+                    chosen_candidate = best_ocr
+                    method = "ocr"
+            elif best_uia:
+                chosen_candidate = best_uia
+                method = "uia"
+            elif best_ocr:
+                chosen_candidate = best_ocr
+                method = "ocr"
 
     if chosen_candidate is None:
         errors.append(f"Could not resolve '{target}' to any UI element")

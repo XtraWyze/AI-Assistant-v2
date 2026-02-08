@@ -61,6 +61,14 @@ class TestScoreTextMatch(unittest.TestCase):
         score = _score_text_match("anything", "askanything")
         self.assertEqual(score, 55.0)
 
+    def test_short_substring_rejected(self):
+        """Single-char label like 'p' must NOT substring-match 'keep'."""
+        self.assertEqual(_score_text_match("keep", "p"), 0.0)
+        # 2-char non-prefix substrings are also rejected
+        self.assertEqual(_score_text_match("keep", "ep"), 0.0)
+        # 3-char non-prefix substrings should still match
+        self.assertEqual(_score_text_match("keep", "eep"), 55.0)
+
     def test_fuzzy(self):
         score = _score_text_match("ask anythin", "ask anything")
         # Should be fuzzy match >=0.7 ratio

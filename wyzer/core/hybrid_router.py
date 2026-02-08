@@ -938,6 +938,66 @@ def _match_click_and_type(text: str) -> Optional[HybridDecision]:
     )
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 16b: "type <text>" / "write <text>" — direct typing into focused field
+# ═══════════════════════════════════════════════════════════════════════════
+# Matches:
+#   "type hello world"
+#   "write this is a test"
+#   "enter some text here"
+#   "type out good morning"
+#   "write out hello there"
+_TYPE_DIRECT_RE = re.compile(
+    r"^(?:type|write|enter)\s+(?:out\s+|in\s+)?"
+    r"(?P<text>.+)$",
+    re.IGNORECASE,
+)
+
+# Guard words: if the text part starts with these, it's NOT a typing request
+# but a question/command (e.g. "write a poem", "type of file", "enter the app")
+_TYPE_DIRECT_GUARD_RE = re.compile(
+    r"^(?:a\s|an\s|me\s|the\s|my\s|of\s|code\b|poem\b|essay\b|story\b"
+    r"|song\b|email\b|letter\b|script\b|program\b|function\b|paragraph\b"
+    r"|article\b|report\b|some\s+code\b)",
+    re.IGNORECASE,
+)
+
+
+def _match_type_direct(text: str) -> Optional[HybridDecision]:
+    """Route bare 'type <text>' / 'write <text>' to the type_text tool.
+
+    Types the text into whatever field/control is currently focused.
+    Returns a HybridDecision or None.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return None
+
+    m = _TYPE_DIRECT_RE.match(raw)
+    if not m:
+        return None
+
+    type_text = m.group("text").strip().rstrip("?.,;: ")
+    if not type_text:
+        return None
+
+    # Guard: skip creative/generative requests like "write a poem"
+    if _TYPE_DIRECT_GUARD_RE.match(type_text):
+        return None
+
+    logger.info(f"[ROUTER] matched=type_direct text={type_text!r}")
+    return HybridDecision(
+        mode="tool_plan",
+        intents=[{
+            "tool": "type_text",
+            "args": {"text": type_text},
+            "continue_on_error": False,
+        }],
+        reply="",
+        confidence=0.95,
+    )
+
+
 # "click the Maximize button" / "click Maximize" / "press the Close button"
 _CLICK_WINCTL_RE = re.compile(
     r"^(?:click|press|hit|tap)\s+(?:the\s+|on\s+(?:the\s+)?)?"  # verb + optional article
@@ -2293,6 +2353,12 @@ def decide(text: str) -> HybridDecision:
     cat_decision = _match_click_and_type(raw)
     if cat_decision is not None:
         return cat_decision
+
+    # Phase 16b: "type <text>" / "write <text>" — direct typing into focused field
+    # Must run BEFORE generic click intent so "type hello" doesn't fall through.
+    type_decision = _match_type_direct(raw)
+    if type_decision is not None:
+        return type_decision
 
     # Phase 14c: Click / press commands -> desktop_click_uia
     click_decision = _match_click_intent(raw)
