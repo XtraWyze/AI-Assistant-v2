@@ -101,10 +101,20 @@ def _format_screen_summary(window_info: Dict[str, Any],
     else:
         parts.append("I could not identify the focused window.")
 
-    # Sentence 2: highlights
-    if highlights:
+    # Sentence 2: highlights (or UIA failure notice)
+    uia_errors = uia_info.get("errors") or []
+    uia_failed = any(
+        e in ("pywinauto_not_installed", "no_foreground_window",
+              "no_top_windows", "foreground_not_in_uia_list")
+        for e in uia_errors
+    )
+    if uia_failed:
+        parts.append(
+            "I couldn't read UI controls due to an accessibility/permission issue."
+        )
+    elif highlights:
         if len(highlights) == 1:
-            parts.append(f"I see a {highlights[0]} control.")
+            parts.append(f"I found a control labeled {highlights[0]}.")
         else:
             items_str = ", ".join(highlights[:-1]) + f", and {highlights[-1]}"
             parts.append(f"Notable items: {items_str}.")
@@ -154,7 +164,7 @@ class DescribeScreenTool(ToolBase):
 
     def run(self, **kwargs) -> Dict[str, Any]:
         from wyzer.tools.desktop.get_active_window import get_active_window_info
-        from wyzer.tools.desktop.perceive_uia import _try_pywinauto
+        from wyzer.tools.desktop.perceive_uia import perceive_uia_focused_window
         from wyzer.context.world_state import emit_event, update_last_perception
 
         start = time.perf_counter()
@@ -162,8 +172,8 @@ class DescribeScreenTool(ToolBase):
         # Step 1: fast Win32 window metadata
         window_info = get_active_window_info()
 
-        # Step 2: UIA tree walk
-        uia_info = _try_pywinauto(max_nodes=60)
+        # Step 2: UIA tree walk (public API — always returns full schema)
+        uia_info = perceive_uia_focused_window(max_nodes=60)
         update_last_perception(uia_info)
 
         # Step 3: format

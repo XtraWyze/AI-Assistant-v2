@@ -130,7 +130,7 @@ class OllamaClient:
             error_body = ""
             try:
                 error_body = e.read().decode('utf-8')
-            except:
+            except Exception:
                 pass
             
             self.logger.error(f"HTTP {e.code} from Ollama after {elapsed_ms}ms: {error_body}")
@@ -237,7 +237,7 @@ class OllamaClient:
             error_body = ""
             try:
                 error_body = e.read().decode('utf-8')
-            except:
+            except Exception:
                 pass
             
             self.logger.error(f"HTTP {e.code} from Ollama stream after {elapsed_ms}ms")

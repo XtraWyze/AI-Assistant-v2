@@ -455,7 +455,7 @@ class LlamaServerManager:
                 try:
                     self._log_file_handle.write(f"ERROR: {e}\n")
                     self._log_file_handle.close()
-                except:
+                except OSError:
                     pass
                 self._log_file_handle = None
             return False
@@ -503,7 +503,7 @@ class LlamaServerManager:
                     try:
                         self._log_file_handle.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Server stopped\n")
                         self._log_file_handle.close()
-                    except:
+                    except OSError:
                         pass
                     self._log_file_handle = None
             return

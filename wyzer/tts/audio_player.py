@@ -125,6 +125,6 @@ class AudioPlayer:
                 try:
                     self.current_stream.stop()
                     self.current_stream.close()
-                except:
+                except Exception:
                     pass
                 self.current_stream = None

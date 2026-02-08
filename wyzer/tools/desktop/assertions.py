@@ -97,8 +97,8 @@ def _find_text_uia(
 ) -> Dict[str, Any]:
     """Search UIA controls for text match."""
     try:
-        from wyzer.tools.desktop.perceive_uia import _try_pywinauto
-        snapshot = _try_pywinauto(max_nodes=80)
+        from wyzer.tools.desktop.perceive_uia import perceive_uia_focused_window
+        snapshot = perceive_uia_focused_window(max_nodes=80)
     except Exception as e:
         return {"found": False, "evidence": f"uia_error: {e}", "method": "uia"}
 
@@ -208,8 +208,8 @@ def install_succeeded_check() -> Dict[str, Any]:
     Returns {status: "success"|"fail"|"unknown", evidence: str, details: dict}.
     """
     try:
-        from wyzer.tools.desktop.perceive_uia import _try_pywinauto
-        snapshot = _try_pywinauto(max_nodes=80)
+        from wyzer.tools.desktop.perceive_uia import perceive_uia_focused_window
+        snapshot = perceive_uia_focused_window(max_nodes=80)
     except Exception as e:
         return {"status": "unknown", "evidence": f"uia_error: {e}", "details": {}}
 

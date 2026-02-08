@@ -39,7 +39,14 @@ def _try_pywinauto(max_nodes: int = _DEFAULT_MAX_NODES) -> Dict[str, Any]:
     try:
         from pywinauto import Desktop
     except ImportError:
-        return {"error": "pywinauto not installed"}
+        return {
+            "window": {},
+            "controls": [],
+            "dialogs": [],
+            "progress": None,
+            "errors": ["pywinauto_not_installed"],
+            "timestamp": time.time(),
+        }
 
     result: Dict[str, Any] = {
         "window": {},
@@ -188,6 +195,15 @@ def _try_pywinauto(max_nodes: int = _DEFAULT_MAX_NODES) -> Dict[str, Any]:
     return result
 
 
+def perceive_uia_focused_window(max_nodes: int = _DEFAULT_MAX_NODES) -> Dict[str, Any]:
+    """Public API: return a UIA snapshot of the focused window.
+
+    Always returns the documented schema:
+    {window, controls, dialogs, progress, errors, timestamp}
+    """
+    return _try_pywinauto(max_nodes=max_nodes)
+
+
 class PerceiveUIAFocusedWindowTool(ToolBase):
     """UIA perception of the focused window — deterministic, no LLM."""
 
@@ -213,6 +229,7 @@ class PerceiveUIAFocusedWindowTool(ToolBase):
 
     def run(self, **kwargs) -> Dict[str, Any]:
         from wyzer.context.world_state import emit_event, update_last_perception
+        from wyzer.tools.desktop.truth_contract import normalize_perception
 
         max_nodes = kwargs.get("max_nodes", _DEFAULT_MAX_NODES)
         start = time.perf_counter()
@@ -230,5 +247,7 @@ class PerceiveUIAFocusedWindowTool(ToolBase):
             "latency_ms": latency_ms,
         })
 
-        update_last_perception(info)
+        # Normalize to truth-contract schema before storing
+        normalized = normalize_perception(info)
+        update_last_perception(normalized)
         return info

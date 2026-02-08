@@ -185,14 +185,17 @@ class TestClickCommandRouting:
         "hit Apply",
         "tap Submit",
     ])
-    def test_click_generic_routes_to_desktop_click_uia(self, phrase):
+    def test_click_generic_routes_to_click_and_type(self, phrase):
         d = self._route(phrase)
         assert d.mode == "tool_plan", f"'{phrase}' should be tool_plan, got {d.mode}"
-        assert d.intents[0]["tool"] == "desktop_click_uia", f"'{phrase}' should use desktop_click_uia, got {d.intents[0]['tool']}"
+        assert d.intents[0]["tool"] == "__CLICK_AND_TYPE__", f"'{phrase}' should use __CLICK_AND_TYPE__, got {d.intents[0]['tool']}"
 
-    def test_click_save_has_button_control_type(self):
+    def test_click_save_no_forced_control_type(self):
+        """Generic clicks should NOT force control_type — let the resolver decide."""
         d = self._route("click the Save button")
-        assert d.intents[0]["args"].get("control_type") == "Button"
+        assert "control_type" not in d.intents[0]["args"], (
+            "Generic click should not force control_type"
+        )
 
     def test_click_maximize_does_not_use_llm(self):
         d = self._route("Click the Maximize button")

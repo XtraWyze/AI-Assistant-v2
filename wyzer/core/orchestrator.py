@@ -49,6 +49,17 @@ from wyzer.policy.autonomy_justification import (
     get_last_decision_brief,
 )
 
+# Phase 15: Global LLM Evidence Gate
+from wyzer.policy.tool_relevance_gate import (
+    is_tool_relevant_query,
+    gate_decision,
+)
+from wyzer.policy.evidence_envelope import (
+    EvidenceEnvelope,
+    build_envelope_from_execution,
+    build_empty_envelope,
+)
+
 
 # Short varied responses for no-ollama mode when command isn't recognized
 _NO_OLLAMA_FALLBACK_REPLIES = [
@@ -327,16 +338,13 @@ _ACTION_WORDS_RE = re.compile(
 
 # Module-level last topic storage (RAM only, cleared on restart)
 _last_topic: Optional[str] = None
-_last_topic_lock = None  # Lazy init for threading
+import threading as _threading
+_last_topic_lock = _threading.Lock()
 _continuation_hops: int = 0  # Tracks consecutive continuation requests
 _MAX_CONTINUATION_HOPS: int = 3  # After this many, ask narrowing question
 
 def _get_topic_lock():
-    """Lazy init threading lock for topic access."""
-    global _last_topic_lock
-    if _last_topic_lock is None:
-        import threading
-        _last_topic_lock = threading.Lock()
+    """Get threading lock for topic access."""
     return _last_topic_lock
 
 
@@ -538,10 +546,6 @@ _FASTPATH_COMMON_WEBSITES = {
 }
 
 _FASTPATH_EXPLICIT_TOOL_RE = re.compile(r"^(?:tool|run|execute)\s+(?P<tool>[a-zA-Z0-9_]+)(?:\s+(?P<rest>.*))?$", re.IGNORECASE)
-
-# Tool worker pool singleton (initialized on demand in Brain process)
-_tool_pool = None
-_logger = None
 
 
 def _user_explicitly_requested_library_refresh(user_text: str) -> bool:
@@ -1024,13 +1028,32 @@ def handle_user_text(text: str) -> Dict[str, Any]:
             # ================================================================
             
             # ================================================================
-            # SAFETY GUARD: Block LLM from describing the screen without tool
-            # evidence.  If the reply-only path would handle a screen-vision
-            # query, refuse gracefully instead of hallucinating.
+            # PHASE 15: GLOBAL TOOL-RELEVANCE GATE
+            # Block LLM from answering ANY tool-relevant query without
+            # evidence — covers screen, actions, state, files, etc.
             # ================================================================
-            from wyzer.core.hybrid_router import _match_screen_describe_intent, _match_verify_element_intent, _match_click_intent, _normalize_text_for_routing as _hr_normalize
+            _gate_refusal = gate_decision(
+                user_text=text,
+                executed_any_tool=False,
+                world_state=get_world_state(),
+            )
+            if _gate_refusal is not None:
+                logger.warning(f"[GATE] Blocked LLM in reply-only path: {_gate_refusal[:60]}")
+                end_time = time.perf_counter()
+                latency_ms = int((end_time - start_time) * 1000)
+                return {
+                    "reply": _gate_refusal,
+                    "latency_ms": latency_ms,
+                    "meta": {"reply_only": True, "reason": "tool_relevance_gate_blocked", "original_text": original_text},
+                }
+
+            # ================================================================
+            # SAFETY GUARD (legacy, kept as defense-in-depth): Block LLM from
+            # describing the screen without tool evidence.
+            # ================================================================
+            from wyzer.core.hybrid_router import _match_screen_describe_intent, _match_verify_element_intent, _match_click_intent, _normalize_text_for_routing as _hr_normalize, _is_ui_state_query
             _guard_norm = _hr_normalize(text)
-            if _match_screen_describe_intent(_guard_norm) is not None or _match_verify_element_intent(_guard_norm) is not None:
+            if _match_screen_describe_intent(_guard_norm) is not None or _match_verify_element_intent(_guard_norm) is not None or _is_ui_state_query(text):
                 logger.warning("[SAFETY] Screen-vision query reached reply-only path; refusing LLM hallucination")
                 end_time = time.perf_counter()
                 latency_ms = int((end_time - start_time) * 1000)
@@ -1040,7 +1063,7 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                     "meta": {"reply_only": True, "reason": "screen_vision_blocked", "original_text": original_text},
                 }
 
-            # SAFETY GUARD: Block LLM from narrating click/press actions it
+            # SAFETY GUARD (legacy): Block LLM from narrating click/press actions it
             # didn't actually perform.
             if _match_click_intent(text) is not None:
                 logger.warning("[SAFETY] Click command reached reply-only path; refusing LLM hallucination")
@@ -1167,6 +1190,64 @@ def handle_user_text(text: str) -> Dict[str, Any]:
             }
 
         # Hybrid router FIRST: deterministic tool plans for obvious commands; LLM otherwise.
+        # ── Phase 16: __CLICK_AND_TYPE__ pseudo-tool (deterministic orchestrator) ──
+        if (
+            hybrid_decision.mode == "tool_plan"
+            and hybrid_decision.intents
+            and len(hybrid_decision.intents) == 1
+            and hybrid_decision.intents[0].get("tool") == "__CLICK_AND_TYPE__"
+        ):
+            logger.info("[HYBRID] route=click_and_type (deterministic fast-path)")
+            cat_args = hybrid_decision.intents[0].get("args", {})
+            try:
+                from wyzer.desktop.click_and_type import execute_click_and_type
+                cat_result = execute_click_and_type(
+                    target=cat_args.get("target", ""),
+                    text=cat_args.get("text", ""),
+                )
+            except Exception as exc:
+                cat_result = {
+                    "ok": False,
+                    "clicked": False,
+                    "summary": f"Click-and-type failed: {exc}",
+                    "errors": [str(exc)],
+                }
+
+            # ── Strict failure semantics (Phase 16+) ──────────────────
+            # Treat ANY of the following as failure:
+            #   ok == false, clicked == false, error present
+            # Only log Success if ok == true AND clicked == true
+            cat_ok = cat_result.get("ok", False)
+            cat_clicked = cat_result.get("clicked", True)  # default True for backward compat with type-only flows
+            cat_errors = cat_result.get("errors", [])
+
+            # Check click step explicitly
+            for step in cat_result.get("steps", []):
+                if step.get("step") == "click" and not step.get("clicked", True):
+                    cat_clicked = False
+                    break
+
+            if cat_ok and not cat_errors:
+                logger.info("[INTENT] Success: click_and_type")
+            else:
+                logger.warning(
+                    "[INTENT] Failed: click_and_type — ok=%s clicked=%s errors=%s",
+                    cat_ok, cat_clicked, cat_errors,
+                )
+
+            end_time = time.perf_counter()
+            latency_ms = int((end_time - start_time) * 1000)
+            return {
+                "reply": cat_result.get("summary", "Done."),
+                "latency_ms": latency_ms,
+                "meta": {
+                    "hybrid_route": "click_and_type",
+                    "click_and_type_result": cat_result,
+                    "success": cat_ok and not cat_errors,
+                },
+            }
+        # ── End Phase 16 ──────────────────────────────────────────────────────
+
         if hybrid_decision.mode == "tool_plan" and hybrid_decision.intents:
             if _hybrid_tool_plan_is_registered(hybrid_decision.intents, registry):
                 logger.info(f"[HYBRID] route=tool_plan confidence={hybrid_decision.confidence:.2f}")
@@ -1674,6 +1755,25 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 }
             # ================================================================
             
+            # ================================================================
+            # PHASE 15: GLOBAL GATE — block LLM-only reply for tool-relevant
+            # queries when no tool ran.
+            # ================================================================
+            _gate_refusal_2 = gate_decision(
+                user_text=text,
+                executed_any_tool=False,
+                world_state=get_world_state(),
+            )
+            if _gate_refusal_2 is not None:
+                logger.warning(f"[GATE] Blocked LLM reply-only fallback: {_gate_refusal_2[:60]}")
+                end_time = time.perf_counter()
+                latency_ms = int((end_time - start_time) * 1000)
+                return {
+                    "reply": _gate_refusal_2,
+                    "latency_ms": latency_ms,
+                    "meta": {"reply_only": True, "reason": "tool_relevance_gate_blocked", "original_text": original_text},
+                }
+
             reply_only = _call_llm_reply_only(text)
             intent_plan.reply = reply_only.get("reply", "")
         
@@ -1759,6 +1859,29 @@ def handle_user_text(text: str) -> Dict[str, Any]:
             }
         else:
             # No intents needed, return direct reply
+            # ================================================================
+            # PHASE 15: GLOBAL GATE — block LLM-only reply on tool-relevant
+            # queries when no tool executed this turn.
+            # ================================================================
+            _gate_refusal_3 = gate_decision(
+                user_text=text,
+                executed_any_tool=False,
+                world_state=get_world_state(),
+            )
+            if _gate_refusal_3 is not None:
+                logger.warning(f"[GATE] Blocked no-intent LLM reply: {_gate_refusal_3[:60]}")
+                end_time = time.perf_counter()
+                latency_ms = int((end_time - start_time) * 1000)
+                return {
+                    "reply": _gate_refusal_3,
+                    "latency_ms": latency_ms,
+                    "meta": {
+                        "hybrid_route": "llm",
+                        "hybrid_confidence": float(hybrid_decision.confidence or 0.0),
+                        "reason": "tool_relevance_gate_blocked",
+                    },
+                }
+
             end_time = time.perf_counter()
             latency_ms = int((end_time - start_time) * 1000)
             
@@ -1869,7 +1992,22 @@ def should_use_streaming_tts(text: str) -> bool:
         _WHAT_DID_I_OPEN_RE.match(text_stripped) or
         _WHERE_AM_I_RE.match(text_stripped)):
         return False
+
+    # Safety fallback: screen-state phrases MUST route to tools, never stream.
+    # Even if the hybrid router misses a variant, this gate prevents hallucinated
+    # "I see…" responses from the streaming TTS LLM path.
+    from wyzer.core.hybrid_router import SCREEN_STATE_PHRASES
+    _screen_norm = re.sub(r"['\u2019]", "", text_stripped.lower())
+    _screen_norm = re.sub(r"^(?:hey\s+wyzer|wyzer|hey)\b[\s,]*", "", _screen_norm).strip()
+    _screen_norm = re.sub(r"[?.!,]+$", "", _screen_norm).strip()
+    for _sp in SCREEN_STATE_PHRASES:
+        if _sp in _screen_norm:
+            return False
     
+    # Phase 15: Block streaming for tool-relevant queries (they need the gate)
+    if is_tool_relevant_query(text_stripped):
+        return False
+
     # Phase 10: Check for reference resolution patterns BEFORE hybrid router
     # Pronoun-based commands must be handled deterministically, not streamed
     from wyzer.core.reference_resolver import is_move_it_to_monitor_request, is_other_one_request, is_pronoun_action_request
@@ -2060,7 +2198,27 @@ def handle_user_text_streaming(
             "meta": {"reply_only": True, "reason": "meta_deterministic_streaming", "streamed": False},
         }
     # ========================================================================
-    
+
+    # ========================================================================
+    # PHASE 15: GLOBAL TOOL-RELEVANCE GATE (streaming path)
+    # Block LLM streaming for tool-relevant queries without tool evidence.
+    # ========================================================================
+    _stream_gate_refusal = gate_decision(
+        user_text=text,
+        executed_any_tool=False,
+        world_state=ws,
+    )
+    if _stream_gate_refusal is not None:
+        logger.warning(f"[GATE] Blocked streaming LLM: {_stream_gate_refusal[:60]}")
+        end_time = time.perf_counter()
+        latency_ms = int((end_time - start_time) * 1000)
+        return {
+            "reply": _stream_gate_refusal,
+            "latency_ms": latency_ms,
+            "meta": {"reply_only": True, "reason": "tool_relevance_gate_blocked", "streamed": False},
+        }
+    # ========================================================================
+
     try:
         # Build reply-only prompt (no JSON, plain text output for streaming TTS)
         # This mirrors _call_llm_reply_only but outputs plain text instead of JSON
@@ -2529,6 +2687,17 @@ def _execute_intents(intents, registry) -> ExecutionSummary:
         # Check if execution was successful
         has_error = "error" in tool_result
 
+        # Phase 16+: Also detect click-tool soft failures where the tool
+        # returns {ok: False, clicked: False} WITHOUT an "error" key.
+        if not has_error and isinstance(tool_result, dict):
+            if tool_result.get("ok") is False or tool_result.get("clicked") is False:
+                has_error = True
+                # Synthesize an error entry so downstream logging is consistent
+                tool_result["error"] = {
+                    "type": "click_failed",
+                    "message": tool_result.get("reason") or tool_result.get("summary") or "Click target not found or not clickable",
+                }
+
         error_type = None
         if has_error:
             try:
@@ -2992,6 +3161,18 @@ def _try_fastpath_intents(user_text: str, registry) -> Optional[List[Intent]]:
     return intents
 
 
+# Ordinal word to number mapping for monitor references (used by _fastpath_parse_clause)
+_FASTPATH_ORDINAL_MAP = {
+    "first": 1, "1st": 1,
+    "second": 2, "2nd": 2, "secondary": 2, "other": 2,
+    "third": 3, "3rd": 3,
+    "fourth": 4, "4th": 4,
+    "fifth": 5, "5th": 5,
+    "sixth": 6, "6th": 6,
+}
+_FASTPATH_ORDINAL_PATTERN = "|".join(_FASTPATH_ORDINAL_MAP.keys())
+
+
 def _fastpath_parse_clause(clause: str) -> Optional[List[Intent]]:
     """Parse a single command clause into intents."""
     c_raw = _strip_trailing_punct(clause)
@@ -3243,19 +3424,9 @@ def _fastpath_parse_clause(clause: str) -> Optional[List[Intent]]:
             # Force close is intentionally not supported in fast-path.
             return [Intent(tool="close_window", args={"process": target, "force": False})]
 
-    # Ordinal word to number mapping for monitor references
-    _ORDINAL_MAP = {
-        "first": 1, "1st": 1,
-        "second": 2, "2nd": 2, "secondary": 2, "other": 2,
-        "third": 3, "3rd": 3,
-        "fourth": 4, "4th": 4,
-        "fifth": 5, "5th": 5,
-        "sixth": 6, "6th": 6,
-    }
-    _ORDINAL_PATTERN = "|".join(_ORDINAL_MAP.keys())
-
+    # Ordinal word to number mapping for monitor references (module-level constant)
     m = re.match(
-        rf"^move\s+(?P<target>.+?)\s+to\s+(?:(?:the\s+)?(?P<primary>primary|main)\s+monitor|(?:the\s+)?(?P<ordinal>{_ORDINAL_PATTERN})\s+monitor|monitor\s+(?P<mon>\d+)|(?P<mon2>\d+))(?P<rest>.*)$",
+        rf"^move\s+(?P<target>.+?)\s+to\s+(?:(?:the\s+)?(?P<primary>primary|main)\s+monitor|(?:the\s+)?(?P<ordinal>{_FASTPATH_ORDINAL_PATTERN})\s+monitor|monitor\s+(?P<mon>\d+)|(?P<mon2>\d+))(?P<rest>.*)$",
         c_lower,
     )
     if m:
@@ -3266,7 +3437,7 @@ def _fastpath_parse_clause(clause: str) -> Optional[List[Intent]]:
         if m.group("primary"):
             monitor: Any = "primary"
         elif m.group("ordinal"):
-            monitor = _ORDINAL_MAP.get(m.group("ordinal").lower(), 1)
+            monitor = _FASTPATH_ORDINAL_MAP.get(m.group("ordinal").lower(), 1)
         else:
             mon_s = m.group("mon") or m.group("mon2")
             if not mon_s:
@@ -4418,6 +4589,12 @@ def _execute_tool(registry, tool_name: str, tool_args: Dict[str, Any]) -> Dict[s
                 if result_obj is not None:
                     result = result_obj.result
                     logger.info(f"[TOOLS] Pool result {result}")
+                    # Phase 14: Emit tool_end event for pool execution
+                    try:
+                        _duration_ms = int((time.perf_counter() - _tool_exec_start) * 1000)
+                        _emit_event("tool_end", {"tool": tool_name, "success": True, "duration_ms": _duration_ms, "via": "pool"})
+                    except Exception:
+                        pass
                     # Phase 10: Update world state for reference resolution
                     _update_world_state_from_result(tool_name, full_args, result)
                     return result
@@ -4928,17 +5105,42 @@ def _call_llm_reply_only(user_text: str) -> Dict[str, Any]:
     except Exception:
         pass
     
+    # Phase 15: Inject perception snapshot + recent events into reply-only prompt
+    perception_block = ""
+    try:
+        from wyzer.context.world_state import get_last_perception, get_event_log
+        from wyzer.tools.desktop.truth_contract import normalize_perception, perception_to_prompt_block
+        last_perc = get_last_perception()
+        if last_perc:
+            norm = normalize_perception(last_perc)
+            perception_block = "\n" + perception_to_prompt_block(norm, max_controls=6) + "\n"
+        recent_events = get_event_log(limit=5)
+        if recent_events:
+            event_lines = []
+            for ev in recent_events[-5:]:
+                etype = ev.get("event", "?")
+                summary_parts = [f"  - {etype}"]
+                for k, v in ev.items():
+                    if k in ("event", "ts"):
+                        continue
+                    summary_parts.append(f"{k}={v!r}"[:50])
+                event_lines.append(" ".join(summary_parts))
+            perception_block += "\n[RECENT EVENTS]\n" + "\n".join(event_lines) + "\n"
+    except Exception:
+        pass
+    
     from wyzer.brain.capability_contract import get_capability_contract
     capability_contract = get_capability_contract(get_registry())
 
     prompt = f"""{capability_contract}
 You are Wyzer, a local voice assistant.
-{ctx['promoted']}{ctx['redaction']}{ctx['memories']}{ctx['session']}{smalltalk_directive}
+{ctx['promoted']}{ctx['redaction']}{ctx['memories']}{ctx['session']}{smalltalk_directive}{perception_block}
 Reply naturally. Be direct.
 You ARE allowed to generate stories, poems, jokes, and creative content when asked.
 Keep creative content spoken-friendly: no markdown, no bullet lists.
 
 NEVER invent or request tools. Respond directly in plain text.
+NEVER claim anything about the screen, UI, buttons, or dialogs unless a [PERCEPTION SNAPSHOT] is present above.
 
 JSON format: {{"reply": "your response"}}
 
@@ -5121,6 +5323,15 @@ def _call_llm_with_execution_summary(
         if reply_text:
             return {"reply": reply_text}
     
+    # Phase 15: Build evidence envelope for LLM grounding
+    try:
+        from wyzer.context.world_state import get_world_state as _get_ws_ev
+        _ws_ev = _get_ws_ev()
+    except Exception:
+        _ws_ev = None
+    envelope = build_envelope_from_execution(execution_summary, _ws_ev)
+    evidence_block = envelope.to_prompt_block()
+
     from wyzer.brain.capability_contract import get_capability_contract
     capability_contract = get_capability_contract(registry)
 
@@ -5132,11 +5343,15 @@ User asked: {user_text}
 Results:
 {summary_text}
 
-NARRATION RULES (hard constraints):
-- You may ONLY mention facts that appear in the Results section.
-- If a fact is not explicitly present in Results, you MUST NOT mention it.
-- Do not infer system state (e.g., “it is now focused”) unless Results explicitly says so.
-- If all tools failed, say they failed and offer one short next step.
+{evidence_block}
+
+NARRATION RULES (hard constraints - DO NOT VIOLATE):
+1) You may ONLY state facts that appear verbatim or are directly derivable from VERIFIED_EVIDENCE above.
+2) If a fact is NOT in VERIFIED_EVIDENCE, you MUST NOT mention it.
+3) Never claim vision ("I see") unless a perception tool output is in VERIFIED_EVIDENCE.
+4) Never claim recent open/close/click unless a tool or world_facts confirms it.
+5) Do not infer system state (e.g., "it is now focused") unless Results explicitly says so.
+6) If all tools failed, say they failed and offer one short next step.
 
 Reply in 1-2 short sentences, based strictly on Results.
 

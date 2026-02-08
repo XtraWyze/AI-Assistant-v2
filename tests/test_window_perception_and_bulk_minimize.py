@@ -20,8 +20,8 @@ def _clean_state():
 @pytest.mark.parametrize(
     "text, expected_tool",
     [
-        ("what's on my screen", "get_window_context"),
-        ("what is on my monitor?", "get_window_context"),
+        ("what's on my screen", "describe_screen"),
+        ("what is on my monitor?", "describe_screen"),
         ("what windows are open", "list_open_windows"),
         ("what's open?", "list_open_windows"),
     ],

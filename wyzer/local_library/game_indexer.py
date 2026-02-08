@@ -230,7 +230,7 @@ def _get_steam_install_path() -> Optional[str]:
             steam_path, _ = winreg.QueryValueEx(key, "SteamPath")
             winreg.CloseKey(key)
             return steam_path.replace("/", "\\")
-        except:
+        except OSError:
             pass
         
         # Try HKEY_LOCAL_MACHINE
@@ -239,7 +239,7 @@ def _get_steam_install_path() -> Optional[str]:
             install_path, _ = winreg.QueryValueEx(key, "InstallPath")
             winreg.CloseKey(key)
             return install_path
-        except:
+        except OSError:
             pass
         
         # Fallback to common location

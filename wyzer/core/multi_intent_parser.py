@@ -258,7 +258,6 @@ def try_parse_multi_intent(text: str) -> Optional[Tuple[List[Dict[str, Any]], fl
             else:
                 # For comma separator, just do sentence boundary splitting
                 sentence_pattern = r'(?<=[.?!])\s+(?=[A-Z])'
-                import re
                 sentence_parts = re.split(sentence_pattern, clause)
                 expanded_clauses.extend([p.strip() for p in sentence_parts if p and p.strip()])
         

@@ -11,10 +11,13 @@ This module is intentionally conservative.
 
 from __future__ import annotations
 
+import datetime as _datetime_mod
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Literal, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Literal, Tuple, TYPE_CHECKING
+
+_datetime_date = _datetime_mod.date
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +79,7 @@ def _parse_volume_delta_hint(text_lower: str) -> int:
     return 10
 
 
-def _parse_volume_scope_and_process(clause: str) -> tuple[str, str]:
+def _parse_volume_scope_and_process(clause: str) -> Tuple[str, str]:
     """Return (scope, process) where scope is 'master' or 'app'.
 
     Keep this conservative: only treat a token as an app/process hint when it looks
@@ -594,7 +597,8 @@ _LOCATION_RE = re.compile(
 # ═══════════════════════════════════════════════════════════════════════════
 _WINDOW_CONTEXT_RE = re.compile(
     r"^(?:"
-    r"what\s+(?:am\s+i|are\s+you)\s+looking\s+at|"          # "what am I looking at"
+    # NOTE: "what am I looking at" is intentionally routed to describe_screen
+    # via _WHATS_ON_SCREEN_DEEP_RE / SCREEN_STATE_PHRASES instead.
     r"what(?:'?s|\s+is)\s+(?:the\s+)?(?:active|current|foreground)\s+(?:window|app|application|program)|"  # "what's the active window"
     r"what\s+(?:window|app|application|program)\s+is\s+(?:this|active|open|focused)|"  # "what window is this"
     r"which\s+(?:window|app|application|program)\s+(?:is\s+)?(?:active|focused|open)|"  # "which app is active"
@@ -627,14 +631,16 @@ _LIST_OPEN_WINDOWS_RE = re.compile(
 # Phase 14: Desktop Ground Truth patterns
 # ═══════════════════════════════════════════════════════════════════════════
 
-# "what's on screen right now" -> describe_screen (formatted UIA perception)
+# "what's on screen right now" / "tell me what you see" -> describe_screen
 _WHATS_ON_SCREEN_DEEP_RE = re.compile(
     r"^(?:what(?:'?s|\s+is)\s+on\s+(?:the\s+)?screen\s+right\s+now|"
-    r"describe\s+(?:the\s+)?screen|"
-    r"describe\s+what(?:'?s|\s+is)\s+on\s+(?:my\s+)?screen|"
+    r"describe\s+(?:the\s+|my\s+)?screen|"
+    r"describe\s+what(?:'?s|\s+is)\s+(?:on\s+(?:my\s+)?screen|in\s+front\s+of\s+me)|"
     r"read\s+(?:the\s+)?screen|"
     r"what\s+(?:controls?|buttons?|elements?)\s+(?:are|do\s+i\s+see)\s+on\s+(?:the\s+)?screen|"
-    r"what\s+(?:do\s+i|can\s+i)\s+see\s+on\s+(?:the\s+)?screen)\??$",
+    r"what\s+(?:do\s+i|can\s+i)\s+see\s+on\s+(?:the\s+)?screen|"
+    r"(?:tell\s+me\s+)?what\s+(?:do\s+)?you\s+see|"
+    r"what\s+am\s+i\s+looking\s+at)\??$",
     re.IGNORECASE,
 )
 
@@ -659,32 +665,72 @@ _INSTALL_CHECK_RE = re.compile(
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Phase 15: Broad UI-state queries that MUST route through perception
+# These catch questions the LLM would otherwise hallucinate about.
+# ═══════════════════════════════════════════════════════════════════════════
+_UI_STATE_QUERY_RE = re.compile(
+    r"^(?:"
+    # Dialog / popup content
+    r"what\s+does\s+(?:the\s+|this\s+|that\s+)?(?:dialog|popup|prompt|notification|alert|window|box|message)\s+say|"
+    r"what\s+(?:is|does)\s+(?:the\s+|this\s+|that\s+)?(?:error|warning|message|notification|alert)\s+(?:say|mean|show)|"
+    r"read\s+(?:the\s+|this\s+|that\s+)?(?:dialog|popup|prompt|error|warning|message|notification|alert)(?:\s+message)?|"
+    # Progress / status
+    r"(?:is\s+it|are\s+we)\s+(?:still\s+)?(?:downloading|installing|updating|loading|processing|uploading|extracting|copying)|"
+    r"how\s+far\s+(?:along\s+)?(?:is\s+(?:the\s+|it\s+)?)?(?:download|install|update|loading|progress)|"
+    r"(?:what(?:'?s|\s+is)\s+the\s+)?(?:download|install|update|loading)\s+(?:progress|status|percentage)|"
+    r"did\s+(?:the\s+)?(?:download|update|installation)\s+(?:finish|complete|succeed|work|fail)|"
+    r"(?:is\s+the\s+)?(?:download|update)\s+(?:done|finished|complete|ready)|"
+    # What's happening / showing
+    r"what(?:'?s|\s+is)\s+(?:happening|showing|displayed?)\s+(?:on\s+(?:the\s+)?screen|now|right\s+now|here)|"
+    r"what\s+(?:is\s+)?(?:this|that)\s+(?:on\s+(?:the\s+)?screen|saying|showing)|"
+    r"can\s+you\s+(?:read|check|verify|confirm)\s+(?:the\s+|what(?:'?s|\s+is)\s+on\s+(?:the\s+)?)?screen"
+    r")\??$",
+    re.IGNORECASE,
+)
+
+def _is_ui_state_query(text: str) -> bool:
+    """Return True if the text is asking about on-screen UI state.
+    
+    These queries MUST be routed through a perception tool — the LLM
+    must never answer them from imagination.
+    """
+    return bool(_UI_STATE_QUERY_RE.match((text or "").strip()))
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Phase 14b: Broad screen-description & element-verify via normalized text
 # These use phrase-containment on normalized text (no anchoring) so they
 # catch natural speech like "Oh, what's on my screen? Can you describe it?"
 # ═══════════════════════════════════════════════════════════════════════════
 
-_SCREEN_DESCRIBE_PHRASES = [
+# Canonical set of screen-state phrases (normalized form, no apostrophes).
+# Shared with orchestrator.should_use_streaming_tts() via import.
+SCREEN_STATE_PHRASES: tuple[str, ...] = (
+    "tell me what you see",
+    "what do you see",
+    "whats on screen",
     "whats on my screen",
     "what is on my screen",
-    "describe my screen",
-    "describe the screen",
-    "can you describe it",
-    "what do you see",
+    "what is on screen",
     "what is on the screen",
-    "whats on screen",
+    "whats on the screen",
+    "describe the screen",
+    "describe my screen",
+    "describe whats in front of me",
+    "what am i looking at",
+    "can you describe it",
     "screen right now",
     "describe whats on",
     "read the screen",
     "read my screen",
     "what can you see",
-    "whats on the screen",
     "tell me whats on my screen",
     "tell me whats on the screen",
     "whats showing on my screen",
     "whats currently on my screen",
     "whats currently on screen",
-]
+)
+
+_SCREEN_DESCRIBE_PHRASES = list(SCREEN_STATE_PHRASES)
 
 # Verb-phrases that indicate the user is asking about element existence.
 _VERIFY_ELEMENT_TRIGGERS_RE = re.compile(
@@ -847,6 +893,51 @@ _MAXIMIZE_RE = re.compile(r"^(maximize|fullscreen|expand|full\s+screen)\s+(.+)$"
 # ═══════════════════════════════════════════════════════════════════════════
 # Click / press / UI-action patterns
 # ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 16: "click <target> and type <text>" — deterministic fast-path
+# ═══════════════════════════════════════════════════════════════════════════
+# Matches:
+#   "click on ask anything and type hello"
+#   "click ask anything and type hello world"
+#   "press search box and type test query"
+_CLICK_AND_TYPE_RE = re.compile(
+    r"^(?:click|press|hit|tap)\s+(?:on\s+)?(?:the\s+)?"
+    r"(?P<target>.+?)\s+and\s+type\s+(?P<text>.+)$",
+    re.IGNORECASE,
+)
+
+
+def _match_click_and_type(text: str) -> Optional[HybridDecision]:
+    """Route 'click <target> and type <text>' to the deterministic
+    click-and-type orchestrator.  NO LLM involved.
+
+    Returns a HybridDecision with mode="tool_plan" using the special
+    __CLICK_AND_TYPE__ pseudo-tool, or None if the pattern doesn't match.
+    """
+    m = _CLICK_AND_TYPE_RE.match((text or "").strip())
+    if not m:
+        return None
+
+    target = m.group("target").strip().rstrip("?.,;: ")
+    type_text = m.group("text").strip().rstrip("?.,;: ")
+    if not target or not type_text:
+        return None
+
+    logger.info(
+        f"[ROUTER] matched=click_and_type target={target!r} text={type_text!r}"
+    )
+    return HybridDecision(
+        mode="tool_plan",
+        intents=[{
+            "tool": "__CLICK_AND_TYPE__",
+            "args": {"target": target, "text": type_text},
+            "continue_on_error": False,
+        }],
+        reply="",
+        confidence=0.97,
+    )
+
+
 # "click the Maximize button" / "click Maximize" / "press the Close button"
 _CLICK_WINCTL_RE = re.compile(
     r"^(?:click|press|hit|tap)\s+(?:the\s+|on\s+(?:the\s+)?)?"  # verb + optional article
@@ -941,14 +1032,19 @@ def _match_click_intent(text: str) -> Optional[HybridDecision]:
                 confidence=0.95,
             )
 
+        # Route generic "click X" through the full click-and-type
+        # orchestrator (with text="") so it benefits from perception,
+        # ancestor promotion, OCR fallback, disambiguation overlay, and
+        # retry chain.  Do NOT force control_type: "Button" — the target
+        # could be an Edit, ListItem, Pane, Hyperlink, etc.
         logger.info(
-            f"[ROUTER] matched=click tool=desktop_click_uia target={target_name}"
+            f"[ROUTER] matched=click tool=__CLICK_AND_TYPE__ target={target_name}"
         )
         return HybridDecision(
             mode="tool_plan",
             intents=[{
-                "tool": "desktop_click_uia",
-                "args": {"name": target_name, "control_type": "Button"},
+                "tool": "__CLICK_AND_TYPE__",
+                "args": {"target": target_name, "text": ""},
                 "continue_on_error": False,
             }],
             reply="",
@@ -1014,7 +1110,7 @@ _AUDIO_DEVICE_LIST_RE = re.compile(
 
 # Word-to-digit mapping for monitor numbers
 _WORD_TO_DIGIT = {
-    "one": "1", "two": "2", "three": "3", "four": "5", "five": "5",
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
     "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
     "first": "1", "second": "2", "third": "3", "fourth": "4", "fifth": "5",
     "1st": "1", "2nd": "2", "3rd": "3", "4th": "4", "5th": "5",
@@ -1325,8 +1421,7 @@ def _decide_single_clause(text: str) -> HybridDecision:
             days = 7
         else:
             # Check for weekday names (e.g., "on Thursday", "this Friday", "next Monday")
-            import datetime
-            today = datetime.date.today()
+            today = _datetime_date.today()
             today_weekday = today.weekday()  # 0=Monday, 6=Sunday
             
             # Check if user said "next <weekday>" (meaning next week's occurrence)
@@ -1400,7 +1495,7 @@ def _decide_single_clause(text: str) -> HybridDecision:
     if _WHATS_ON_MY_SCREEN_RE.match(clause):
         return HybridDecision(
             mode="tool_plan",
-            intents=[{"tool": "get_window_context", "args": {}, "continue_on_error": False}],
+            intents=[{"tool": "describe_screen", "args": {}, "continue_on_error": False}],
             reply="",
             confidence=0.95,
         )
@@ -2135,10 +2230,11 @@ def decide(text: str) -> HybridDecision:
 
     # Window perception queries are safe, deterministic, and should NOT be swallowed
     # by the generic reasoning-question heuristic.
+    # Route to describe_screen (Phase 14 ground truth) for richer output.
     if _WHATS_ON_MY_SCREEN_RE.match(raw):
         return HybridDecision(
             mode="tool_plan",
-            intents=[{"tool": "get_window_context", "args": {}, "continue_on_error": False}],
+            intents=[{"tool": "describe_screen", "args": {}, "continue_on_error": False}],
             reply="",
             confidence=0.93,
         )
@@ -2181,6 +2277,22 @@ def decide(text: str) -> HybridDecision:
             reply="",
             confidence=0.93,
         )
+
+    # Phase 15: Broad UI-state queries -> describe_screen (perceive first)
+    if _is_ui_state_query(raw):
+        logger.info("[ROUTER] matched=ui_state_query tool=describe_screen reason=broad UI question")
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "describe_screen", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.93,
+        )
+
+    # Phase 16: "click <target> and type <text>" — deterministic fast-path
+    # Must run BEFORE the generic click intent to avoid consuming the target.
+    cat_decision = _match_click_and_type(raw)
+    if cat_decision is not None:
+        return cat_decision
 
     # Phase 14c: Click / press commands -> desktop_click_uia
     click_decision = _match_click_intent(raw)

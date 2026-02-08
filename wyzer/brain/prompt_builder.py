@@ -143,6 +143,24 @@ FORBIDDEN BEHAVIORS:
 - Explaining why something failed without error data
 - Speculating about system performance or resource usage
 - Adding unsolicited advice or warnings
+
+UI / SCREEN GROUND-TRUTH RULE (NON-NEGOTIABLE):
+- You must NEVER claim anything about the screen, UI, windows, buttons, dialogs,
+  text on screen, progress, or installation status UNLESS the fact appears in a
+  [PERCEPTION SNAPSHOT] section or a tool result provided in this prompt.
+- If the user asks about the screen and no perception data is present, you MUST
+  say: "I can't verify what's on screen right now. Let me check." and request a
+  perception tool (describe_screen, perceive_uia_focused_window, or ui_find_text).
+- NEVER say "I see a button", "the dialog says", "install is complete", or any
+  UI-state claim without evidence from a perception tool.
+- If a [RECENT EVENTS] section is present, you may reference events listed there
+  but must not invent events that are not listed.
+
+EVIDENCE-BASED NARRATION (Phase 15):
+- If a VERIFIED_EVIDENCE section is present, you may ONLY state facts from it.
+- Never claim vision ("I see") unless a perception tool output is in VERIFIED_EVIDENCE.
+- Never claim recent open/close/click unless a tool or world_facts confirms it.
+- If VERIFIED_EVIDENCE shows no tools executed, refuse to describe system state.
 """
 
 NORMAL_SYSTEM_PROMPT_BASE = """You are Wyzer, a local voice assistant. You help users with tasks and questions.
@@ -181,6 +199,7 @@ Reply in 1-2 sentences. Be direct.
 Use {{"reply": "text"}} for questions/conversation/stories/creative content.
 
 ANTI-HALLUCINATION: Say "I don't know" if uncertain. NEVER guess or invent facts. NEVER assume system state without tool data.
+UI GROUND-TRUTH RULE: NEVER claim anything about the screen, buttons, dialogs, or UI unless a [PERCEPTION SNAPSHOT] is present. If asked about screen state without perception data, say you can't verify.
 """
 
 
@@ -272,6 +291,7 @@ class PromptBuilder:
         memories_context: str = "",
         visual_context: str = "",
         registry: Optional[Any] = None,
+        evidence_envelope: Optional[Any] = None,
     ):
         """
         Initialize prompt builder.
@@ -283,6 +303,7 @@ class PromptBuilder:
             redaction_context: Forgotten facts block
             memories_context: Smart-selected memories
             visual_context: Phase 9 screen awareness context (read-only)
+            evidence_envelope: Phase 15 evidence envelope (EvidenceEnvelope instance)
         """
         self.user_text = user_text
         self.session_context = session_context
@@ -291,6 +312,7 @@ class PromptBuilder:
         self.memories_context = memories_context
         self.visual_context = visual_context
         self.registry = registry
+        self.evidence_envelope = evidence_envelope
         self.logger = get_logger()
     
     def build(self) -> Tuple[str, str]:
@@ -359,6 +381,64 @@ class PromptBuilder:
             parts.append(visual)
             components.append("visual")
         
+        # Phase 15: Inject last perception snapshot + recent events from WorldState
+        try:
+            from wyzer.context.world_state import get_last_perception, get_event_log
+            from wyzer.tools.desktop.truth_contract import normalize_perception, perception_to_prompt_block
+
+            last_perc = get_last_perception()
+            if last_perc:
+                norm = normalize_perception(last_perc)
+                perc_block = perception_to_prompt_block(norm, max_controls=8)
+                parts.append(f"\n{perc_block}")
+                components.append("perception")
+
+            recent_events = get_event_log(limit=10)
+            if recent_events:
+                event_lines = []
+                for ev in recent_events[-10:]:
+                    etype = ev.get("event", "?")
+                    # Compact single-line summary
+                    summary_parts = [f"  - {etype}"]
+                    for k, v in ev.items():
+                        if k in ("event", "ts"):
+                            continue
+                        summary_parts.append(f"{k}={v!r}"[:60])
+                    event_lines.append(" ".join(summary_parts))
+                events_block = "[RECENT EVENTS]\n" + "\n".join(event_lines)
+                # Cap at 600 chars
+                if len(events_block) > 600:
+                    events_block = events_block[:600] + "\n  ..."
+                parts.append(f"\n{events_block}")
+                components.append("events")
+
+            # Foreground window metadata (always lightweight)
+            from wyzer.context.world_state import get_world_state
+            ws = get_world_state()
+            if ws.focused_window:
+                fw = ws.focused_window
+                fw_line = f"[FOREGROUND] app={fw.get('app', '?')} title=\"{(fw.get('title') or '')[:60]}\""
+                parts.append(fw_line)
+                components.append("foreground")
+        except Exception:
+            pass
+        
+        # Phase 15: Inject evidence envelope if present
+        if self.evidence_envelope is not None:
+            try:
+                evidence_block = self.evidence_envelope.to_prompt_block()
+                if evidence_block:
+                    parts.append(f"\n{evidence_block}")
+                    parts.append(
+                        "\nEVIDENCE RULES: You may ONLY state facts from VERIFIED_EVIDENCE above. "
+                        "If a fact is not there, say you cannot verify it. "
+                        "Never claim vision unless perception tool output is present. "
+                        "Never claim recent actions unless confirmed by tools or world_facts."
+                    )
+                    components.append("evidence")
+            except Exception:
+                pass
+
         # Add minimal examples (just 2)
         parts.append(self._get_minimal_examples())
         
@@ -388,6 +468,51 @@ class PromptBuilder:
         # Single format reminder instead of examples
         parts.append('\nFormat: {{"reply": "text"}} or {{"intents": [...], "reply": "text"}}')
         
+        # Phase 15: Inject evidence envelope in compact mode too
+        if self.evidence_envelope is not None:
+            try:
+                evidence_block = self.evidence_envelope.to_prompt_block()
+                if evidence_block:
+                    parts.append(f"\n{evidence_block}")
+                    parts.append(
+                        "EVIDENCE RULES: ONLY state facts from VERIFIED_EVIDENCE. "
+                        "Never claim vision or actions without tool confirmation."
+                    )
+                    components.append("evidence")
+            except Exception:
+                pass
+
+        # Phase 15: Inject perception + events in compact mode too
+        try:
+            from wyzer.context.world_state import get_last_perception, get_event_log
+            from wyzer.tools.desktop.truth_contract import normalize_perception, perception_to_prompt_block
+
+            last_perc = get_last_perception()
+            if last_perc:
+                norm = normalize_perception(last_perc)
+                perc_block = perception_to_prompt_block(norm, max_controls=6)
+                parts.append(f"\n{perc_block}")
+                components.append("perception")
+
+            recent_events = get_event_log(limit=5)
+            if recent_events:
+                event_lines = []
+                for ev in recent_events[-5:]:
+                    etype = ev.get("event", "?")
+                    summary_parts = [f"  - {etype}"]
+                    for k, v in ev.items():
+                        if k in ("event", "ts"):
+                            continue
+                        summary_parts.append(f"{k}={v!r}"[:50])
+                    event_lines.append(" ".join(summary_parts))
+                events_block = "[RECENT EVENTS]\n" + "\n".join(event_lines)
+                if len(events_block) > 400:
+                    events_block = events_block[:400] + "\n  ..."
+                parts.append(f"\n{events_block}")
+                components.append("events")
+        except Exception:
+            pass
+
         # User input
         parts.append(f"\nUser: {self.user_text}\n\nJSON:")
         
@@ -576,6 +701,7 @@ def build_llm_prompt(
     memories_context: str = "",
     visual_context: str = "",
     registry: Optional[Any] = None,
+    evidence_envelope: Optional[Any] = None,
 ) -> Tuple[str, str]:
     """
     Convenience function to build an LLM prompt.
@@ -587,6 +713,7 @@ def build_llm_prompt(
         redaction_context: Forgotten facts block
         memories_context: Smart-selected memories
         visual_context: Phase 9 screen awareness context (read-only)
+        evidence_envelope: Phase 15 evidence envelope (EvidenceEnvelope instance)
         
     Returns:
         Tuple of (prompt_text, mode) where mode is "normal" or "compact"
@@ -599,6 +726,7 @@ def build_llm_prompt(
         memories_context=memories_context,
         visual_context=visual_context,
         registry=registry,
+        evidence_envelope=evidence_envelope,
     )
     return builder.build()
 

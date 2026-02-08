@@ -233,7 +233,7 @@ class TestHybridRouterDesktopPatterns:
         """Existing 'what's on my screen' route still works."""
         d = self._route("what's on my screen?")
         assert d.mode == "tool_plan"
-        assert d.intents[0]["tool"] == "get_window_context"
+        assert d.intents[0]["tool"] == "describe_screen"
 
     def test_existing_list_windows_preserved(self):
         """Existing 'what windows are open' route still works."""
@@ -299,10 +299,10 @@ class TestBroadScreenDescriptionRouting:
         assert d.intents[0]["tool"] == "describe_screen"
 
     def test_existing_whats_on_my_screen_still_works(self):
-        """Anchored 'what's on my screen' should still route to get_window_context."""
+        """Anchored 'what's on my screen' should still route to describe_screen."""
         d = self._route("what's on my screen?")
         assert d.mode == "tool_plan"
-        assert d.intents[0]["tool"] == "get_window_context"
+        assert d.intents[0]["tool"] == "describe_screen"
 
 
 class TestBroadVerifyElementRouting:

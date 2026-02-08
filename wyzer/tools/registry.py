@@ -1,8 +1,12 @@
 """
 Tool registry for managing available tools.
 """
+import logging
+import os
 from typing import Dict, List, Optional
 from wyzer.tools.tool_base import ToolBase
+
+logger = logging.getLogger(__name__)
 
 
 class ToolRegistry:
@@ -16,9 +20,25 @@ class ToolRegistry:
         """
         Register a tool.
         
+        If a tool with the same name is already registered, log a WARNING
+        and keep the original (do NOT overwrite).  In debug mode
+        (WYZER_DEBUG=1) raise instead, to surface accidental duplicates early.
+        
         Args:
             tool: Tool instance to register
         """
+        if tool.name in self._tools:
+            existing = self._tools[tool.name]
+            existing_loc = f"{type(existing).__module__}.{type(existing).__qualname__}"
+            new_loc = f"{type(tool).__module__}.{type(tool).__qualname__}"
+            msg = (
+                f"Duplicate tool registration ignored: '{tool.name}' "
+                f"(existing={existing_loc}, duplicate={new_loc})"
+            )
+            if os.environ.get("WYZER_DEBUG") == "1":
+                raise ValueError(msg)
+            logger.warning(msg)
+            return
         self._tools[tool.name] = tool
     
     def get(self, name: str) -> Optional[ToolBase]:
@@ -139,6 +159,12 @@ def build_default_registry() -> ToolRegistry:
         ClickXYTool,
         ScrollTool,
     )
+    from wyzer.tools.desktop.get_recent_events import GetRecentEventsTool
+    
+    # Phase 16 - Deterministic click-and-type tools
+    from wyzer.tools.desktop.perceive_ocr_focused import PerceiveOCRFocusedWindowTool
+    from wyzer.tools.desktop.overlay import ShowChoiceOverlayTool, WaitForOverlayChoiceTool
+    from wyzer.tools.desktop.assert_text_present import AssertTextPresentTool
     
     registry = ToolRegistry()
     
@@ -215,5 +241,14 @@ def build_default_registry() -> ToolRegistry:
     registry.register(TypeTextTool())
     registry.register(ClickXYTool())
     registry.register(ScrollTool())
+    
+    # Register Phase 15 - Event log query tool
+    registry.register(GetRecentEventsTool())
+    
+    # Register Phase 16 - Deterministic click-and-type tools
+    registry.register(PerceiveOCRFocusedWindowTool())
+    registry.register(ShowChoiceOverlayTool())
+    registry.register(WaitForOverlayChoiceTool())
+    registry.register(AssertTextPresentTool())
     
     return registry

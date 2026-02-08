@@ -234,9 +234,9 @@ class TestDescribeScreenRouting:
         assert d.intents[0]["tool"] == "describe_screen"
 
     def test_whats_on_my_screen_still_window_context(self):
-        """Anchored 'what's on my screen?' should still use get_window_context."""
+        """Anchored 'what's on my screen?' should still use describe_screen."""
         d = self._route("what's on my screen?")
-        assert d.intents[0]["tool"] == "get_window_context"
+        assert d.intents[0]["tool"] == "describe_screen"
 
 
 # ── UIA noise reduction ─────────────────────────────────────────────────

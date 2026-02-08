@@ -40,8 +40,8 @@ def main() -> None:
 
     # 2. UIA perception
     print("\n[2/5] Perceiving UIA controls (max 30)...")
-    from wyzer.tools.desktop.perceive_uia import _try_pywinauto
-    uia = _try_pywinauto(max_nodes=30)
+    from wyzer.tools.desktop.perceive_uia import perceive_uia_focused_window
+    uia = perceive_uia_focused_window(max_nodes=30)
     # Print summary, not full dump
     summary = {
         "window": uia.get("window"),

@@ -151,5 +151,5 @@ class TTSRouter:
             # Clean up temp WAV file
             try:
                 os.unlink(wav_path)
-            except:
+            except OSError:
                 pass

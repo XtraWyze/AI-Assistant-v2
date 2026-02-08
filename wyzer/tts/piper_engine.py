@@ -102,7 +102,7 @@ class PiperTTSEngine:
                 # Clean up temp file
                 try:
                     os.unlink(output_path)
-                except:
+                except OSError:
                     pass
                 return ""
             
@@ -111,7 +111,7 @@ class PiperTTSEngine:
                 self.logger.error("Piper produced no output")
                 try:
                     os.unlink(output_path)
-                except:
+                except OSError:
                     pass
                 return ""
             
@@ -122,7 +122,7 @@ class PiperTTSEngine:
             self.logger.error("Piper synthesis timed out")
             try:
                 os.unlink(output_path)
-            except:
+            except OSError:
                 pass
             return ""
         
@@ -139,6 +139,6 @@ class PiperTTSEngine:
             try:
                 if 'output_path' in locals():
                     os.unlink(output_path)
-            except:
+            except OSError:
                 pass
             return ""

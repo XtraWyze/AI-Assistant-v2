@@ -150,7 +150,6 @@ class WyzerAssistant:
         )
         
         # LLM Brain (Phase 4)
-        # LLM Brain (Phase 4)
         self.brain: Optional[LLMEngine] = None
         if llm_mode == "ollama":
             self.brain = LLMEngine(

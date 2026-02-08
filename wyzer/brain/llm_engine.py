@@ -9,6 +9,7 @@ Architecture note (Phase 10 refactor):
 - Transport to Ollama/llama.cpp remains a single flattened prompt string.
 - This enables future streaming-to-TTS without changing routing.
 """
+import os
 import re
 import time
 from typing import Dict, Optional, Any, List, Callable, Union
@@ -157,7 +158,6 @@ def get_voice_fast_options(user_text: str, llm_mode: str) -> Dict[str, Any]:
     voice_fast_env = Config.VOICE_FAST_ENABLED
     if llm_mode != "llamacpp" and voice_fast_env:
         # Check if explicitly enabled via env (not just "auto")
-        import os
         if os.environ.get("WYZER_VOICE_FAST", "auto").lower() not in ("true", "1", "yes"):
             logger.debug(f"[VOICE_FAST] skipped: mode={llm_mode} (not llamacpp, env=auto)")
             return {}

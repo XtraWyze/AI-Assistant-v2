@@ -195,7 +195,7 @@ class LlamaCppClient:
             error_body = ""
             try:
                 error_body = e.read().decode('utf-8')
-            except:
+            except Exception:
                 pass
             
             self.logger.error(f"[LLAMACPP] HTTP {e.code} after {elapsed_ms}ms: {error_body}")
@@ -266,7 +266,7 @@ class LlamaCppClient:
             error_body = ""
             try:
                 error_body = e.read().decode('utf-8')
-            except:
+            except Exception:
                 pass
             
             self.logger.error(f"[LLAMACPP] HTTP {e.code} after {elapsed_ms}ms: {error_body}")

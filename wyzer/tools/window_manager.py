@@ -263,7 +263,7 @@ def _enumerate_windows() -> List[Dict[str, Any]]:
                 try:
                     _, pid = win32process.GetWindowThreadProcessId(hwnd)
                     process_name = _get_process_name_pywin32(pid)
-                except:
+                except Exception:
                     pid = 0
                     process_name = ""
 
@@ -322,7 +322,7 @@ def _get_process_name_pywin32(pid: int) -> str:
             return exe.split("\\")[-1].lower()
         finally:
             win32api.CloseHandle(handle)
-    except:
+    except Exception:
         return ""
 
 
@@ -347,7 +347,7 @@ def _get_process_name_ctypes(pid: int) -> str:
                     return buff.value.split("\\")[-1].lower()
             finally:
                 kernel32.CloseHandle(handle)
-    except:
+    except Exception:
         pass
     
     return ""

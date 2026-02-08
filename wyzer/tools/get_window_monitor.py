@@ -320,7 +320,7 @@ class GetWindowMonitorTool(ToolBase):
                     try:
                         _, pid = win32process.GetWindowThreadProcessId(hwnd)
                         process_name = self._get_process_name_pywin32(pid)
-                    except:
+                    except Exception:
                         pid = 0
                         process_name = ""
                     
@@ -375,7 +375,7 @@ class GetWindowMonitorTool(ToolBase):
                 return exe.split("\\")[-1].lower()
             finally:
                 win32api.CloseHandle(handle)
-        except:
+        except Exception:
             return ""
     
     def _get_process_name_ctypes(self, pid: int) -> str:
@@ -397,7 +397,7 @@ class GetWindowMonitorTool(ToolBase):
                         return buff.value.split("\\")[-1].lower()
                 finally:
                     kernel32.CloseHandle(handle)
-        except:
+        except Exception:
             pass
         
         return ""

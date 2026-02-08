@@ -176,7 +176,7 @@ class GetSystemInfoTool(ToolBase):
             # Try to get CPU cores
             try:
                 result["cpu_cores"] = os.cpu_count() or 0
-            except:
+            except Exception:
                 result["cpu_cores"] = 0
             
             # Get GPU info

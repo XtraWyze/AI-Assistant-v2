@@ -32,7 +32,6 @@ ABBREVIATIONS = frozenset({
 })
 
 # Markers that indicate tool/payload content - should not be spoken
-# Markers that indicate tool/payload content - should not be spoken
 # Note: Code fences (```) are handled separately via stripping, not here
 PAYLOAD_MARKERS = (
     "[TOOLS]", "[TOOL", "args={", "Pool result", "[INTENT",
@@ -151,7 +150,6 @@ class TTSStreamBuffer:
     
     def _strip_code_blocks(self) -> None:
         """Remove complete code blocks (```...```) from the buffer."""
-        import re
         # Match complete fenced code blocks and remove them
         # Keep content before and after, just remove the code blocks themselves
         pattern = r'```[\s\S]*?```'

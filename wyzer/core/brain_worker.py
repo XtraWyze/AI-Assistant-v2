@@ -30,6 +30,18 @@ from wyzer.tts.tts_router import TTSRouter
 from wyzer.tools.timer_tool import check_timer_finished
 
 
+# Pre-compiled regex patterns for _normalize_for_tool_routing (avoid recompilation per call)
+_ROUTING_WAKE_RE = re.compile(r"^(?:hey\s+wyzer|wyzer|hey)\b[\s,]*")
+_ROUTING_CAPABILITY_RES = [
+    re.compile(r"^(?:can|could|would|will)\s+(?:you|u)\b[\s,]*"),
+    re.compile(r"^are\s+you\s+able\s+to\b[\s,]*"),
+    re.compile(r"^are\s+you\s+able\b[\s,]*"),
+]
+_ROUTING_REQUEST_VERB_RE = re.compile(
+    r"^(?:please\s+)?(?:tell\s+me|show\s+me|give\s+me|get\s+me|check|get|fetch)\s+"
+)
+
+
 def _apply_config(config_dict: Dict[str, Any]) -> None:
     # Logger first - include quiet mode
     log_level = str(config_dict.get("log_level", "INFO")).upper()
@@ -156,24 +168,18 @@ def _normalize_for_tool_routing(text: str) -> str:
 
     # Remove leading wake/filler phrases (repeatable).
     # e.g., "hey wyzer, can you ..." -> "can you ..."
-    wake_re = re.compile(r"^(?:hey\s+wyzer|wyzer|hey)\b[\s,]*")
     while True:
-        new_t = wake_re.sub("", t)
+        new_t = _ROUTING_WAKE_RE.sub("", t)
         if new_t == t:
             break
         t = new_t.strip()
 
     # Remove leading capability prefixes (repeatable).
     # Supported: can/could/would/will you|u, are you able (to)
-    cap_res = [
-        re.compile(r"^(?:can|could|would|will)\s+(?:you|u)\b[\s,]*"),
-        re.compile(r"^are\s+you\s+able\s+to\b[\s,]*"),
-        re.compile(r"^are\s+you\s+able\b[\s,]*"),
-    ]
     changed = True
     while changed:
         changed = False
-        for cre in cap_res:
+        for cre in _ROUTING_CAPABILITY_RES:
             new_t = cre.sub("", t)
             if new_t != t:
                 t = new_t.strip()
@@ -185,7 +191,7 @@ def _normalize_for_tool_routing(text: str) -> str:
     #   "get the time" -> "the time" (matches hybrid_router time fragment)
     #   "tell me the time" -> "the time"
     #   "show me my windows" -> "my windows" (still tool-keyword heavy)
-    t = re.sub(r"^(?:please\s+)?(?:tell\s+me|show\s+me|give\s+me|get\s+me|check|get|fetch)\s+", "", t).strip()
+    t = _ROUTING_REQUEST_VERB_RE.sub("", t).strip()
 
     # Conservative rewrite: monitor/app inventory questions are often tool-capable
     # but phrased as questions that won't match deterministic tool plans.
@@ -307,7 +313,7 @@ class _TTSController:
             if self._prefetch_wav:
                 try:
                     os.unlink(self._prefetch_wav)
-                except:
+                except OSError:
                     pass
             self._prefetch_wav = None
             self._prefetch_meta = None
@@ -387,7 +393,7 @@ class _TTSController:
             if self._prefetch_wav:
                 try:
                     os.unlink(self._prefetch_wav)
-                except:
+                except OSError:
                     pass
                 self._prefetch_wav = None
         
@@ -425,7 +431,7 @@ class _TTSController:
                 if meta.get("_shutdown"):
                     try:
                         os.unlink(wav_path)
-                    except:
+                    except OSError:
                         pass
                     return
                 
@@ -454,7 +460,7 @@ class _TTSController:
                     # Clean up WAV file
                     try:
                         os.unlink(wav_path)
-                    except:
+                    except OSError:
                         pass
                     
                     # Determine show_followup_prompt

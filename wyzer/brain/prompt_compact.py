@@ -2,10 +2,11 @@
 Prompt compaction utility for reducing token bloat in LLM requests.
 Deterministic and safe - preserves semantic meaning while reducing size.
 """
+from typing import Tuple
 from wyzer.core.logger import get_logger
 
 
-def compact_prompt(prompt: str, max_chars: int = 8000) -> tuple[str, bool]:
+def compact_prompt(prompt: str, max_chars: int = 8000) -> Tuple[str, bool]:
     """
     Compact a prompt by keeping critical parts (system + user input) while
     omitting middle content if necessary.

@@ -108,6 +108,13 @@ MEDIUM_RISK_TOOLS = frozenset({
     # System storage operations (scanning, not deleting)
     "system_storage_scan",
     "system_storage_open",
+    
+    # Phase 14 + 16 click / type / input tools
+    "desktop_click_uia",
+    "click_xy",
+    "type_text",
+    "hotkey",
+    "scroll",
 })
 
 # LOW RISK: Read-only tools + harmless reversible actions
@@ -133,6 +140,21 @@ LOW_RISK_TOOLS = frozenset({
     "media_play_pause",
     "media_next",
     "media_previous",
+    
+    # Phase 14 + 16 perception tools (read-only)
+    "perceive_uia_focused_window",
+    "perceive_ocr_focused_window",
+    "get_active_window",
+    "describe_screen",
+    "screenshot_focused_window",
+    "ocr_region",
+    "ui_find_text",
+    "install_succeeded_check",
+    "assert_text_present",
+    "get_recent_events",
+    "wait_ms",
+    "show_choice_overlay",
+    "wait_for_overlay_choice",
 })
 
 

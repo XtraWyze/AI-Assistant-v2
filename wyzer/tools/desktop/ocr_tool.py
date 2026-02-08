@@ -155,6 +155,7 @@ class OCRRegionTool(ToolBase):
 
     def run(self, **kwargs) -> Dict[str, Any]:
         from wyzer.context.world_state import emit_event, update_last_perception
+        from wyzer.tools.desktop.truth_contract import normalize_perception
 
         image_path = kwargs.get("image_path")
         rect = kwargs.get("rect")
@@ -177,6 +178,8 @@ class OCRRegionTool(ToolBase):
                 "full_text_len": len(result.get("full_text", "")),
                 "latency_ms": latency_ms,
             })
-            update_last_perception(result)
+            # Normalize to truth-contract schema before storing
+            normalized = normalize_perception(result)
+            update_last_perception(normalized)
 
         return result
