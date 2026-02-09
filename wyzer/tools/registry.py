@@ -166,6 +166,9 @@ def build_default_registry() -> ToolRegistry:
     from wyzer.tools.desktop.overlay import ShowChoiceOverlayTool, WaitForOverlayChoiceTool
     from wyzer.tools.desktop.assert_text_present import AssertTextPresentTool
     
+    # Capabilities / help tool
+    from wyzer.tools.get_capabilities import GetCapabilitiesTool
+    
     registry = ToolRegistry()
     
     # Register default tools
@@ -250,5 +253,8 @@ def build_default_registry() -> ToolRegistry:
     registry.register(ShowChoiceOverlayTool())
     registry.register(WaitForOverlayChoiceTool())
     registry.register(AssertTextPresentTool())
+    
+    # Register capabilities / help tool
+    registry.register(GetCapabilitiesTool())
     
     return registry

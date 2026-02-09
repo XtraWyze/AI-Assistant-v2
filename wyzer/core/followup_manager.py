@@ -20,6 +20,50 @@ from wyzer.core.config import Config
 
 
 # ============================================================================
+# PENDING TOOL COMPLETION
+# ============================================================================
+# When a tool fails and requests clarification (e.g., close_window returns
+# window_not_found), a PendingToolCompletion is stored.  On the next
+# follow-up utterance the orchestrator will:
+#   1. Extract the missing slot value from user speech
+#   2. Re-run the original tool with the resolved slot
+#   3. Speak ONLY the tool-confirmed result (NO LLM)
+# ============================================================================
+
+class PendingToolCompletion:
+    """Holds state for a tool that failed and is waiting for user clarification."""
+
+    __slots__ = ("tool", "slots", "original_args", "expires_ts")
+
+    def __init__(
+        self,
+        tool: str,
+        slots: Dict[str, Any],
+        original_args: Dict[str, Any],
+        expires_s: float = 20.0,
+    ):
+        self.tool = tool
+        self.slots = dict(slots)          # e.g. {"title": None}
+        self.original_args = dict(original_args)
+        self.expires_ts = time.time() + expires_s
+
+    def is_expired(self) -> bool:
+        return time.time() > self.expires_ts
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "kind": "complete_tool",
+            "tool": self.tool,
+            "slots": self.slots,
+            "original_args": self.original_args,
+            "expires_ts": self.expires_ts,
+        }
+
+    def __repr__(self) -> str:
+        return f"PendingToolCompletion(tool={self.tool!r}, slots={self.slots!r})"
+
+
+# ============================================================================
 # EXIT PHRASE SENTINEL
 # ============================================================================
 # When an exit phrase is detected, this sentinel dict is returned instead of
@@ -104,6 +148,10 @@ class FollowupManager:
         # TTS playback is already complete when FOLLOWUP starts, so this only
         # needs to cover potential echo/reverb - 0.3s should be sufficient.
         self._grace_period_duration: float = 0.3
+        # Pending tool completion: when a tool fails and asks for clarification,
+        # this stores the tool + unresolved slots so the next follow-up bypasses
+        # the LLM and re-runs the tool directly.
+        self._pending_tool: Optional[PendingToolCompletion] = None
     
     def start_followup_window(self) -> None:
         """
@@ -367,6 +415,41 @@ class FollowupManager:
         remaining = Config.FOLLOWUP_TIMEOUT_SEC - time_since_speech
         
         return max(0.0, remaining)
+
+    # ========================================================================
+    # PENDING TOOL COMPLETION API
+    # ========================================================================
+
+    def set_pending_tool(self, pending: PendingToolCompletion) -> None:
+        """Store a pending tool completion request.
+
+        This is called when a tool fails and needs clarification (e.g.
+        close_window returns window_not_found).  On the next follow-up
+        utterance the orchestrator will intercept the input, resolve the
+        missing slot, and re-run the tool WITHOUT the LLM.
+        """
+        self._pending_tool = pending
+        self.logger.info(f"[FOLLOWUP] Pending tool set: {pending}")
+
+    def get_pending_tool(self) -> Optional[PendingToolCompletion]:
+        """Return the current pending tool completion, or None if expired/absent."""
+        if self._pending_tool is None:
+            return None
+        if self._pending_tool.is_expired():
+            self.logger.info("[FOLLOWUP] Pending tool expired, clearing")
+            self._pending_tool = None
+            return None
+        return self._pending_tool
+
+    def consume_pending_tool(self) -> Optional[PendingToolCompletion]:
+        """Return and clear the pending tool completion (one-shot)."""
+        pending = self.get_pending_tool()
+        self._pending_tool = None
+        return pending
+
+    def clear_pending_tool(self) -> None:
+        """Explicitly discard any pending tool completion."""
+        self._pending_tool = None
     
     @staticmethod
     def _normalize_text(text: str) -> str:
@@ -398,3 +481,77 @@ class FollowupManager:
         normalized = normalized.strip()
         
         return normalized
+
+    # ========================================================================
+    # PHASE 17: AGENT-GRADE FOLLOW-UP TARGETS
+    # ========================================================================
+    # These attributes are set by the agent loop (_update_agent_followup_targets)
+    # and consumed by the reference resolver for "yes it's X" / "that one" / "it"
+    # resolution.
+    _agent_last_window_candidates: List[Dict[str, Any]] = []
+    _agent_last_control_candidates: List[Dict[str, Any]] = []
+    _agent_last_tool: Optional[Dict[str, Any]] = None          # {name, args, result_summary}
+    _agent_last_confirmable_target: Optional[Dict[str, Any]] = None  # {type, value}
+
+    def set_last_tool(self, name: str, args: Dict[str, Any], result_summary: str = "") -> None:
+        """Record the last tool call for follow-up resolution."""
+        self._agent_last_tool = {
+            "name": name,
+            "args": dict(args),
+            "result_summary": result_summary,
+        }
+
+    def get_last_confirmable_target(self) -> Optional[Dict[str, Any]]:
+        """Return the last confirmable target (window or control)."""
+        return self._agent_last_confirmable_target
+
+    def get_window_candidates(self) -> List[Dict[str, Any]]:
+        """Return cached window candidates from last perception."""
+        return self._agent_last_window_candidates
+
+    def resolve_yes_its_x(self, text: str) -> Optional[Dict[str, Any]]:
+        """Check if user says 'yes, it's X' and X matches a window.
+
+        Returns:
+            Dict with {action: "close_window", title: str} if matched,
+            None otherwise.
+        """
+        s = (text or "").strip().lower()
+        # Pattern: "yes it's X", "yeah it's X", "yes X", "it's X"
+        import re as _re
+        m = _re.match(
+            r"^(?:yes|yeah|yep|yup|sure|right|ok|okay)"
+            r"(?:\s*,?\s*(?:it(?:'?s|\s+is)?\s+)?|\s+)"
+            r"(.+?)\.?$",
+            s,
+            _re.IGNORECASE,
+        )
+        if not m:
+            return None
+
+        candidate = m.group(1).strip()
+        if not candidate or len(candidate) < 2:
+            return None
+
+        # Try to match against window candidates
+        for win in self._agent_last_window_candidates:
+            title = (win.get("title") or "").lower()
+            app = (win.get("app") or "").lower().replace(".exe", "")
+            if candidate in title or candidate == app or title.startswith(candidate):
+                return {
+                    "action": "close_window",
+                    "title": win.get("title") or app,
+                }
+
+        # Try foreground match
+        if self._agent_last_confirmable_target:
+            val = self._agent_last_confirmable_target.get("value") or {}
+            tgt_title = (val.get("title") or "").lower()
+            tgt_app = (val.get("app") or "").lower().replace(".exe", "")
+            if candidate in tgt_title or candidate == tgt_app:
+                return {
+                    "action": "close_window",
+                    "title": val.get("title") or tgt_app,
+                }
+
+        return None

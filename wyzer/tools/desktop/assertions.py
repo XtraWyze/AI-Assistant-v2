@@ -191,8 +191,47 @@ def _find_text_ocr(text_norm: str, match_mode: str = "contains") -> Dict[str, An
 
 # ── install_succeeded_check ───────────────────────────────────────────────
 
-_SUCCESS_INDICATORS = ["play", "installed", "complete", "completed", "launch", "done", "open"]
+# Indicators that strongly signal a *completed install* when they appear as
+# the full control label (exact match after normalisation).
+_SUCCESS_EXACT_LABELS = frozenset({
+    "play", "launch", "open", "run", "finish", "done",
+    "close", "restart", "restart now", "reboot",
+    "install complete", "installation complete",
+    "successfully installed", "setup complete",
+    "download complete",
+})
+
+# Indicators matched with word-boundary search (may appear inside labels
+# like "Installation completed successfully").
+_SUCCESS_WORD_INDICATORS = [
+    re.compile(r"\b(?:installed|completed|succeeded|successful(?:ly)?|finished)\b"),
+    re.compile(r"\b(?:setup\s+(?:is\s+)?(?:complete|finished|done))\b"),
+    re.compile(r"\b(?:installation\s+(?:is\s+)?(?:complete|finished|done|successful))\b"),
+    re.compile(r"\b(?:ready\s+to\s+(?:use|launch|play))\b"),
+]
+
+# Controls whose names contain these substrings are NEVER install evidence
+# even if they also match a success keyword.
+_SUCCESS_NOISE_WORDS = frozenset({
+    "conversation", "options", "settings", "preferences",
+    "menu", "history", "bookmark", "tab", "search",
+    "autocomplete", "tooltip", "dropdown",
+})
+
 _FAILURE_INDICATORS = ["error", "failed", "retry", "cancel", "problem", "could not"]
+
+# Window titles that look install-related (used for context gating).
+_INSTALL_WINDOW_RE = re.compile(
+    r"(?:install|setup|wizard|update|download|uninstall|microsoft\s+store|"
+    r"software\s+center|winget|chocolatey|steam|epic\s+games|gog|"
+    r"app\s+installer)",
+    re.IGNORECASE,
+)
+
+
+def _is_noise_control(name_lower: str) -> bool:
+    """Return True if the control name is clearly unrelated to installation."""
+    return any(w in name_lower for w in _SUCCESS_NOISE_WORDS)
 
 
 def install_succeeded_check() -> Dict[str, Any]:
@@ -220,25 +259,63 @@ def install_succeeded_check() -> Dict[str, Any]:
     progress = snapshot.get("progress")
     errors_list = snapshot.get("errors", [])
 
-    # Collect evidence
-    success_matches = []
-    fail_matches = []
+    # Window-title context: if the focused window doesn't look install-related
+    # we require stronger evidence before claiming success.
+    window_info = snapshot.get("window") or {}
+    window_title = (window_info.get("title") or "").strip()
+    is_install_window = bool(_INSTALL_WINDOW_RE.search(window_title))
+
+    # Collect evidence (deduplicated)
+    success_matches: list[dict] = []
+    fail_matches: list[dict] = []
+    _seen_success: set[str] = set()
+    _seen_fail: set[str] = set()
 
     for ctrl in controls:
-        name_lower = (ctrl.get("name") or "").strip().lower()
+        raw_name = (ctrl.get("name") or "").strip()
+        name_lower = raw_name.lower()
         ctrl_type = (ctrl.get("control_type") or "").lower()
 
-        for indicator in _SUCCESS_INDICATORS:
-            if indicator in name_lower:
-                # "Play" button is strong evidence of success
-                if ctrl_type == "button" and indicator in ("play", "launch", "open"):
-                    success_matches.append({"name": ctrl.get("name"), "type": ctrl.get("control_type"), "indicator": indicator})
-                elif indicator in ("installed", "complete", "completed", "done"):
-                    success_matches.append({"name": ctrl.get("name"), "type": ctrl.get("control_type"), "indicator": indicator})
+        if not name_lower or name_lower in _seen_success:
+            continue
 
+        # Skip controls that are clearly noise
+        if _is_noise_control(name_lower):
+            continue
+
+        norm = _normalize_label(raw_name)
+
+        # --- Exact-label match (button-specific) ---
+        if ctrl_type == "button" and norm in _SUCCESS_EXACT_LABELS:
+            # Extra gate: bare "open"/"play"/"launch" buttons only count
+            # when the window itself looks install-related.
+            if norm in ("open", "play", "launch", "run") and not is_install_window:
+                continue
+            _seen_success.add(name_lower)
+            success_matches.append({
+                "name": raw_name, "type": ctrl.get("control_type"),
+                "indicator": norm, "match": "exact_label",
+            })
+            continue
+
+        # --- Word-boundary match (text/label controls) ---
+        for pat in _SUCCESS_WORD_INDICATORS:
+            if pat.search(name_lower):
+                _seen_success.add(name_lower)
+                success_matches.append({
+                    "name": raw_name, "type": ctrl.get("control_type"),
+                    "indicator": pat.pattern, "match": "word_boundary",
+                })
+                break
+
+        # --- Failure indicators (substring is fine — "error" is unambiguous) ---
         for indicator in _FAILURE_INDICATORS:
-            if indicator in name_lower:
-                fail_matches.append({"name": ctrl.get("name"), "type": ctrl.get("control_type"), "indicator": indicator})
+            if indicator in name_lower and name_lower not in _seen_fail:
+                _seen_fail.add(name_lower)
+                fail_matches.append({
+                    "name": raw_name, "type": ctrl.get("control_type"),
+                    "indicator": indicator,
+                })
 
     # Check progress
     if progress and progress.get("value") is not None:
@@ -252,8 +329,11 @@ def install_succeeded_check() -> Dict[str, Any]:
     # Check for error dialogs
     for dialog in snapshot.get("dialogs", []):
         title_lower = (dialog.get("title") or "").lower()
+        if title_lower in _seen_fail:
+            continue
         for indicator in _FAILURE_INDICATORS:
             if indicator in title_lower:
+                _seen_fail.add(title_lower)
                 fail_matches.append({"dialog": dialog.get("title"), "indicator": indicator})
 
     # Determine status
@@ -261,21 +341,27 @@ def install_succeeded_check() -> Dict[str, Any]:
         "success_evidence": success_matches,
         "fail_evidence": fail_matches,
         "controls_scanned": len(controls),
+        "window_title": window_title,
+        "is_install_window": is_install_window,
     }
 
     if fail_matches and not success_matches:
-        highlights = [m.get('name') or m.get('dialog') for m in fail_matches][:3]
+        highlights = list(dict.fromkeys(m.get('name') or m.get('dialog') for m in fail_matches))[:3]
         summary = f"It looks like the install failed. I see: {', '.join(str(h) for h in highlights)}."
-        return {"status": "fail", "evidence": f"Error indicators found: {[m.get('name') or m.get('dialog') for m in fail_matches]}", "details": details, "summary": summary}
+        return {"status": "fail", "evidence": f"Error indicators found: {highlights}", "details": details, "summary": summary}
     if success_matches and not fail_matches:
-        highlights = [m.get('name') or str(m) for m in success_matches][:3]
+        highlights = list(dict.fromkeys(m.get('name') or str(m) for m in success_matches))[:3]
         summary = f"The install succeeded. I see: {', '.join(str(h) for h in highlights)}."
-        return {"status": "success", "evidence": f"Success indicators found: {[m.get('name') or str(m) for m in success_matches]}", "details": details, "summary": summary}
+        return {"status": "success", "evidence": f"Success indicators found: {highlights}", "details": details, "summary": summary}
     if success_matches and fail_matches:
         summary = "I'm not sure \u2014 I see both success and error indicators."
         return {"status": "unknown", "evidence": "Mixed signals: both success and error indicators found", "details": details, "summary": summary}
 
-    summary = "I'm not sure \u2014 I couldn't find clear success or failure indicators."
+    summary = (
+        "I can't verify download or install status right now. "
+        "I didn't find any clear success or failure indicators on screen. "
+        "If something is downloading, try telling me which app so I can check that window."
+    )
     return {"status": "unknown", "evidence": f"No clear indicators in {len(controls)} controls", "details": details, "summary": summary}
 
 

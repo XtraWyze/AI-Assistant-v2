@@ -50,6 +50,9 @@ _TOOL_RELEVANT_PATTERNS = [
     r"\b(?:recently?\s+(?:opened|closed|launched|started))",
     r"\b(?:what\s+(?:just\s+)?happened|what\s+changed)",
     r"\b(?:what\s+(?:is|was)\s+(?:the\s+)?last\s+(?:thing|action|command|app|window))",
+    r"\b(?:what(?:'s|s|\s+(?:is|are|were))\s+(?:the\s+)?(?:last|recent)\s+(?:\w+\s+)?(?:action|event|thing|step|command|tool)s?\s+(?:you|i)\b)",
+    r"\b(?:(?:list|show|tell\s+me)\s+(?:the\s+)?(?:last|recent)\s+(?:\w+\s+)?(?:action|event|thing|tool)s?)",
+    r"\b(?:what\s+(?:action|thing|event|tool)s?\s+(?:have\s+you|did\s+you|you)\s+(?:performed|done|taken|made|completed|executed|used|ran|called))",
 
     # Click / Type / Hotkey / Scroll / Input actions
     r"\b(?:did\s+(?:you|it)\s+click|did\s+(?:you|it)\s+type|did\s+(?:you|it)\s+press)",

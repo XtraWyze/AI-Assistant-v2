@@ -208,8 +208,9 @@ class TestReplyOnlyScreenBlocking:
             "is it still downloading?",
             "what does this dialog say?",
             "what's the download progress?",
-            "did the update finish?",
-            "is the download done?",
+            # Note: "did the update finish?" and "is the download done?" are
+            # now routed via _INSTALL_CHECK_RE to install_succeeded_check
+            # (deterministic evidence), not through _is_ui_state_query.
             "read the error message",
             "what's happening on screen?",
             "can you check the screen?",

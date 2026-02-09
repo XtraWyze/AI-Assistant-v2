@@ -143,6 +143,8 @@ class HybridDecision:
     intents: Optional[List[Dict[str, Any]]] = None
     reply: str = ""
     confidence: float = 0.0
+    # Phase 17: True when the orchestrator MUST run perception before acting.
+    _needs_perception: bool = False
 
 
 MULTI_INTENT_MARKERS = [
@@ -599,14 +601,17 @@ _WINDOW_CONTEXT_RE = re.compile(
     r"^(?:"
     # NOTE: "what am I looking at" is intentionally routed to describe_screen
     # via _WHATS_ON_SCREEN_DEEP_RE / SCREEN_STATE_PHRASES instead.
-    r"what(?:'?s|\s+is)\s+(?:the\s+)?(?:active|current|foreground)\s+(?:window|app|application|program)|"  # "what's the active window"
-    r"what\s+(?:window|app|application|program)\s+is\s+(?:this|active|open|focused)|"  # "what window is this"
-    r"which\s+(?:window|app|application|program)\s+(?:is\s+)?(?:active|focused|open)|"  # "which app is active"
-    r"what\s+(?:app|application|program)\s+(?:am\s+i\s+(?:in|using|on)|is\s+(?:this|active))|"  # "what app am I in"
-    r"what(?:'?s|\s+is)\s+(?:this\s+)?(?:window|app|application)|"  # "what's this window"
-    r"tell\s+me\s+(?:about\s+)?(?:the\s+)?(?:active|current|foreground)\s+(?:window|app)|"  # "tell me the active window"
-    r"(?:current|active|focused)\s+(?:window|app|application)(?:\s+info)?"  # "active window", "current app"
-    r")\??$",
+    r"what(?:'?s|\s+is)\s+(?:the\s+)?(?:currently\s+)?(?:active|current|foreground|focused)\s+(?:windows?|app|application|program)|"  # "what's the active window", "what is the currently focused window"
+    r"what\s+(?:windows?|app|application|program)\s+(?:is\s+)?(?:currently\s+)?(?:this|active|open|focus(?:ed)?)|"  # "what window is this", "what window is currently focused", "what windows currently focus"
+    r"which\s+(?:windows?|app|application|program)\s+(?:is\s+)?(?:currently\s+)?(?:active|focus(?:ed)?|open)|"  # "which app is active", "which window is currently focused"
+    r"what\s+(?:app|application|program)\s+(?:am\s+i\s+(?:currently\s+)?(?:in|using|on)|is\s+(?:this|active))|"  # "what app am I in" / "what app am I currently using"
+    r"what(?:'?s|\s+is)\s+(?:this\s+)?(?:windows?|app|application)|"  # "what's this window"
+    r"tell\s+me\s+(?:about\s+)?(?:the\s+)?(?:active|current|foreground)\s+(?:windows?|app)|"  # "tell me the active window"
+    r"(?:current|active|focused)\s+(?:windows?|app|application)(?:\s+info)?|"  # "active window", "current app"
+    # Broader natural variants: "what am I in", "where am I"
+    r"what\s+am\s+i\s+(?:currently\s+)?(?:in|on|using)|"  # "what am I in", "what am I currently using"
+    r"where\s+am\s+i(?:\s+right\s+now)?"  # "where am I", "where am I right now"
+    r")\??\.*$",
     re.IGNORECASE,
 )
 
@@ -624,6 +629,50 @@ _LIST_OPEN_WINDOWS_RE = re.compile(
     r"what(?:'?s|\s+is)\s+open|"
     r"what\s+do\s+i\s+have\s+open|"
     r"what\s+windows\s+do\s+i\s+have\s+open)\??$",
+    re.IGNORECASE,
+)
+
+# "is notepad open" / "is notepad still open" / "there's notepad open" -> list_open_windows (filtered)
+_IS_APP_OPEN_RE = re.compile(
+    r"^(?:"
+    # "there's notepad open" / "is there a notepad open" / "there is notepad open"
+    r"(?:is\s+there|there(?:'?s|\s+is))\s+(?:a\s+|an\s+)?(?P<app2>.+?)\s+(?:(?:still\s+)?(?:open|running|active|up)|window)|"
+    # "is notepad open" / "is notepad still open" / "is notepad running"
+    r"is\s+(?P<app1>.+?)\s+(?:still\s+)?(?:open|running|active|up)"
+    r")\s*[?.!]*$",
+    re.IGNORECASE,
+)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Verification / status queries about the LAST action.
+# "did the last thing I opened open successfully", "did that work",
+# "did it open", "did it succeed", "what just happened"
+# These MUST route to get_recent_events, NOT be misinterpreted as open_target.
+# ═══════════════════════════════════════════════════════════════════════════
+_VERIFICATION_QUERY_RE = re.compile(
+    r"^(?:"
+    # "did the last thing ... open/work/succeed"
+    r"did\s+(?:the\s+last\s+thing\s+(?:you|i|we)\s+)?(?:open(?:ed)?|launch(?:ed)?|start(?:ed)?|close(?:d)?|do)\s+"
+    r"(?:actually\s+)?(?:open|work|succeed|close|launch|start|run|happen|finish)(?:\s+successfully)?|"
+    # "did that/it work" / "did that/it open" / "did that/it succeed" / "did that/it fail"
+    r"did\s+(?:that|it|this)\s+(?:actually\s+)?(?:work|open|succeed|fail|close|launch|start|run|happen|finish|go\s+through)(?:\s+successfully)?|"
+    # "was that successful" / "was it successful"
+    r"was\s+(?:that|it|this)\s+(?:successful|a\s+success)|"
+    # "what just happened" / "what happened"
+    r"what\s+(?:just\s+)?happened|"
+    # "did the last thing you open actually open successfully" (full phrase)
+    r"did\s+the\s+last\s+thing\s+.{0,40}(?:open|work|succeed|fail|close|launch|start)(?:\s+successfully)?"
+    r")\??$",
+    re.IGNORECASE,
+)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# QUESTION GUARD: Prevent interrogative sentences from matching open_target.
+# If the utterance begins with a question word (did/was/is/has/etc.),
+# it is a question, NOT an imperative action command.
+# ═══════════════════════════════════════════════════════════════════════════
+_QUESTION_PREFIX_RE = re.compile(
+    r"^(?:did|was|is|has|have|does|do|were|are|could|would|should|what|how|why|when|where|which)\s",
     re.IGNORECASE,
 )
 
@@ -655,12 +704,18 @@ _BUTTON_CHECK_RE = re.compile(
 
 # "did install succeed" / "did it install" / "is install done"
 _INSTALL_CHECK_RE = re.compile(
-    r"^(?:did\s+(?:the\s+)?install\s+(?:succeed|work|finish|complete)|"
-    r"did\s+it\s+install(?:\s+successfully)?|"
-    r"is\s+(?:the\s+)?install\s+(?:done|complete|finished)|"
-    r"did\s+(?:the\s+)?(?:download|installation|setup)\s+(?:succeed|work|finish|complete)|"
-    r"is\s+it\s+installed|"
-    r"was\s+(?:the\s+)?install\s+successful)\??$",
+    r"^(?:"
+    # "did the install/download/update succeed/finish/complete/work/fail"
+    r"did\s+(?:the\s+)?(?:install(?:ation)?|download|setup|update)\s+(?:succeed|work|finish|complete|fail)|"
+    r"did\s+it\s+(?:install|download|update)(?:\s+successfully)?|"
+    # "is the install/download/update done/finished/complete/ready"
+    r"is\s+(?:the\s+)?(?:install(?:ation)?|download|setup|update)\s+(?:done|complete|finished|ready)|"
+    # "is it installed/downloaded/done/finished"
+    r"is\s+it\s+(?:installed|downloaded|done|finished|complete)|"
+    # "has the download/install completed/finished"
+    r"has\s+(?:the\s+)?(?:install(?:ation)?|download|setup|update)\s+(?:completed|finished|succeeded|failed)|"
+    r"was\s+(?:the\s+)?(?:install(?:ation)?|download|setup|update)\s+successful"
+    r")\??$",
     re.IGNORECASE,
 )
 
@@ -674,12 +729,10 @@ _UI_STATE_QUERY_RE = re.compile(
     r"what\s+does\s+(?:the\s+|this\s+|that\s+)?(?:dialog|popup|prompt|notification|alert|window|box|message)\s+say|"
     r"what\s+(?:is|does)\s+(?:the\s+|this\s+|that\s+)?(?:error|warning|message|notification|alert)\s+(?:say|mean|show)|"
     r"read\s+(?:the\s+|this\s+|that\s+)?(?:dialog|popup|prompt|error|warning|message|notification|alert)(?:\s+message)?|"
-    # Progress / status
+    # Progress / status  (completion queries handled by _INSTALL_CHECK_RE)
     r"(?:is\s+it|are\s+we)\s+(?:still\s+)?(?:downloading|installing|updating|loading|processing|uploading|extracting|copying)|"
     r"how\s+far\s+(?:along\s+)?(?:is\s+(?:the\s+|it\s+)?)?(?:download|install|update|loading|progress)|"
-    r"(?:what(?:'?s|\s+is)\s+the\s+)?(?:download|install|update|loading)\s+(?:progress|status|percentage)|"
-    r"did\s+(?:the\s+)?(?:download|update|installation)\s+(?:finish|complete|succeed|work|fail)|"
-    r"(?:is\s+the\s+)?(?:download|update)\s+(?:done|finished|complete|ready)|"
+    r"(?:what(?:'?s|\s+is)\s+the\s+)?(?:download|install|update|loading)\s+(?:progress|status|percentage)|"    
     # What's happening / showing
     r"what(?:'?s|\s+is)\s+(?:happening|showing|displayed?)\s+(?:on\s+(?:the\s+)?screen|now|right\s+now|here)|"
     r"what\s+(?:is\s+)?(?:this|that)\s+(?:on\s+(?:the\s+)?screen|saying|showing)|"
@@ -728,6 +781,18 @@ SCREEN_STATE_PHRASES: tuple[str, ...] = (
     "whats showing on my screen",
     "whats currently on my screen",
     "whats currently on screen",
+    # Catch queries about controls/buttons/elements on screen (e.g.
+    # "how many interactive controls on screen", "give me the top 10
+    # interactive controls on screen", "list the buttons on my screen")
+    "controls on screen",
+    "controls on my screen",
+    "controls on the screen",
+    "elements on screen",
+    "elements on my screen",
+    "elements on the screen",
+    "buttons on screen",
+    "buttons on my screen",
+    "buttons on the screen",
 )
 
 _SCREEN_DESCRIBE_PHRASES = list(SCREEN_STATE_PHRASES)
@@ -884,6 +949,268 @@ _OPEN_RE = re.compile(r"^(open|launch|start)\s+(.+)$", re.IGNORECASE)
 # Anchored close/quit/exit.
 _CLOSE_RE = re.compile(r"^(close|quit|exit)\s+(.+)$", re.IGNORECASE)
 
+# ═══════════════════════════════════════════════════════════════════════════
+# CAPABILITIES / HELP PATTERNS
+# ═══════════════════════════════════════════════════════════════════════════
+_CAPABILITIES_RE = re.compile(
+    r"(?:"
+    r"what\s+can\s+you\s+do|"
+    r"what\s+are\s+(?:your|you)\s+(?:capabilities|abilities|features|skills|commands)|"
+    r"list\s+(?:your\s+)?(?:tools|commands|capabilities|abilities|features)|"
+    r"what\s+(?:tools|commands)\s+(?:do\s+you\s+have|are\s+(?:there|available))|"
+    r"help\s*$|"
+    r"what\s+do\s+you\s+do|"
+    r"show\s+(?:me\s+)?(?:your\s+)?(?:commands|tools|capabilities|abilities)|"
+    r"what\s+(?:are\s+you|you)\s+capable\s+of"
+    r")",
+    re.IGNORECASE,
+)
+
+
+# ── Extract numeric limit from event-log queries ─────────────────────────
+_WORD_TO_NUM = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "fifteen": 15, "twenty": 20,
+}
+_EVENT_LIMIT_RE = re.compile(
+    r"\b(?:last|recent|past)\s+(\d+|"
+    + "|".join(_WORD_TO_NUM) +
+    r")\s+(?:\w+\s+)?(?:action|event|command|thing|step|item|tool)s?\b",
+    re.IGNORECASE,
+)
+
+def _extract_event_limit(text: str) -> Optional[int]:
+    """Extract a numeric limit from queries like 'last five actions'."""
+    m = _EVENT_LIMIT_RE.search(text or "")
+    if not m:
+        return None
+    raw = m.group(1).lower()
+    if raw.isdigit():
+        return min(max(int(raw), 1), 50)
+    return _WORD_TO_NUM.get(raw)
+
+
+def _is_capabilities_query(text: str) -> bool:
+    """Check if text is asking about Wyzer's capabilities/features."""
+    tl = (text or "").strip()
+    if not tl:
+        return False
+    n = _normalize_text_for_routing(tl)
+    return bool(_CAPABILITIES_RE.search(n))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MULTI-INTENT EXTRACTION (deterministic segment splitting)
+# ═══════════════════════════════════════════════════════════════════════════
+# Connectors that separate segments inside a compound utterance.
+_MI_CONNECTORS_RE = re.compile(
+    r"\s*(?:"
+    r",?\s*(?:and\s+then|then|and|also|plus|but\s+then|but)\s+"
+    r"|\.\s+"
+    r"|;\s*"
+    r"|,\s*"
+    r"|[?!]\s+"       # sentence boundary: "What can you do? Tell me the time"
+    r")",
+    re.IGNORECASE,
+)
+
+# Broader time-request pattern used inside _segment_matches_tool to catch
+# phrasings like "what is the time" that the anchored regexes miss.
+_SEGMENT_TIME_RE = re.compile(
+    r"(?:"
+    r"what\s+is\s+the\s+time|"
+    r"what\s+time(?:\s+is\s+it)?|"
+    r"(?:what\s*s|whats|what'?s)\s+the\s+time|"
+    r"(?:can\s+you\s+)?tell\s+me\s+(?:the\s+)?time|"
+    r"(?:get|check|give\s+me)\s+(?:the\s+)?time|"
+    r"current\s+time|"
+    r"time\s+is\s+it"
+    r")",
+    re.IGNORECASE,
+)
+
+
+# Leading filler words stripped from segments before anchored regex matching.
+# Handles Whisper noise ("You open notepad", "Can you open notepad", etc.)
+_SEGMENT_FILLER_RE = re.compile(
+    r"^(?:"
+    r"(?:you\s+)"
+    r"|(?:can|could|would)\s+you\s+(?:please\s+)?"
+    r"|please\s+"
+    r"|hey\s+wyzer\s+"
+    r"|wyzer\s+"
+    r"|okay\s+"
+    r"|ok\s+"
+    r"|go\s+ahead\s+and\s+"
+    r"|go\s+"
+    r")+",
+    re.IGNORECASE,
+)
+
+
+def _strip_segment_fillers(text: str) -> str:
+    """Strip common leading filler words from a segment."""
+    return _SEGMENT_FILLER_RE.sub("", text).strip()
+
+
+def _segment_matches_tool(segment: str) -> Optional[Dict[str, Any]]:
+    """Try to match a single segment to a deterministic tool intent.
+
+    Returns an intent dict ``{"tool": ..., "args": ...}`` or None.
+    """
+    seg = (segment or "").strip()
+    if not seg:
+        return None
+
+    seg_norm = _normalize_text_for_routing(seg)
+
+    # Capabilities / help
+    if _is_capabilities_query(seg):
+        return {"tool": "get_capabilities", "args": {}, "continue_on_error": False}
+
+    # Time
+    if (
+        _TIME_RE.match(seg_norm) or _looks_like_time_fragment(seg_norm)
+        or _TIME_KEYWORDS_ANYWHERE_RE.search(seg_norm)
+        or _TIME_REQUEST_ANYWHERE_RE.search(seg_norm)
+        or _SEGMENT_TIME_RE.search(seg_norm)
+    ):
+        return {"tool": "get_time", "args": {}, "continue_on_error": False}
+
+    # Date
+    if _DATE_RE.match(seg_norm) or _looks_like_date_fragment(seg_norm):
+        return {"tool": "get_time", "args": {}, "continue_on_error": False}
+
+    # Verification / status queries about last action (must be before open/close)
+    if _VERIFICATION_QUERY_RE.match(seg.strip()):
+        return {"tool": "get_recent_events", "args": {"limit": 5}, "continue_on_error": False}
+
+    # Foreground / window context queries
+    if _WINDOW_CONTEXT_RE.match(seg.strip()):
+        return {"tool": "get_window_context", "args": {}, "continue_on_error": False}
+
+    # Open / launch — try raw first, then filler-stripped
+    # GUARD: skip if the segment is a question (starts with did/was/is/has/etc.)
+    seg_clean = _strip_segment_fillers(seg)
+    for candidate in (seg.strip(), seg_clean):
+        if _QUESTION_PREFIX_RE.match(candidate):
+            break  # question, not an imperative command
+        m = _OPEN_RE.match(candidate)
+        if m:
+            target = (m.group(2) or "").strip().strip("\"'")
+            if target and target.lower() not in {"it", "this", "that", "something", "anything"}:
+                return {"tool": "open_target", "args": {"query": target}, "continue_on_error": False}
+
+    # Close — try raw first, then filler-stripped
+    for candidate in (seg.strip(), seg_clean):
+        m = _CLOSE_RE.match(candidate)
+        if m:
+            target = (m.group(2) or "").strip().strip("\"'")
+            if target:
+                return {"tool": "close_window", "args": {"title": target}, "continue_on_error": False}
+
+    # Single-clause fallback (media, volume, etc.)
+    decision = _decide_single_clause(seg)
+    if decision.mode == "tool_plan" and decision.intents and decision.confidence >= 0.8:
+        return decision.intents[0]
+
+    return None
+
+
+# ── Tool-trigger patterns for boundary scanning ──────────────────────────
+# Used by the fallback path inside extract_multi_intents when connector
+# splitting fails (e.g. Whisper mistranscribes "and" as "in").  Each entry
+# is (compiled_regex, tool_name, args_factory).
+_TOOL_TRIGGER_PATTERNS: List[Tuple[re.Pattern, str, Any]] = [
+    (_CAPABILITIES_RE, "get_capabilities", lambda _m: {}),
+    (_SEGMENT_TIME_RE, "get_time", lambda _m: {}),
+]
+
+
+def _scan_tool_spans(text: str) -> List[Tuple[int, int, Dict[str, Any]]]:
+    """Find all non-overlapping tool-trigger spans in *text*.
+
+    Returns a list of ``(start, end, intent_dict)`` sorted by start.
+    """
+    norm = _normalize_text_for_routing(text)
+    hits: List[Tuple[int, int, Dict[str, Any]]] = []
+    for pat, tool, args_fn in _TOOL_TRIGGER_PATTERNS:
+        for m in pat.finditer(norm):
+            hits.append((m.start(), m.end(), {
+                "tool": tool, "args": args_fn(m), "continue_on_error": False,
+            }))
+    # Sort by position and remove overlapping hits (keep longest).
+    hits.sort(key=lambda h: (h[0], -(h[1] - h[0])))
+    filtered: List[Tuple[int, int, Dict[str, Any]]] = []
+    last_end = -1
+    for start, end, intent in hits:
+        if start >= last_end:
+            filtered.append((start, end, intent))
+            last_end = end
+    return filtered
+
+
+def extract_multi_intents(text: str) -> Optional[Tuple[List[Dict[str, Any]], str]]:
+    """Split *text* into deterministic tool intents + freeform leftover.
+
+    Returns ``(tool_intents, leftover_text)`` when at least one tool intent
+    is found.  ``leftover_text`` is the remaining freeform text that must be
+    handled by the LLM.  Returns ``None`` when no tool segments are detected.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return None
+
+    # Split on connectors, keeping track of positions so we can reconstruct
+    # the original segments for leftover text.
+    segments = _MI_CONNECTORS_RE.split(raw)
+    segments = [s.strip() for s in segments if s and s.strip()]
+
+    if len(segments) >= 2:
+        tool_intents: List[Dict[str, Any]] = []
+        leftover_parts: List[str] = []
+
+        for seg in segments:
+            intent = _segment_matches_tool(seg)
+            if intent is not None:
+                tool_intents.append(intent)
+            else:
+                leftover_parts.append(seg)
+
+        if tool_intents:
+            leftover = " ".join(leftover_parts).strip()
+            return (tool_intents, leftover)
+
+    # ── Fallback: boundary scanning ──────────────────────────────────────
+    # When connector splitting fails (e.g. Whisper mistranscribes "and" as
+    # "in"), scan for multiple known tool-trigger patterns in the raw text.
+    # If 2+ non-overlapping tool triggers are found, extract them directly.
+    spans = _scan_tool_spans(raw)
+    if len(spans) >= 2:
+        tool_intents_fb: List[Dict[str, Any]] = []
+        seen_tools: set = set()
+        for _start, _end, intent in spans:
+            key = intent["tool"]
+            if key not in seen_tools:
+                tool_intents_fb.append(intent)
+                seen_tools.add(key)
+        if len(tool_intents_fb) >= 2:
+            # Collect text outside any tool span as leftover.
+            norm = _normalize_text_for_routing(raw)
+            leftover_chars = list(norm)
+            for start, end, _ in spans:
+                for i in range(start, min(end, len(leftover_chars))):
+                    leftover_chars[i] = " "
+            leftover_fb = re.sub(r"\s+", " ", "".join(leftover_chars)).strip()
+            # Remove stray small connector words left behind.
+            leftover_fb = re.sub(
+                r"^\s*(?:in|and|but|then|also|plus)\s*$", "", leftover_fb, flags=re.IGNORECASE
+            ).strip()
+            return (tool_intents_fb, leftover_fb)
+
+    return None
+
 # Anchored minimize/shrink.
 _MINIMIZE_RE = re.compile(r"^(minimize|shrink)\s+(.+)$", re.IGNORECASE)
 
@@ -902,7 +1229,7 @@ _MAXIMIZE_RE = re.compile(r"^(maximize|fullscreen|expand|full\s+screen)\s+(.+)$"
 #   "press search box and type test query"
 _CLICK_AND_TYPE_RE = re.compile(
     r"^(?:click|press|hit|tap)\s+(?:on\s+)?(?:the\s+)?"
-    r"(?P<target>.+?)\s+and\s+type\s+(?P<text>.+)$",
+    r"(?P<target>.+?)\s+and\s+type[,;:\s]\s*(?P<text>.+)$",
     re.IGNORECASE,
 )
 
@@ -1118,7 +1445,12 @@ def _match_click_intent(text: str) -> Optional[HybridDecision]:
 # ═══════════════════════════════════════════════════════════════════════════
 # "switch to X" / "go to X" / "switch back to X"
 _SWITCH_TO_APP_RE = re.compile(
-    r"^(?:switch(?:\s+back)?|go)\s+to\s+(.+)$",
+    r"^(?:"
+    r"(?:switch(?:\s+back)?|go)\s+to"          # "switch to X", "go to X"
+    r"|focus(?:\s+on)?"                         # "focus X", "focus on X"
+    r"|bring\s+up"                              # "bring up X"
+    r"|pull\s+up"                               # "pull up X"
+    r")\s+(.+)$",
     re.IGNORECASE,
 )
 
@@ -1342,6 +1674,15 @@ def _decide_single_clause(text: str) -> HybridDecision:
     clause = (text or "").strip()
     if not clause:
         return HybridDecision(mode="llm", intents=None, reply="", confidence=0.0)
+
+    # Capabilities / help queries.
+    if _is_capabilities_query(clause):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "get_capabilities", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.95,
+        )
 
     # Safety: URLs/domains go to LLM.
     if _looks_like_url_or_domain(clause):
@@ -1567,6 +1908,18 @@ def _decide_single_clause(text: str) -> HybridDecision:
             reply="",
             confidence=0.95,
         )
+
+    # "is notepad open" / "is notepad still open" / "there's notepad open"
+    _app_open_m = _IS_APP_OPEN_RE.match(clause)
+    if _app_open_m:
+        _app_name = (_app_open_m.group("app2") or _app_open_m.group("app1") or "").strip()
+        if _app_name and _app_name.lower() not in {"it", "this", "that", "anything", "something"}:
+            return HybridDecision(
+                mode="tool_plan",
+                intents=[{"tool": "list_open_windows", "args": {"_app_filter": _app_name}, "continue_on_error": False}],
+                reply="",
+                confidence=0.93,
+            )
 
     if _WINDOW_CONTEXT_RE.match(clause):
         return HybridDecision(
@@ -1853,8 +2206,10 @@ def _decide_single_clause(text: str) -> HybridDecision:
         )
 
     # Open/launch/start X (non-URL) -> open_target.
+    # GUARD: Only match imperative commands, NOT questions containing "open".
+    # E.g. "did it open" is a question, not "open <target>".
     m = _OPEN_RE.match(clause_stripped)
-    if m:
+    if m and not _QUESTION_PREFIX_RE.match(clause_stripped):
         target = (m.group(2) or "").strip().strip('"').strip("'")
         # If the target is missing or too ambiguous, defer to LLM.
         if not target or target.lower() in {"it", "this", "that", "something", "anything"}:
@@ -2235,6 +2590,82 @@ def decide(text: str) -> HybridDecision:
     # Normalize for lightweight keyword detection.
     normalized = _normalize_text_for_routing(raw)
 
+    # =====================================================================
+    # HIGH-PRIORITY: Verification / status queries about the LAST action.
+    # MUST run before multi-intent extraction to prevent "open" keyword trap.
+    # "did the last thing you open actually open successfully" -> get_recent_events
+    # "did that work" -> get_recent_events
+    # "what just happened" -> get_recent_events
+    # =====================================================================
+    if _VERIFICATION_QUERY_RE.match(raw):
+        logger.info("[ROUTER] matched=verification_query tool=get_recent_events reason=status/verification question")
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "get_recent_events", "args": {"limit": 5}, "continue_on_error": False}],
+            reply="",
+            confidence=0.95,
+        )
+
+    # =====================================================================
+    # HIGH-PRIORITY: Foreground / app context queries.
+    # "what app am I currently using" -> get_window_context
+    # "where am I" -> get_window_context
+    # MUST run before multi-intent to avoid splitting on keyword "open".
+    # =====================================================================
+    if _WINDOW_CONTEXT_RE.match(raw):
+        logger.info("[ROUTER] matched=window_context_query tool=get_window_context reason=foreground/app query")
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "get_window_context", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.95,
+        )
+
+    # =====================================================================
+    # Phase 16 (pre-split): "click <target> and type <text>"
+    # Must run BEFORE multi-intent extraction, which would split on "and".
+    # =====================================================================
+    cat_decision_early = _match_click_and_type(raw)
+    if cat_decision_early is not None:
+        return cat_decision_early
+
+    # =====================================================================
+    # MULTI-INTENT EXTRACTION (Phase 17): Before any single-intent early
+    # exits, check if the utterance contains MULTIPLE tool segments.
+    # E.g. "What can you do? Can you tell me the time?"
+    #   -> [get_capabilities, get_time]
+    # E.g. "Open notepad and then tell me something cool, but then what is the time?"
+    #   -> [open_target(notepad), get_time] + leftover="tell me something cool"
+    # Only activates when the text genuinely looks like multi-intent.
+    # =====================================================================
+    if looks_multi_intent(raw) or _MI_CONNECTORS_RE.search(raw) or len(_scan_tool_spans(raw)) >= 2:
+        mi_result = extract_multi_intents(raw)
+        if mi_result is not None:
+            mi_intents, mi_leftover = mi_result
+            if len(mi_intents) >= 2 or (len(mi_intents) >= 1 and mi_leftover):
+                logger.info(
+                    f"[ROUTER] multi_intent extracted {len(mi_intents)} tools, "
+                    f"leftover={mi_leftover[:50] if mi_leftover else '(none)'!r}"
+                )
+                return HybridDecision(
+                    mode="tool_plan",
+                    intents=mi_intents,
+                    reply=(f"__LEFTOVER__:{mi_leftover}" if mi_leftover else ""),
+                    confidence=0.93,
+                )
+
+    # =====================================================================
+    # CAPABILITIES / HELP: single-intent early exit.
+    # Must run before needs_reasoning() which would swallow "help".
+    # =====================================================================
+    if _is_capabilities_query(raw):
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": "get_capabilities", "args": {}, "continue_on_error": False}],
+            reply="",
+            confidence=0.95,
+        )
+
     # Time queries: handle fragments and multi-sentence utterances.
     # Must run before needs_reasoning() so short fragments like "Time." don't
     # get treated as conversational streaming reply-only.
@@ -2338,6 +2769,26 @@ def decide(text: str) -> HybridDecision:
             confidence=0.93,
         )
 
+    # Phase 15a: Deterministic UI-state tool queries (recent events, open windows)
+    # These patterns are defined in ui_state_patterns and route to specific tools.
+    # get_recent_events is a pure event-log lookup — no screen perception needed.
+    from wyzer.core.ui_state_patterns import is_ui_state_tool_query as _ui_tool_q
+    _ui_tool = _ui_tool_q(raw)
+    if _ui_tool is not None:
+        logger.info(f"[ROUTER] matched=ui_state_tool_query tool={_ui_tool} reason=deterministic UI query")
+        _tool_args: dict = {}
+        if _ui_tool == "get_recent_events":
+            # Extract numeric limit from the query (e.g. "last five actions" → 5)
+            _limit = _extract_event_limit(raw)
+            if _limit is not None:
+                _tool_args["limit"] = _limit
+        return HybridDecision(
+            mode="tool_plan",
+            intents=[{"tool": _ui_tool, "args": _tool_args, "continue_on_error": False}],
+            reply="",
+            confidence=0.95,
+        )
+
     # Phase 15: Broad UI-state queries -> describe_screen (perceive first)
     if _is_ui_state_query(raw):
         logger.info("[ROUTER] matched=ui_state_query tool=describe_screen reason=broad UI question")
@@ -2346,23 +2797,33 @@ def decide(text: str) -> HybridDecision:
             intents=[{"tool": "describe_screen", "args": {}, "continue_on_error": False}],
             reply="",
             confidence=0.93,
+            _needs_perception=True,
         )
+
+    # Phase 17: Agent-grade perception-first gate.
+    # If the query needs perception, tag the decision so the orchestrator
+    # knows to run the agent micro-loop.
+    from wyzer.core.ui_state_patterns import needs_perception_first as _needs_pf
+    _pf_flag = _needs_pf(raw)
 
     # Phase 16: "click <target> and type <text>" — deterministic fast-path
     # Must run BEFORE the generic click intent to avoid consuming the target.
     cat_decision = _match_click_and_type(raw)
     if cat_decision is not None:
+        cat_decision._needs_perception = cat_decision._needs_perception or _pf_flag
         return cat_decision
 
     # Phase 16b: "type <text>" / "write <text>" — direct typing into focused field
     # Must run BEFORE generic click intent so "type hello" doesn't fall through.
     type_decision = _match_type_direct(raw)
     if type_decision is not None:
+        type_decision._needs_perception = type_decision._needs_perception or _pf_flag
         return type_decision
 
     # Phase 14c: Click / press commands -> desktop_click_uia
     click_decision = _match_click_intent(raw)
     if click_decision is not None:
+        click_decision._needs_perception = click_decision._needs_perception or _pf_flag
         return click_decision
 
     # =====================================================================
@@ -2373,10 +2834,12 @@ def decide(text: str) -> HybridDecision:
     # =====================================================================
     screen_decision = _match_screen_describe_intent(normalized)
     if screen_decision is not None:
+        screen_decision._needs_perception = True  # always for screen describe
         return screen_decision
 
     element_decision = _match_verify_element_intent(normalized)
     if element_decision is not None:
+        element_decision._needs_perception = True  # always for element verify
         return element_decision
 
     # Try multi-intent parsing: handle mixed tool+LLM utterances like
@@ -2388,7 +2851,7 @@ def decide(text: str) -> HybridDecision:
             result = parse_multi_intent_with_fallback(raw)
             if result is not None:
                 intents, confidence = result
-                return HybridDecision(mode="tool_plan", intents=intents, reply="", confidence=confidence)
+                return HybridDecision(mode="tool_plan", intents=intents, reply="", confidence=confidence, _needs_perception=_pf_flag)
 
             # Try partial parsing: tool intents + leftover text for LLM
             partial_result = parse_multi_intent_partial(raw)
@@ -2400,9 +2863,10 @@ def decide(text: str) -> HybridDecision:
                         intents=intents,
                         reply=f"__LEFTOVER__:{leftover_text}",
                         confidence=confidence,
+                        _needs_perception=_pf_flag,
                     )
                 elif intents:
-                    return HybridDecision(mode="tool_plan", intents=intents, reply="", confidence=confidence)
+                    return HybridDecision(mode="tool_plan", intents=intents, reply="", confidence=confidence, _needs_perception=_pf_flag)
         except Exception:
             # If multi-intent parser fails, fall back to the normal logic below.
             pass
@@ -2411,9 +2875,10 @@ def decide(text: str) -> HybridDecision:
     # deterministically extract any tool intents.
     if needs_reasoning(raw):
         logger.debug("[ROUTER] no_match -> LLM (needs_reasoning=True)")
-        return HybridDecision(mode="llm", intents=None, reply="", confidence=0.85)
+        return HybridDecision(mode="llm", intents=None, reply="", confidence=0.85, _needs_perception=_pf_flag)
 
     result = _decide_single_clause(raw)
+    result._needs_perception = result._needs_perception or _pf_flag
     if result.mode == "tool_plan":
         tool_name = result.intents[0]["tool"] if result.intents else "?"
         logger.debug(f"[ROUTER] matched=single_clause tool={tool_name} reason=_decide_single_clause")

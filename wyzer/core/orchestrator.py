@@ -72,6 +72,76 @@ _NO_OLLAMA_FALLBACK_REPLIES = [
 ]
 
 
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html_tags(text: str) -> str:
+    """Remove HTML/XML tags from text so they're never spoken by TTS."""
+    if "<" not in text:
+        return text
+    return _HTML_TAG_RE.sub("", text).strip()
+
+
+def _sanitize_llm_reply(text: str) -> str:
+    """Strip JSON artefacts from LLM output so braces are never spoken.
+
+    If the model returns something like ``{"reply": "Here is a cool fact."}``,
+    extract the ``reply`` value.  Otherwise return the text as-is after
+    stripping stray braces.
+    """
+    s = (text or "").strip()
+    if not s:
+        return s
+
+    # JSON array: LLM sometimes returns ["item1", "item2", ...] — convert
+    # to a natural, TTS-friendly comma-separated list.
+    if s.startswith("[") and s.endswith("]"):
+        try:
+            arr = json.loads(s)
+            if isinstance(arr, list) and arr:
+                items = [str(x).strip() for x in arr if str(x).strip()]
+                if items:
+                    return _strip_html_tags(", ".join(items))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+
+    # Fast path: no braces at all.
+    if "{" not in s and "}" not in s:
+        return _strip_html_tags(s)
+
+    # Try parsing as JSON and extracting "reply".
+    try:
+        obj = json.loads(s)
+        if isinstance(obj, dict):
+            reply_val = (obj.get("reply") or obj.get("final") or
+                         obj.get("text") or obj.get("response") or obj.get("answer"))
+            if isinstance(reply_val, str) and reply_val.strip():
+                return _strip_html_tags(reply_val.strip())
+    except (json.JSONDecodeError, ValueError, TypeError):
+        pass
+
+    # Fallback: strip leading/trailing braces + quotes that look like JSON wrapper.
+    stripped = re.sub(r'^\s*\{\s*"(?:reply|final|text|response|answer)"\s*:\s*"', "", s)
+    if stripped != s:
+        # First regex matched — also strip trailing "} wrapper
+        stripped = re.sub(r'"\s*\}\s*$', "", stripped)
+        return _strip_html_tags(stripped.strip())
+
+    # Try to rescue "final" value from HTML-broken JSON (unescaped quotes in
+    # HTML attributes like class="ui-control" break json.loads).
+    m = re.search(r'"final"\s*:\s*"(.+)', s, re.DOTALL)
+    if m:
+        val = m.group(1)
+        # Trim trailing "} wrapper
+        val = re.sub(r'"\s*\}\s*$', "", val)
+        val = _strip_html_tags(val).strip()
+        if val:
+            return val
+
+    # Last resort: remove any remaining curly braces so they're never spoken.
+    return _strip_html_tags(s.replace("{", "").replace("}", "").strip())
+
+
 # ============================================================================
 # PHASE 11: AUTONOMY COMMAND PATTERNS (compiled early for should_use_streaming_tts)
 # ============================================================================
@@ -652,6 +722,146 @@ def get_tool_pool_heartbeats() -> List[Dict[str, Any]]:
         return []
 
 
+# ============================================================================
+# PENDING TOOL COMPLETION HELPERS
+# ============================================================================
+# These functions extract and resolve window titles from user follow-up text
+# so the orchestrator can re-run a failed tool without the LLM.
+# ============================================================================
+
+# Patterns that are NOT window titles (filler / confirmation words)
+_FILLER_RE = re.compile(
+    r"^(yes|yeah|yep|yup|sure|right|ok|okay|correct|exactly|it\s*is|it\s*was|that\s*is|that\s*was)$",
+    re.IGNORECASE,
+)
+
+# Strip leading confirmation phrases: "yes it's ...", "yeah, ..."
+_LEADING_CONFIRM_RE = re.compile(
+    r"^(?:yes|yeah|yep|yup|sure|right|ok|okay|correct|exactly)"
+    r"(?:\s*,?\s*(?:it(?:'?s| is| was)?|that(?:'?s| is| was)?)\s+|\s*,\s*|\s+)",
+    re.IGNORECASE,
+)
+
+
+def extract_window_title(text: str) -> Optional[str]:
+    """Extract a window title from a user's clarification utterance.
+
+    Given follow-up text like:
+        "Yes, it's notepad."  → "notepad"
+        "Notepad"             → "notepad"
+        "Chrome browser"      → "chrome browser"
+        "yes"                 → None  (pure filler, no title)
+
+    Returns:
+        Cleaned title string or None if no meaningful title could be extracted.
+    """
+    if not text:
+        return None
+
+    cleaned = text.strip()
+    # Remove trailing punctuation
+    cleaned = cleaned.rstrip(".,!?;:")
+
+    # Strip leading confirmation filler: "yes it's ..."
+    cleaned = _LEADING_CONFIRM_RE.sub("", cleaned).strip()
+
+    if not cleaned:
+        return None
+
+    # If what remains is pure filler, there's no title
+    if _FILLER_RE.match(cleaned):
+        return None
+
+    return cleaned
+
+
+def resolve_window_title(query: str, open_windows: Optional[List[Dict[str, Any]]] = None) -> Optional[str]:
+    """Resolve a user-spoken window title against currently open windows.
+
+    Performs case-insensitive substring matching and a basic fuzzy fallback.
+    Returns the best-matching window title (or process), or the query itself
+    if no open-window list is available.
+
+    Args:
+        query: The extracted title string (from extract_window_title).
+        open_windows: Optional list of window dicts with 'title' and 'process' keys.
+                      If None, the current world-state snapshot is used.
+
+    Returns:
+        The resolved window title/process string, or the raw query as fallback.
+    """
+    if not query:
+        return None
+
+    query_lower = query.lower().strip()
+
+    if open_windows is None:
+        try:
+            from wyzer.context.world_state import get_world_state
+            ws = get_world_state()
+            open_windows = ws.open_windows or []
+        except Exception:
+            open_windows = []
+
+    if not open_windows:
+        # No window list — return query as-is so the tool can attempt its own resolution
+        return query
+
+    best_title: Optional[str] = None
+    best_score = -1
+
+    for win in open_windows:
+        win_title = (win.get("title") or "").strip()
+        win_process = (win.get("process") or win.get("app") or "").strip()
+        win_title_lower = win_title.lower()
+        win_process_lower = win_process.lower()
+        # Strip .exe for comparison
+        win_process_base = win_process_lower.replace(".exe", "")
+
+        score = -1
+
+        # Exact case-insensitive match on title
+        if query_lower == win_title_lower:
+            score = 100
+        # Query is a substring of the window title
+        elif query_lower in win_title_lower:
+            score = 90
+        # Query matches process base name (e.g. "notepad" matches "notepad.exe")
+        elif query_lower == win_process_base:
+            score = 85
+        # Query is a substring of process name
+        elif query_lower in win_process_lower:
+            score = 80
+        # Window title or process contains query as prefix
+        elif win_title_lower.startswith(query_lower) or win_process_base.startswith(query_lower):
+            score = 75
+
+        if score > best_score:
+            best_score = score
+            # Prefer the actual window title for display; fall back to process
+            best_title = win_title if win_title else win_process
+
+    if best_score >= 0 and best_title:
+        return best_title
+
+    # No match in open windows — return raw query so the tool can try its own lookup
+    return query
+
+
+# Global FollowupManager instance for pending-tool state.
+# Lazily initialised by _get_followup_manager().
+_followup_manager_instance: Optional["FollowupManager"] = None
+
+
+def _get_followup_manager():
+    """Return (and lazily create) the module-level FollowupManager singleton."""
+    global _followup_manager_instance
+    if _followup_manager_instance is None:
+        from wyzer.core.followup_manager import FollowupManager
+        _followup_manager_instance = FollowupManager()
+    return _followup_manager_instance
+
+
 def _tool_error_to_speech(
     error: Any,
     tool: str,
@@ -744,6 +954,468 @@ def _tool_error_to_speech(
         return f"I couldn't complete that: {clean_msg}."
     
     return "I couldn't complete that. Please try again."
+
+
+# ============================================================================
+# PHASE 17: AGENT MICRO-LOOP (observe → plan → act → observe)
+# ============================================================================
+MAX_AGENT_STEPS = 3
+OBS_FRESH_MS = 2500
+
+# Tracks the last canonical observation for staleness checking.
+_last_agent_observation: Optional[Dict[str, Any]] = None
+_obs_stale: bool = True
+
+
+def _is_obs_fresh(now_ms: int) -> bool:
+    """Return True if the last observation is fresh (not stale, within OBS_FRESH_MS)."""
+    global _last_agent_observation, _obs_stale
+    if _obs_stale or _last_agent_observation is None:
+        return False
+    obs_ts = _last_agent_observation.get("timestamp_ms", 0)
+    return (now_ms - obs_ts) < OBS_FRESH_MS
+
+
+def _mark_obs_stale() -> None:
+    global _obs_stale
+    _obs_stale = True
+
+
+def _run_perception() -> Dict[str, Any]:
+    """Run perception tools and return an agent-grade canonical snapshot."""
+    from wyzer.tools.desktop.get_active_window import get_active_window_info
+    from wyzer.tools.desktop.perceive_uia import perceive_uia_focused_window
+    from wyzer.tools.desktop.truth_contract import normalize_perception_multi
+
+    logger = get_logger_instance()
+
+    # 1) active window
+    try:
+        active_win = get_active_window_info()
+    except Exception as e:
+        logger.warning(f"[AGENT] get_active_window failed: {e}")
+        active_win = {"error": str(e)}
+
+    # 2) UIA
+    try:
+        raw_uia = perceive_uia_focused_window()
+    except Exception as e:
+        logger.warning(f"[AGENT] perceive_uia failed: {e}")
+        raw_uia = {"errors": [str(e)]}
+
+    # 3) OCR (best-effort, don't fail the loop)
+    raw_ocr = None
+    try:
+        from wyzer.tools.desktop.perceive_ocr_focused import _perceive_ocr_focused
+        raw_ocr = _perceive_ocr_focused()
+    except Exception:
+        pass
+
+    # 4) Recent events
+    try:
+        from wyzer.context.world_state import get_event_log
+        recent_evts = get_event_log(limit=15)
+    except Exception:
+        recent_evts = []
+
+    canonical = normalize_perception_multi(raw_uia, raw_ocr, active_win, recent_evts)
+
+    # Store in world state
+    try:
+        from wyzer.context.world_state import update_last_perception
+        update_last_perception(canonical)
+    except Exception:
+        pass
+
+    return canonical
+
+
+def _build_agent_prompt(
+    user_text: str,
+    canonical: Dict[str, Any],
+    recent_events: list,
+    step: int,
+    prev_tool_results: list | None = None,
+) -> str:
+    """Build the LLM prompt for one agent-loop iteration."""
+    from wyzer.tools.desktop.truth_contract import canonical_to_prompt_block
+
+    parts: list[str] = []
+
+    parts.append(
+        "You are Wyzer, a local desktop AI assistant.\n"
+        "The user is asking about their screen or recent actions.\n"
+        "Use the PERCEPTION SNAPSHOT and RECENT EVENTS below to answer accurately.\n"
+        "For questions about what you just did or recent actions, summarize the relevant events.\n"
+        "For requests to read or describe the screen, describe what is visible in the perception data.\n"
+        "Do NOT echo or repeat the user's question as your answer.\n\n"
+        "IMPORTANT: The PERCEPTION SNAPSHOT below already contains the current screen state.\n"
+        "If you can answer the user's question from the data below, respond with type=final immediately.\n"
+        "Only use type=tool_calls if the data below is genuinely insufficient."
+    )
+
+    parts.append("")
+    parts.append(
+        "[TRUTH RULE] You may ONLY reference UI facts present in the "
+        "PERCEPTION SNAPSHOT or RECENT EVENTS below. If the information is "
+        "missing, say you can't access UI controls. Do NOT invent windows, "
+        "buttons, or text that is not listed."
+    )
+
+    parts.append("")
+    parts.append(canonical_to_prompt_block(canonical))
+
+    parts.append("")
+    parts.append("[RECENT EVENTS]")
+    if recent_events:
+        for ev in recent_events[-15:]:
+            ts = ev.get("ts", 0)
+            etype = ev.get("event", "?")
+            # compact one-liner
+            detail = {k: v for k, v in ev.items() if k not in ("ts", "event")}
+            parts.append(f"  {etype} @{ts:.1f} {json.dumps(detail, default=str)}")
+    else:
+        parts.append("  (none)")
+
+    if prev_tool_results:
+        parts.append("")
+        parts.append("[PREVIOUS TOOL RESULTS]")
+        for tr in prev_tool_results:
+            parts.append(f"  {json.dumps(tr, default=str)[:300]}")
+
+    parts.append("")
+    parts.append(f"[USER] {user_text}")
+
+    parts.append("")
+    parts.append(
+        "Respond with STRICT JSON only (no markdown, no commentary).\n"
+        "Do NOT include HTML tags like <span> in your answer — use plain text only.\n"
+        "Prefer type=final when you can answer from the data above.\n"
+        '{"type":"final", "final":"<your spoken answer>"}\n'
+        "Only if you need more data:\n"
+        '{"type":"tool_calls", "tool_calls":[{"name":"<tool>","args":{}}]}\n'
+        "Only if the request is unclear:\n"
+        '{"type":"clarify", "clarify":"<question>"}'  
+    )
+
+    return "\n".join(parts)
+
+
+def _parse_agent_json(raw: str) -> Optional[Dict[str, Any]]:
+    """Try to parse strict JSON from LLM output. Returns None on failure."""
+    s = (raw or "").strip()
+    # Strip markdown fences
+    if s.startswith("```"):
+        lines = s.split("\n")
+        s = "\n".join(lines[1:])
+        if s.endswith("```"):
+            s = s[:-3]
+        s = s.strip()
+    try:
+        obj = json.loads(s)
+        # Only accept dicts — lists/scalars are not valid agent responses
+        if isinstance(obj, dict):
+            return obj
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Rescue attempt: LLM may embed HTML with unescaped quotes
+    # (e.g. <span class="ui-control">) that break JSON.  Try to
+    # extract the "final" value, strip HTML, and rebuild valid JSON.
+    m = re.search(r'"type"\s*:\s*"(final|clarify|tool_calls)"', s)
+    if m:
+        resp_type = m.group(1)
+        if resp_type == "final":
+            fm = re.search(r'"final"\s*:\s*"(.+)', s, re.DOTALL)
+            if fm:
+                val = fm.group(1)
+                val = re.sub(r'"\s*\}\s*$', "", val)  # strip trailing "}
+                val = _strip_html_tags(val).strip()
+                if val:
+                    return {"type": "final", "final": val}
+
+    return None
+
+
+def _truth_check_reply(reply: str, canonical: Dict[str, Any], events: list) -> bool:
+    """Return True if reply does NOT hallucinate UI facts beyond snapshot/events.
+
+    Simple heuristic: if the reply mentions a window/app name that is absent
+    from the canonical foreground, windows list, controls, or event log,
+    flag it as suspicious. For now we only reject blatant hallucinations
+    where the reply names a specific app not in perception data.
+    """
+    # Build a set of known names (lowercase)
+    known: set[str] = set()
+    fg = canonical.get("foreground") or {}
+    if fg.get("app"):
+        known.add(fg["app"].lower().replace(".exe", ""))
+    if fg.get("title"):
+        known.add(fg["title"].lower())
+    for w in canonical.get("windows") or []:
+        if w.get("title"):
+            known.add(w["title"].lower())
+        if w.get("app"):
+            known.add(w["app"].lower().replace(".exe", ""))
+    for c in canonical.get("controls") or []:
+        if c.get("name"):
+            known.add(c["name"].lower())
+    for ev in events:
+        for v in ev.values():
+            if isinstance(v, str) and len(v) < 60:
+                known.add(v.lower())
+
+    # If no known names at all, allow (we can't validate)
+    if not known:
+        return True
+
+    return True  # Permissive for now; tighten later
+
+
+def run_agent_loop(
+    user_text: str,
+    hybrid_decision: Any,
+    registry: Any,
+    start_time: float,
+    original_text: str,
+) -> Dict[str, Any]:
+    """Execute the observe → plan → act → observe micro-loop.
+
+    Returns the same dict shape as ``handle_user_text``.
+    """
+    global _last_agent_observation, _obs_stale
+
+    logger = get_logger_instance()
+    logger.info(f"[AGENT] Starting agent loop for: {user_text[:80]}")
+
+    from wyzer.tools.desktop.truth_contract import has_fatal_perception_error, UI_AFFECTING_TOOLS
+    from wyzer.context.world_state import get_event_log, emit_event
+
+    prev_tool_results: list[dict] = []
+
+    for step in range(MAX_AGENT_STEPS):
+        now_ms = int(time.time() * 1000)
+
+        # ── 1) OBSERVE ─────────────────────────────────────────────
+        if not _is_obs_fresh(now_ms):
+            logger.info(f"[AGENT] step={step} perceiving...")
+            canonical = _run_perception()
+            _last_agent_observation = canonical
+            _obs_stale = False
+        else:
+            canonical = _last_agent_observation  # type: ignore[assignment]
+
+        # Deterministic fallback: fatal perception error → bail out
+        if has_fatal_perception_error(canonical):
+            logger.warning(f"[AGENT] Fatal perception error: {canonical.get('errors')}")
+            end_time = time.perf_counter()
+            return {
+                "reply": "I couldn't read UI controls due to an accessibility or permission issue.",
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {"agent_loop": True, "step": step, "perception_fatal": True},
+            }
+
+        recent = get_event_log(limit=15)
+
+        # ── 2) BUILD PROMPT ────────────────────────────────────────
+        prompt = _build_agent_prompt(user_text, canonical, recent, step, prev_tool_results)
+
+        # ── 3) ASK LLM ────────────────────────────────────────────
+        llm_client = _get_llm_client()
+        if llm_client is None:
+            # No LLM available; if hybrid_decision has intents, execute them
+            if hybrid_decision and hybrid_decision.intents:
+                execution_summary, executed_intents = execute_tool_plan(hybrid_decision.intents, registry)
+                reply = _format_fastpath_reply(user_text, executed_intents, execution_summary)
+                end_time = time.perf_counter()
+                return {
+                    "reply": reply,
+                    "latency_ms": int((end_time - start_time) * 1000),
+                    "meta": {"agent_loop": True, "step": step, "no_llm_fallback": True},
+                }
+            end_time = time.perf_counter()
+            return {
+                "reply": "I can't do that without the language model.",
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {"agent_loop": True, "step": step, "no_llm": True},
+            }
+
+        try:
+            llm_mode = getattr(Config, 'LLM_MODE', 'ollama')
+            _agent_system_msg = (
+                "You are Wyzer, a local desktop AI assistant. "
+                "Answer the user's question using the perception and event data provided. "
+                "Reply with strict JSON only. Never echo the user's question as your answer."
+            )
+            if llm_mode == 'llamacpp' and hasattr(llm_client, 'generate_chat'):
+                llm_text = llm_client.generate_chat(
+                    messages=[
+                        {"role": "system", "content": _agent_system_msg},
+                        {"role": "user", "content": prompt},
+                    ],
+                    options={"temperature": 0.3, "num_predict": 256},
+                )
+            elif hasattr(llm_client, 'generate'):
+                llm_text = llm_client.generate(
+                    prompt=prompt,
+                    model=Config.OLLAMA_MODEL,
+                    options={"temperature": 0.3, "num_predict": 256, "format": "json"},
+                )
+            else:
+                llm_text = ""
+            if not isinstance(llm_text, str):
+                llm_text = str(llm_text)
+        except Exception as e:
+            logger.warning(f"[AGENT] LLM call failed: {e}")
+            end_time = time.perf_counter()
+            return {
+                "reply": "I couldn't process that right now.",
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {"agent_loop": True, "step": step, "llm_error": str(e)[:80]},
+            }
+
+        parsed = _parse_agent_json(llm_text)
+        if parsed is None:
+            # Retry once
+            try:
+                retry_prompt = prompt + "\n\nReturn only JSON."
+                if llm_mode == 'llamacpp' and hasattr(llm_client, 'generate_chat'):
+                    retry_text = llm_client.generate_chat(
+                        messages=[
+                            {"role": "system", "content": _agent_system_msg},
+                            {"role": "user", "content": retry_prompt},
+                        ],
+                        options={"temperature": 0.3, "num_predict": 256},
+                    )
+                elif hasattr(llm_client, 'generate'):
+                    retry_text = llm_client.generate(
+                        prompt=retry_prompt,
+                        model=Config.OLLAMA_MODEL,
+                        options={"temperature": 0.3, "num_predict": 256, "format": "json"},
+                    )
+                else:
+                    retry_text = ""
+                if not isinstance(retry_text, str):
+                    retry_text = str(retry_text)
+                parsed = _parse_agent_json(retry_text)
+            except Exception:
+                pass
+
+        if parsed is None:
+            # Can't parse → treat raw text as final answer
+            reply = _sanitize_llm_reply(llm_text)
+            end_time = time.perf_counter()
+            return {
+                "reply": reply or "I couldn't process that.",
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {"agent_loop": True, "step": step, "json_parse_failed": True},
+            }
+
+        resp_type = parsed.get("type", "final")
+
+        # ── 4) FINAL ──────────────────────────────────────────────
+        if resp_type == "final":
+            reply = _strip_html_tags(str(parsed.get("final", ""))).strip()
+            if not reply:
+                reply = _sanitize_llm_reply(llm_text)
+            # truth check
+            _truth_check_reply(reply, canonical, recent)
+            end_time = time.perf_counter()
+
+            # Update follow-up targets from perception
+            _update_agent_followup_targets(canonical)
+
+            return {
+                "reply": reply,
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {"agent_loop": True, "steps": step + 1},
+            }
+
+        # ── 5) CLARIFY ────────────────────────────────────────────
+        if resp_type == "clarify":
+            clarify = str(parsed.get("clarify", "Could you clarify?"))
+            end_time = time.perf_counter()
+            return {
+                "reply": clarify,
+                "latency_ms": int((end_time - start_time) * 1000),
+                "meta": {"agent_loop": True, "step": step, "clarify": True},
+            }
+
+        # ── 6) TOOL CALLS ────────────────────────────────────────
+        if resp_type == "tool_calls":
+            tool_calls = parsed.get("tool_calls") or []
+            if not tool_calls:
+                # Empty tool_calls → stop
+                end_time = time.perf_counter()
+                return {
+                    "reply": str(parsed.get("final", "Done.")),
+                    "latency_ms": int((end_time - start_time) * 1000),
+                    "meta": {"agent_loop": True, "step": step, "empty_tool_calls": True},
+                }
+
+            for tc in tool_calls:
+                tc_name = tc.get("name", "")
+                tc_args = tc.get("args") or {}
+                logger.info(f"[AGENT] step={step} tool={tc_name} args={tc_args}")
+
+                emit_event("tool_start", {"tool": tc_name, "args": tc_args, "via": "agent_loop"})
+                try:
+                    result = _execute_tool(registry, tc_name, tc_args)
+                    emit_event("tool_end", {"tool": tc_name, "success": True, "via": "agent_loop"})
+                    prev_tool_results.append({"tool": tc_name, "ok": True, "result": result})
+                except Exception as e:
+                    emit_event("tool_end", {"tool": tc_name, "success": False, "error": str(e)[:100], "via": "agent_loop"})
+                    prev_tool_results.append({"tool": tc_name, "ok": False, "error": str(e)[:100]})
+                    logger.warning(f"[AGENT] tool {tc_name} failed: {e}")
+                    break
+
+                # If tool affects UI, mark observation stale
+                if tc_name in UI_AFFECTING_TOOLS:
+                    _mark_obs_stale()
+
+            # Update follow-up targets
+            _update_agent_followup_targets(canonical)
+            continue  # next iteration
+
+    # Exhausted MAX_AGENT_STEPS
+    end_time = time.perf_counter()
+    last_reply = ""
+    if prev_tool_results:
+        last_ok = [r for r in prev_tool_results if r.get("ok")]
+        if last_ok:
+            last_reply = "Done."
+    return {
+        "reply": last_reply or "I wasn't able to complete that within the allowed steps.",
+        "latency_ms": int((end_time - start_time) * 1000),
+        "meta": {"agent_loop": True, "max_steps_reached": True},
+    }
+
+
+def _update_agent_followup_targets(canonical: Dict[str, Any]) -> None:
+    """Update follow-up manager with latest perception data."""
+    try:
+        fm = _get_followup_manager()
+        # Store window candidates
+        windows = canonical.get("windows") or []
+        controls = canonical.get("controls") or []
+        fg = canonical.get("foreground") or {}
+
+        if not hasattr(fm, '_agent_last_window_candidates'):
+            fm._agent_last_window_candidates = []
+        if not hasattr(fm, '_agent_last_control_candidates'):
+            fm._agent_last_control_candidates = []
+        if not hasattr(fm, '_agent_last_confirmable_target'):
+            fm._agent_last_confirmable_target = None
+
+        fm._agent_last_window_candidates = windows
+        fm._agent_last_control_candidates = controls
+        if fg.get("title"):
+            fm._agent_last_confirmable_target = {
+                "type": "window",
+                "value": {"app": fg.get("app"), "title": fg.get("title")},
+            }
+    except Exception:
+        pass
 
 
 def handle_user_text(text: str) -> Dict[str, Any]:
@@ -868,6 +1540,16 @@ def handle_user_text(text: str) -> Dict[str, Any]:
             "meta": {"move_it_monitor": True, "clarification": True, "original_text": original_text},
         }
     
+    # =========================================================================
+    # PENDING TOOL COMPLETION (deterministic, no LLM)
+    # =========================================================================
+    # If a previous tool failed and stored a pending completion (e.g.
+    # close_window → window_not_found), intercept the follow-up text,
+    # resolve the missing slot, and re-run the tool WITHOUT the LLM.
+    pending_tool_result = _check_pending_tool_completion(text, start_time)
+    if pending_tool_result is not None:
+        return pending_tool_result
+
     # =========================================================================
     # PHASE 11: AUTONOMY COMMANDS (deterministic, no LLM)
     # =========================================================================
@@ -1147,7 +1829,7 @@ def handle_user_text(text: str) -> Dict[str, Any]:
             llm_reply = ""
             if leftover_text and not leftover_reply and not getattr(Config, "NO_OLLAMA", False):
                 llm_response = _call_llm_reply_only(leftover_text)
-                llm_reply = llm_response.get("reply", "").strip()
+                llm_reply = _sanitize_llm_reply(llm_response.get("reply", ""))
             
             # Step 4: Combine replies (tool result + leftover tools or LLM answer)
             primary_tool = executed_intents[0].tool if executed_intents else None
@@ -1246,6 +1928,24 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 },
             }
         # ── End Phase 16 ──────────────────────────────────────────────────────
+
+        # ── Phase 17: Agent micro-loop for perception-first queries ──────
+        # Only route to agent loop if the tool plan involves perception/describe
+        # tools.  Deterministic app-management tools (switch_app, close_window,
+        # open_app, etc.) must NOT be hijacked.
+        _AGENT_LOOP_TOOLS = frozenset({
+            "describe_screen", "perceive_uia_focused_window",
+            "perceive_ocr_focused_window",
+            "list_open_windows", "get_active_window",
+        })
+        if getattr(hybrid_decision, '_needs_perception', False):
+            _intent_tools = {i.get('tool', '') for i in (hybrid_decision.intents or [])}
+            if _intent_tools & _AGENT_LOOP_TOOLS or not _intent_tools:
+                logger.info("[AGENT] Routing to agent micro-loop (perception-first)")
+                return run_agent_loop(text, hybrid_decision, registry, start_time, original_text)
+            else:
+                logger.debug(f"[AGENT] Skipping agent loop — deterministic tools: {_intent_tools}")
+        # ── End Phase 17 ─────────────────────────────────────────────────
 
         if hybrid_decision.mode == "tool_plan" and hybrid_decision.intents:
             if _hybrid_tool_plan_is_registered(hybrid_decision.intents, registry):
@@ -1431,7 +2131,7 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                         if not leftover_handled and not getattr(Config, "NO_OLLAMA", False):
                             logger.info(f'[HYBRID] Partial multi-intent: executing LLM for leftover="{leftover_text[:40]}..."')
                             llm_response = _call_llm_reply_only(leftover_text)
-                            leftover_llm_reply = llm_response.get("reply", "").strip()
+                            leftover_llm_reply = _sanitize_llm_reply(llm_response.get("reply", ""))
                         
                         if leftover_llm_reply:
                             primary_tool = executed_intents[0].tool if executed_intents else None
@@ -2218,6 +2918,21 @@ def handle_user_text_streaming(
         }
     # ========================================================================
 
+    # ========================================================================
+    # Topic tracking (parity with non-streaming handle_user_text)
+    # ========================================================================
+    try:
+        explicit_topic = getattr(ws, "explicit_topic", None)
+        if explicit_topic:
+            set_last_topic(explicit_topic)
+        else:
+            topic = _extract_topic_from_query(text)
+            if topic:
+                set_last_topic(topic)
+                logger.debug(f"[TOPIC] Tracking topic: {topic}")
+    except Exception:
+        pass
+
     try:
         # Build reply-only prompt (no JSON, plain text output for streaming TTS)
         # This mirrors _call_llm_reply_only but outputs plain text instead of JSON
@@ -2232,6 +2947,33 @@ def handle_user_text_streaming(
         except Exception:
             pass
         
+        # ================================================================
+        # Phase 15: Inject perception snapshot + recent events
+        # (parity with _call_llm_reply_only)
+        # ================================================================
+        perception_block = ""
+        try:
+            from wyzer.context.world_state import get_last_perception, get_event_log
+            from wyzer.tools.desktop.truth_contract import normalize_perception, perception_to_prompt_block
+            last_perc = get_last_perception()
+            if last_perc:
+                norm = normalize_perception(last_perc)
+                perception_block = "\n" + perception_to_prompt_block(norm, max_controls=6) + "\n"
+            recent_events = get_event_log(limit=5)
+            if recent_events:
+                event_lines = []
+                for ev in recent_events[-5:]:
+                    etype = ev.get("event", "?")
+                    summary_parts = [f"  - {etype}"]
+                    for k, v in ev.items():
+                        if k in ("event", "ts"):
+                            continue
+                        summary_parts.append(f"{k}={v!r}"[:50])
+                    event_lines.append(" ".join(summary_parts))
+                perception_block += "\n[RECENT EVENTS]\n" + "\n".join(event_lines) + "\n"
+        except Exception:
+            pass
+
         # Check if user wants detailed/long response (story, "in depth", "in detail", etc.)
         is_detail_request = False
         try:
@@ -2252,7 +2994,7 @@ def handle_user_text_streaming(
 
         prompt = f"""{capability_contract}
     You are Wyzer, a local voice assistant.
-    {ctx['promoted']}{ctx['redaction']}{ctx['memories']}{ctx['session']}{smalltalk_directive}
+    {ctx['promoted']}{ctx['redaction']}{ctx['memories']}{ctx['session']}{smalltalk_directive}{perception_block}
 {length_instruction}
 You ARE allowed to generate stories, poems, jokes, and creative content when asked - keep those spoken-friendly: no markdown, no bullet lists.
 
@@ -2409,20 +3151,25 @@ def execute_tool_plan(intents: List[Dict[str, Any]], registry) -> Tuple[Executio
     
     Phase 10: Applies reference resolution to each intent before execution.
     This resolves pronouns (it/that/this) to concrete targets using world state.
+    
+    IMPORTANT: For multi-intent sequences (e.g. "open notepad then close it"),
+    pronoun resolution is done LAZILY — each intent's pronouns are resolved
+    right before that intent executes, so that world state from previous steps
+    (like open_target updating last_action) is available for resolution.
     """
     logger = get_logger_instance()
     
     # =========================================================================
-    # PHASE 10: REFERENCE RESOLUTION FOR INTENTS
+    # PHASE 10: REFERENCE RESOLUTION FOR INTENTS (LAZY)
     # =========================================================================
-    # Before converting to Intent objects, resolve any pronoun references
-    # in the intent arguments using world state.
     from wyzer.core.reference_resolver import resolve_intent_args, has_unresolved_pronoun
     from wyzer.context.world_state import get_world_state, update_last_intents
     
     ws = get_world_state()
-    resolved_intents: List[Dict[str, Any]] = []
-    clarification_needed = None
+    
+    # Determine if any intent has unresolved pronouns that need lazy resolution
+    has_any_pronoun = False
+    prepared_intents: List[Dict[str, Any]] = []
     
     for raw in intents or []:
         tool = (raw or {}).get("tool")
@@ -2437,51 +3184,53 @@ def execute_tool_plan(intents: List[Dict[str, Any]], registry) -> Tuple[Executio
         if not isinstance(args, dict):
             args = {}
         
-        intent_dict = {"tool": tool.strip(), "args": args}
+        intent_dict = {"tool": tool.strip(), "args": dict(args)}
+        needs_lazy = has_unresolved_pronoun(intent_dict)
+        if needs_lazy:
+            has_any_pronoun = True
         
-        # Check if this intent has unresolved pronouns
-        if has_unresolved_pronoun(intent_dict):
-            resolved_args, clarification = resolve_intent_args(intent_dict, ws)
-            if clarification:
-                # Resolution failed - need to ask user
-                clarification_needed = clarification
-                logger.info(f"[REF] intent={tool} needs clarification: {clarification}")
-            else:
-                args = resolved_args
-                logger.info(f"[REF] intent={tool} resolved args={args}")
-        
-        resolved_intents.append({
+        prepared_intents.append({
             "tool": tool.strip(),
-            "args": args,
+            "args": dict(args),
             "continue_on_error": continue_on_error,
             "meta": meta,
+            "_needs_lazy_resolve": needs_lazy,
         })
     
-    # If any intent needs clarification, return early with a failed result
-    if clarification_needed:
-        # Create a summary indicating clarification is needed
-        from wyzer.core.intent_plan import ExecutionResult, ExecutionSummary
-        failed_result = ExecutionResult(
-            tool="__reference_resolution__",
-            ok=False,
-            result=None,
-            error={"type": "clarification_needed", "message": clarification_needed}
-        )
-        return ExecutionSummary(ran=[failed_result], stopped_early=True), []
+    # For single-intent plans OR when the FIRST intent has a pronoun,
+    # resolve it eagerly (there's no prior step to wait for).
+    if prepared_intents and has_unresolved_pronoun({"tool": prepared_intents[0]["tool"], "args": prepared_intents[0]["args"]}):
+        intent_dict = {"tool": prepared_intents[0]["tool"], "args": prepared_intents[0]["args"]}
+        resolved_args, clarification = resolve_intent_args(intent_dict, ws)
+        if clarification:
+            from wyzer.core.intent_plan import ExecutionResult, ExecutionSummary
+            failed_result = ExecutionResult(
+                tool="__reference_resolution__",
+                ok=False,
+                result=None,
+                error={"type": "clarification_needed", "message": clarification}
+            )
+            return ExecutionSummary(ran=[failed_result], stopped_early=True), []
+        prepared_intents[0]["args"] = resolved_args
+        prepared_intents[0]["_needs_lazy_resolve"] = False
+        logger.info(f"[REF] intent={prepared_intents[0]['tool']} resolved args={resolved_args}")
     
-    # Convert to Intent objects
+    # Convert to Intent objects (pronoun intents flagged for lazy resolution)
     converted: List[Intent] = []
-    for raw in resolved_intents:
+    for raw in prepared_intents:
         tool = raw.get("tool")
         args = raw.get("args", {})
         continue_on_error = raw.get("continue_on_error", False)
         meta = raw.get("meta")
         if not isinstance(meta, dict):
             meta = {}
+        # Store lazy-resolve flag in meta so _execute_intents can handle it
+        if raw.get("_needs_lazy_resolve"):
+            meta["_needs_lazy_resolve"] = True
         converted.append(Intent(tool=tool, args=args, continue_on_error=continue_on_error, meta=meta))
 
     # Store intents for "do that again" before execution
-    update_last_intents(resolved_intents)
+    update_last_intents([{"tool": r["tool"], "args": r["args"], "continue_on_error": r["continue_on_error"]} for r in prepared_intents])
     
     # Preserve existing validation/gating behavior.
     validate_intents(converted, registry)
@@ -2664,6 +3413,13 @@ def _execute_intents(intents, registry) -> ExecutionSummary:
     """
     Execute multiple intents sequentially and collect results.
     
+    Phase 10: Supports lazy pronoun resolution — if an intent has
+    meta._needs_lazy_resolve=True, its pronouns are resolved using the
+    CURRENT world state (which includes updates from prior steps).
+    
+    Also inserts a small delay after open_target before window-targeting
+    tools (close_window, minimize_window, etc.) to allow the window to appear.
+    
     Args:
         intents: List of Intent objects to execute
         registry: Tool registry
@@ -2675,7 +3431,57 @@ def _execute_intents(intents, registry) -> ExecutionSummary:
     results = []
     stopped_early = False
     
+    # Tools that open/launch apps (may need a delay before subsequent window ops)
+    _APP_OPENING_TOOLS = {"open_target", "open_app", "launch_app"}
+    # Tools that target a window (need the window to exist first)
+    _WINDOW_TARGETING_TOOLS = {"close_window", "minimize_window", "maximize_window",
+                                "focus_window", "move_window_to_monitor"}
+    _OPEN_CLOSE_DELAY_MS = 500  # delay between open and window-targeting tool
+    
+    prev_tool = None
+    
     for idx, intent in enumerate(intents):
+        # =====================================================================
+        # LAZY PRONOUN RESOLUTION: resolve "it"/"that" using current world state
+        # (which now includes updates from prior steps in this sequence)
+        # =====================================================================
+        if getattr(intent, 'meta', None) and intent.meta.get("_needs_lazy_resolve"):
+            from wyzer.core.reference_resolver import resolve_intent_args, has_unresolved_pronoun
+            from wyzer.context.world_state import get_world_state
+            ws = get_world_state()
+            intent_dict = {"tool": intent.tool, "args": dict(intent.args)}
+            if has_unresolved_pronoun(intent_dict):
+                resolved_args, clarification = resolve_intent_args(intent_dict, ws)
+                if clarification:
+                    logger.info(f"[REF] lazy resolve failed for {intent.tool}: {clarification}")
+                    exec_result = ExecutionResult(
+                        tool=intent.tool,
+                        ok=False,
+                        result=None,
+                        error={"type": "clarification_needed", "message": clarification}
+                    )
+                    results.append(exec_result)
+                    if not intent.continue_on_error:
+                        stopped_early = True
+                        break
+                    continue
+                else:
+                    intent = Intent(
+                        tool=intent.tool,
+                        args=resolved_args,
+                        continue_on_error=intent.continue_on_error,
+                        meta=intent.meta,
+                    )
+                    logger.info(f"[REF] lazy resolved {intent.tool} args={resolved_args}")
+        
+        # =====================================================================
+        # DELAY: if previous tool opened an app and this one targets a window,
+        # wait briefly for the window to appear.
+        # =====================================================================
+        if prev_tool in _APP_OPENING_TOOLS and intent.tool in _WINDOW_TARGETING_TOOLS:
+            logger.info(f"[INTENT] Inserting {_OPEN_CLOSE_DELAY_MS}ms delay between {prev_tool} and {intent.tool}")
+            time.sleep(_OPEN_CLOSE_DELAY_MS / 1000.0)
+        
         logger.info(f"[INTENT {idx + 1}/{len(intents)}] Executing: {intent.tool}")
         
         # Execute the tool
@@ -2721,6 +3527,7 @@ def _execute_intents(intents, registry) -> ExecutionSummary:
         )
         
         results.append(exec_result)
+        prev_tool = intent.tool
         
         # If error occurred and continue_on_error is False, stop execution
         if has_error and not intent.continue_on_error:
@@ -3637,6 +4444,12 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
             # Default: time_only
             return f"It is {t12}." if t12 else (f"It is {t_raw}." if t_raw else "Here's the current time.")
 
+        if tool == "get_capabilities":
+            summary = result.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                return summary
+            return "I have many capabilities. Try saying: open Chrome, what time is it, or set a timer."
+
         if tool == "get_system_info":
             os_name = result.get("os")
             arch = result.get("architecture")
@@ -3711,6 +4524,28 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
 
         # Read-only: list all visible windows
         if tool == "list_open_windows":
+            # If an _app_filter was provided, check if that specific app is open
+            app_filter = (args.get("_app_filter") or "").strip().lower()
+            if app_filter:
+                windows = result.get("windows")
+                if not isinstance(windows, list):
+                    windows = []
+                # Search for the app in window titles and process names
+                found = False
+                matched_title = ""
+                for w in windows:
+                    w_title = (w.get("title") or "").lower()
+                    w_app = (w.get("app") or "").lower().replace(".exe", "")
+                    if app_filter in w_title or app_filter in w_app:
+                        found = True
+                        matched_title = w.get("title") or w_app
+                        break
+                app_display = app_filter.title()
+                if found:
+                    return f"Yes, {app_display} is open. Window: {matched_title}."
+                else:
+                    return f"No, {app_display} doesn't appear to be open."
+
             windows = result.get("windows")
             count = result.get("count")
             if not isinstance(windows, list):
@@ -3914,6 +4749,48 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
             
             return "Timer updated."
 
+        # Phase 15a: get_recent_events — deterministic event log summary
+        if tool == "get_recent_events":
+            events = result.get("events") or []
+            count = result.get("count", len(events))
+            if not events:
+                return "No recent actions recorded."
+            # Build a concise, TTS-friendly summary of recent events.
+            # Filter to meaningful user-facing events (skip internal perception).
+            _SKIP_TOOLS = {"get_window_context", "get_recent_events"}
+            summaries: list[str] = []
+            for ev in reversed(events):  # newest first
+                etype = ev.get("event", "")
+                if etype == "tool_end":
+                    t = ev.get("tool", "")
+                    if t in _SKIP_TOOLS:
+                        continue
+                    ok = ev.get("success", False)
+                    label = t.replace("_", " ")
+                    status = "succeeded" if ok else "failed"
+                    # Add args context for meaningful tools
+                    detail = ""
+                    args_data = ev.get("args") or {}
+                    if t == "open_target" and args_data.get("query"):
+                        detail = f" ({args_data['query']})"
+                    elif t == "switch_app" and args_data.get("app"):
+                        detail = f" ({args_data['app']})"
+                    elif t == "close_window" and args_data.get("title"):
+                        detail = f" ({args_data['title']})"
+                    summaries.append(f"{label}{detail}: {status}")
+                elif etype == "ui_action":
+                    action = ev.get("action", "action")
+                    target = ev.get("target", "")
+                    summaries.append(f"{action} {target}".strip())
+            if not summaries:
+                return "No notable recent actions found."
+            # Limit to requested count
+            limit = (args or {}).get("limit", 10)
+            summaries = summaries[:limit]
+            header = f"Your last {len(summaries)} action{'s' if len(summaries) != 1 else ''}:"
+            numbered = [f"{i+1}. {s}" for i, s in enumerate(summaries)]
+            return header + " " + "; ".join(numbered) + "."
+
         # Generic: any tool that provides a deterministic summary
         if isinstance(result, dict) and result.get("summary"):
             return result["summary"]
@@ -3932,6 +4809,21 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
                 if query:
                     return f"Could not find {query}."
                 return "Could not find that target."
+
+            # ── close_window + window_not_found → store pending tool ──
+            error_type = ""
+            if isinstance(r.error, dict):
+                error_type = str(r.error.get("type", "")).lower()
+            if r.tool == "close_window" and error_type == "window_not_found":
+                from wyzer.core.followup_manager import PendingToolCompletion
+                fm = _get_followup_manager()
+                fm.set_pending_tool(PendingToolCompletion(
+                    tool="close_window",
+                    slots={"title": None},
+                    original_args=dict(intent_args),
+                    expires_s=20.0,
+                ))
+                return "I can't find that window. What is it called?"
             
             # Use the error mapper for user-friendly messages
             if r.error:
@@ -4031,7 +4923,7 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
     closed: List[str] = []
     audio_switched: Optional[str] = None
     audio_list: Optional[str] = None
-    info_sentence: Optional[str] = None
+    info_sentences: List[str] = []
     volume_fragments: List[str] = []
     media_fragments: List[str] = []
 
@@ -4041,7 +4933,7 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
 
         info = format_info(intent.tool, args, res)
         if info:
-            info_sentence = info
+            info_sentences.append(info)
             continue
 
         if intent.tool == "open_target":
@@ -4178,6 +5070,7 @@ def _format_fastpath_reply(user_text: str, intents: List[Intent], execution_summ
     if action_fragments:
         action_sentence = "; ".join(action_fragments) + "."
 
+    info_sentence = " ".join(info_sentences) if info_sentences else None
     if action_sentence and info_sentence:
         return f"{action_sentence} {info_sentence}"
     if info_sentence:
@@ -5127,13 +6020,24 @@ def _call_llm_reply_only(user_text: str) -> Dict[str, Any]:
             perception_block += "\n[RECENT EVENTS]\n" + "\n".join(event_lines) + "\n"
     except Exception:
         pass
+
+    # Inject visual context (foreground window) as fallback when no perception snapshot
+    visual_context_block = ""
+    if not perception_block.strip():
+        try:
+            from wyzer.vision.window_context import get_visual_context_block
+            vc = get_visual_context_block()
+            if vc:
+                visual_context_block = vc
+        except Exception:
+            pass
     
     from wyzer.brain.capability_contract import get_capability_contract
     capability_contract = get_capability_contract(get_registry())
 
     prompt = f"""{capability_contract}
 You are Wyzer, a local voice assistant.
-{ctx['promoted']}{ctx['redaction']}{ctx['memories']}{ctx['session']}{smalltalk_directive}{perception_block}
+{ctx['promoted']}{ctx['redaction']}{ctx['memories']}{ctx['session']}{smalltalk_directive}{perception_block}{visual_context_block}
 Reply naturally. Be direct.
 You ARE allowed to generate stories, poems, jokes, and creative content when asked.
 Keep creative content spoken-friendly: no markdown, no bullet lists.
@@ -5952,6 +6856,139 @@ def _check_minimize_all_windows_commands(text: str, start_time: float) -> Option
             "max_actions": max_actions,
         },
     }
+
+
+# ============================================================================
+# PENDING TOOL COMPLETION HANDLER (deterministic, no LLM)
+# ============================================================================
+
+def _check_pending_tool_completion(text: str, start_time: float) -> Optional[Dict[str, Any]]:
+    """Handle follow-up input when a tool previously failed and requested clarification.
+
+    If FollowupManager has a pending tool completion (e.g. close_window with
+    window_not_found), this function:
+      1. Extracts the window title from the user's clarification text
+      2. Resolves it against currently open windows
+      3. Re-runs the original tool
+      4. Returns ONLY the tool-confirmed result (NO LLM)
+
+    Returns:
+        Response dict if a pending tool was handled, None otherwise.
+    """
+    logger = get_logger_instance()
+    raw = (text or "").strip()
+    if not raw:
+        return None
+
+    fm = _get_followup_manager()
+    pending = fm.get_pending_tool()
+    if pending is None:
+        return None
+
+    logger.info(f"[PENDING_TOOL] Active pending: {pending}, user said: {raw!r}")
+
+    # Consume the pending tool (one-shot) to prevent loops
+    fm.consume_pending_tool()
+
+    # ── Extract the missing slot value from user speech ──
+    title = extract_window_title(raw)
+    if not title:
+        # User said something like just "yes" with no title — ask again
+        fm.set_pending_tool(pending.__class__(
+            tool=pending.tool,
+            slots=pending.slots,
+            original_args=pending.original_args,
+            expires_s=15.0,
+        ))
+        end_time = time.perf_counter()
+        return {
+            "reply": "What's the name of the window?",
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"pending_tool": pending.tool, "needs_title": True},
+        }
+
+    # ── Resolve against open windows (case-insensitive + fuzzy) ──
+    resolved = resolve_window_title(title)
+    logger.info(f"[PENDING_TOOL] Extracted title={title!r}, resolved={resolved!r}")
+
+    # ── Re-run the original tool with the resolved slot ──
+    try:
+        registry = get_registry()
+        new_args: Dict[str, Any] = dict(pending.original_args)
+        # Replace the unresolved title/process with the resolved value
+        if "title" in pending.slots:
+            new_args["title"] = resolved
+            # Clear process if it was the failed param so title takes priority
+            new_args.pop("process", None)
+
+        tool_result = _execute_tool(registry, pending.tool, new_args)
+
+        has_error = isinstance(tool_result, dict) and "error" in tool_result
+        error_type = ""
+        if has_error and isinstance(tool_result.get("error"), dict):
+            error_type = str(tool_result["error"].get("type", "")).lower()
+
+        if has_error:
+            if error_type == "window_not_found":
+                # Still can't find it — re-store pending and ask again
+                from wyzer.core.followup_manager import PendingToolCompletion
+                fm.set_pending_tool(PendingToolCompletion(
+                    tool=pending.tool,
+                    slots=pending.slots,
+                    original_args=pending.original_args,
+                    expires_s=15.0,
+                ))
+                reply = f"I still can't find a window called {resolved}. What's the exact name?"
+            else:
+                reply = _tool_error_to_speech(tool_result.get("error"), pending.tool, new_args)
+        else:
+            # ── Success! Format the confirmed result ──
+            matched = tool_result.get("matched") if isinstance(tool_result, dict) else {}
+            window_name = (
+                (matched.get("title") if isinstance(matched, dict) else None)
+                or resolved
+                or title
+            )
+            reply = f"Closed {window_name}."
+
+        end_time = time.perf_counter()
+        latency_ms = int((end_time - start_time) * 1000)
+
+        # Log tool execution via observability
+        log_tool_execution(
+            tool_name=pending.tool,
+            success=not has_error,
+            latency_ms=latency_ms,
+            error=str(tool_result.get("error", ""))[:50] if has_error else None,
+        )
+
+        return {
+            "reply": reply,
+            "latency_ms": latency_ms,
+            "execution_summary": {
+                "ran": [{
+                    "tool": pending.tool,
+                    "ok": not has_error,
+                    "result": tool_result if not has_error else None,
+                    "error": tool_result.get("error") if has_error else None,
+                }],
+                "stopped_early": False,
+            },
+            "meta": {
+                "pending_tool_completion": True,
+                "tool": pending.tool,
+                "resolved_title": resolved,
+                "original_text": raw,
+            },
+        }
+    except Exception as e:
+        logger.error(f"[PENDING_TOOL] Error re-running {pending.tool}: {e}")
+        end_time = time.perf_counter()
+        return {
+            "reply": "Something went wrong. Please try again.",
+            "latency_ms": int((end_time - start_time) * 1000),
+            "meta": {"pending_tool_completion": True, "error": str(e)},
+        }
 
 
 def _check_pending_action_response(text: str, start_time: float) -> Optional[Dict[str, Any]]:

@@ -200,3 +200,176 @@ def perception_to_prompt_block(p: Dict[str, Any], max_controls: int = 10) -> str
         parts.append("Errors: none")
 
     return "\n".join(parts)
+
+
+# =========================================================================
+# AGENT-GRADE: Multi-source canonical snapshot (Phase 17)
+# =========================================================================
+
+FATAL_PERCEPTION_ERRORS = frozenset({
+    "pywinauto_not_installed",
+    "no_foreground_window",
+    "no_top_windows",
+    "foreground_not_in_uia_list",
+})
+
+# Tools whose execution invalidates the current observation snapshot.
+UI_AFFECTING_TOOLS = frozenset({
+    "desktop_click_uia", "click", "type_text", "send_keys",
+    "switch_app", "open_app", "open_target", "close_window",
+    "minimize_window", "maximize_window", "focus_window",
+    "__CLICK_AND_TYPE__",
+})
+
+
+def normalize_perception_multi(
+    raw_uia: dict | None,
+    raw_ocr: dict | None,
+    active_window: dict | None,
+    recent_events: list | None,
+) -> dict:
+    """Merge multiple perception sources into one canonical snapshot.
+
+    Canonical shape (exact keys)::
+
+        {
+            "timestamp_ms": int,
+            "foreground": {"app": str|None, "title": str|None},
+            "windows": [{"title": str, "app": str|None}],
+            "controls": [{"name": str, "type": str|None, "automation_id": str|None}],
+            "ocr_text": [str],
+            "errors": [str],
+        }
+    """
+    import time as _time
+
+    errors: list[str] = []
+
+    # ── foreground window ────────────────────────────────────────────
+    fg_app: str | None = None
+    fg_title: str | None = None
+    if active_window and isinstance(active_window, dict):
+        fg_app = active_window.get("exe") or active_window.get("app")
+        fg_title = active_window.get("title")
+        if active_window.get("error"):
+            errors.append(active_window["error"])
+    elif raw_uia and isinstance(raw_uia, dict):
+        w = raw_uia.get("window") or {}
+        fg_app = w.get("exe") or w.get("app")
+        fg_title = w.get("title")
+
+    # ── windows list (from UIA top-windows if available) ─────────────
+    windows_list: list[dict] = []
+    if raw_uia and isinstance(raw_uia, dict):
+        # The UIA snapshot only covers the focused window, but we may have
+        # open_windows from world_state injected via recent_events.  For now
+        # populate from the focused window; the orchestrator can enrich later.
+        w = raw_uia.get("window") or {}
+        wtitle = w.get("title")
+        wapp = w.get("exe") or w.get("app")
+        if wtitle:
+            windows_list.append({"title": wtitle, "app": wapp})
+
+    # ── controls ─────────────────────────────────────────────────────
+    controls: list[dict] = []
+    if raw_uia and isinstance(raw_uia, dict):
+        for c in raw_uia.get("controls") or []:
+            if not isinstance(c, dict):
+                continue
+            controls.append({
+                "name": (c.get("name") or "").strip(),
+                "type": c.get("control_type") or c.get("type") or None,
+                "automation_id": c.get("automation_id"),
+            })
+        for e in raw_uia.get("errors") or []:
+            if e not in errors:
+                errors.append(str(e))
+
+    # ── OCR text lines ───────────────────────────────────────────────
+    ocr_text: list[str] = []
+    if raw_ocr and isinstance(raw_ocr, dict):
+        for ln in raw_ocr.get("lines") or []:
+            if isinstance(ln, dict) and ln.get("text"):
+                ocr_text.append(str(ln["text"]))
+            elif isinstance(ln, str) and ln.strip():
+                ocr_text.append(ln)
+        for e in raw_ocr.get("errors") or []:
+            if e not in errors:
+                errors.append(str(e))
+
+    return {
+        "timestamp_ms": int(_time.time() * 1000),
+        "foreground": {"app": fg_app, "title": fg_title},
+        "windows": windows_list,
+        "controls": controls,
+        "ocr_text": ocr_text,
+        "errors": errors,
+    }
+
+
+def canonical_to_prompt_block(canonical: dict, max_controls: int = 12) -> str:
+    """Render the *agent-grade* canonical snapshot into a prompt block.
+
+    This produces the ``[PERCEPTION SNAPSHOT]`` section that gets injected
+    into the LLM prompt on every agent-loop iteration.
+    """
+    if not canonical:
+        return "[PERCEPTION SNAPSHOT]\nNo perception data available."
+
+    parts: list[str] = ["[PERCEPTION SNAPSHOT]"]
+
+    # Foreground
+    fg = canonical.get("foreground") or {}
+    app = fg.get("app") or "unknown"
+    title = fg.get("title") or ""
+    if title:
+        parts.append(f"Foreground: {app} — \"{title[:80]}\"")
+    else:
+        parts.append(f"Foreground: {app}")
+
+    # Windows
+    wins = canonical.get("windows") or []
+    if wins:
+        items = [f"{w.get('title','?')} ({w.get('app','')})" for w in wins[:6]]
+        parts.append(f"Windows ({len(wins)}): {'; '.join(items)}")
+    else:
+        parts.append("Windows: none listed")
+
+    # Controls
+    ctrls = canonical.get("controls") or []
+    if ctrls:
+        items = []
+        for c in ctrls[:max_controls]:
+            name = (c.get("name") or "").strip()
+            ctype = (c.get("type") or "").strip()
+            if name:
+                items.append(f"{name} ({ctype})" if ctype else name)
+        suffix = f" (+{len(ctrls) - max_controls} more)" if len(ctrls) > max_controls else ""
+        parts.append(f"Controls ({len(ctrls)}): {', '.join(items)}{suffix}")
+    else:
+        parts.append("Controls: none found")
+
+    # OCR
+    ocr = canonical.get("ocr_text") or []
+    if ocr:
+        preview = "; ".join(ocr[:5])
+        if len(preview) > 200:
+            preview = preview[:200] + "..."
+        parts.append(f"OCR ({len(ocr)} lines): {preview}")
+
+    # Errors
+    errs = canonical.get("errors") or []
+    if errs:
+        parts.append(f"Errors: {'; '.join(errs[:3])}")
+    else:
+        parts.append("Errors: none")
+
+    return "\n".join(parts)
+
+
+def has_fatal_perception_error(canonical: dict) -> bool:
+    """Return True if the canonical snapshot contains a fatal perception error."""
+    for e in canonical.get("errors") or []:
+        if e in FATAL_PERCEPTION_ERRORS:
+            return True
+    return False

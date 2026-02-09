@@ -79,6 +79,15 @@ REPLAY_LAST_ACTION_SENTINEL = "__REPLAY_LAST_ACTION__"
 # Deictic pronouns that refer to the current/focused window
 _DEICTIC_PRONOUNS = {"it", "this", "that", "the app", "the window", "the application"}
 
+# Descriptive references to the most recently opened/acted-upon target
+# e.g. "close the most recent thing you opened", "close the last app you launched"
+_DESCRIPTIVE_RECENT_RE = re.compile(
+    r"^(?P<action>close|shut|quit|exit|minimize|minimise|maximize|maximise|focus(?:\s+on)?|switch\s+to)"
+    r"\s+(?:the\s+)?(?:most\s+recent|last)\s+(?:thing|app|window|program|application)"
+    r"(?:\s+(?:you|i|we)\s+(?:open(?:ed)?|launch(?:ed)?|start(?:ed)?|clos(?:ed)?|us(?:ed)?))?.*$",
+    re.IGNORECASE
+)
+
 # Recency threshold for last_action resolution (seconds)
 # Pronouns prefer last_action.resolved if the action happened within this window
 # AND the action was a focus-changing tool (switch_app, open_target, focus_window, etc.)
@@ -487,6 +496,11 @@ def resolve_references(text: str, ws: Optional[WorldState] = None) -> str:
         return original
     
     # Try each pattern in order of specificity
+    result = _try_resolve_descriptive_recent(original, ws)
+    if result:
+        logger.debug(f'[REF_RESOLVE] "{original}" → "{result}"')
+        return result
+
     result = _try_resolve_close_it(original, ws)
     if result:
         logger.debug(f'[REF_RESOLVE] "{original}" → "{result}"')
@@ -519,6 +533,55 @@ def resolve_references(text: str, ws: Optional[WorldState] = None) -> str:
     
     # No rewrite needed
     return original
+
+
+def _try_resolve_descriptive_recent(text: str, ws: WorldState) -> Optional[str]:
+    """
+    Resolve descriptive recency references like:
+      "close the most recent thing you opened" → "close Chrome"
+      "close the last app you launched"        → "close Chrome"
+      "minimize the last thing you opened"     → "minimize Chrome"
+
+    Uses world state last_action/last_target to find the most recent target.
+    """
+    m = _DESCRIPTIVE_RECENT_RE.match(text)
+    if not m:
+        return None
+
+    logger = get_logger()
+    action = m.group("action").strip().lower()
+
+    # Map compound actions
+    if action in ("switch to",):
+        action = "switch to"
+    elif action in ("focus on", "focus"):
+        action = "focus"
+
+    # Try to get the most recent target from world state
+    target, source = _best_recent_target(ws)
+    if target:
+        target = _clean_target(target)
+        logger.debug(
+            f'[REF] descriptive_recent action="{action}" '
+            f'resolved_to="{target}" source="{source}"'
+        )
+        return f"{action} {target}"
+
+    # Also try last_target directly (covers non-focus-changing tools)
+    if ws.last_target and ws.last_tool in _APP_TOOLS:
+        target = _clean_target(ws.last_target)
+        if target:
+            logger.debug(
+                f'[REF] descriptive_recent action="{action}" '
+                f'resolved_to="{target}" source="last_target"'
+            )
+            return f"{action} {target}"
+
+    logger.debug(
+        f'[REF] descriptive_recent action="{action}" '
+        f'resolved_to=None source="unresolved"'
+    )
+    return None
 
 
 def _try_resolve_close_it(text: str, ws: WorldState) -> Optional[str]:
@@ -1194,7 +1257,7 @@ def resolve_intent_args(
     args = dict(intent.get("args", {}))
     
     # Keys that might contain pronoun references needing resolution
-    target_keys = ["app", "app_name", "query", "target", "window", "window_title", "process", "name"]
+    target_keys = ["app", "app_name", "query", "target", "window", "window_title", "title", "process", "name"]
     
     for key in target_keys:
         value = args.get(key)
@@ -1268,7 +1331,7 @@ def has_unresolved_pronoun(intent: dict) -> bool:
         True if any argument is a pronoun needing resolution
     """
     args = intent.get("args", {})
-    target_keys = ["app", "app_name", "query", "target", "window", "window_title", "process", "name"]
+    target_keys = ["app", "app_name", "query", "target", "window", "window_title", "title", "process", "name"]
     
     for key in target_keys:
         value = args.get(key)
@@ -1278,3 +1341,55 @@ def has_unresolved_pronoun(intent: dict) -> bool:
                 return True
     
     return False
+
+
+# ============================================================================
+# PHASE 17: AGENT-GRADE FOLLOW-UP RESOLUTION
+# ============================================================================
+
+# "that one" / "it" / "this" → resolves to last confirmable target
+_DEICTIC_REF_RE = re.compile(
+    r"^(?:that\s+one|it|this|the\s+one)\.?$",
+    re.IGNORECASE,
+)
+
+
+def resolve_agent_followup(text: str) -> Optional[Dict[str, Any]]:
+    """Resolve agent-grade follow-up references.
+
+    Handles:
+      - "yes, it's Notepad" → {action: "close_window", title: "Notepad"}
+      - "that one" / "it" / "this" → uses last confirmable target
+
+    Returns:
+        Action dict or None if not a follow-up reference.
+    """
+    try:
+        # Lazy import to avoid circular deps
+        import sys
+        orch = sys.modules.get("wyzer.core.orchestrator")
+        if orch is None:
+            return None
+        fm_getter = getattr(orch, "_get_followup_manager", None)
+        if fm_getter is None:
+            return None
+        fm = fm_getter()
+
+        # Try "yes it's X" pattern first
+        result = fm.resolve_yes_its_x(text)
+        if result is not None:
+            return result
+
+        # Try deictic reference ("that one", "it", "this")
+        s = (text or "").strip()
+        if _DEICTIC_REF_RE.match(s):
+            target = fm.get_last_confirmable_target()
+            if target:
+                return {
+                    "action": "use_target",
+                    "target": target,
+                }
+    except Exception:
+        pass
+
+    return None
