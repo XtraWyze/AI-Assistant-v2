@@ -96,14 +96,18 @@ def _parse_volume_scope_and_process(clause: str) -> Tuple[str, str]:
     cl = re.sub(r"\s+(?:at|at now|now|right now)\s*\??\s*$", "", cl)
 
     # "set <proc> volume ..." should treat <proc> as app.
-    m = re.match(r"^set\s+(?P<proc>.+?)\s+(?:volume|sound|audio)\b", cl)
+    # Use greedy match + strip articles to handle "set the spotify volume"
+    m = re.match(r"^set\s+(?P<proc>.+)\s+(?:volume|sound|audio)\b", cl)
     if m:
         proc = _strip_trailing_punct(m.group("proc")).strip()
+        proc = re.sub(r"^(?:the|my)\s+", "", proc)  # strip leading articles
         if proc and proc not in {"the", "my", "this", "that", "volume", "sound", "audio"}:
             return "app", proc
 
     # "volume 30 for spotify" / "mute discord" style: trailing "for/in/on <proc>".
-    m = re.search(r"\b(?:for|in|on)\s+(?P<proc>[a-z0-9][a-z0-9 _\-\.]{1,60})$", cl)
+    # Strip trailing percent/numbers so "volume for spotify to 30%" can match
+    cl_for_proc = re.sub(r"\s+(?:to|at|for)\s+\d{1,3}\s*%?\s*$", "", cl)
+    m = re.search(r"\b(?:for|in|on)\s+(?P<proc>[a-z0-9][a-z0-9 _\-\.]{1,60})$", cl_for_proc or cl)
     if m:
         proc = _strip_trailing_punct(m.group("proc")).strip()
         if proc:
@@ -1107,7 +1111,9 @@ def _segment_matches_tool(segment: str) -> Optional[Dict[str, Any]]:
         m = _CLOSE_RE.match(candidate)
         if m:
             target = (m.group(2) or "").strip().strip("\"'")
-            if target:
+            # Strip trailing punctuation that Whisper may attach
+            target = target.rstrip(".,!?;:")
+            if target and target.lower() not in {"it", "this", "that", "something", "anything"}:
                 return {"tool": "close_window", "args": {"title": target}, "continue_on_error": False}
 
     # Single-clause fallback (media, volume, etc.)

@@ -60,6 +60,148 @@ from wyzer.policy.evidence_envelope import (
     build_empty_envelope,
 )
 
+# Phase 18: Agent-core router + prompt profiles
+from wyzer.agent_core.router import (
+    router_route,
+    RouterDecision,
+    needs_speak,
+    strip_verb_prefix,
+    REPAIR_ERROR_TYPES,
+)
+from wyzer.agent_core.prompt_builder_profiles import (
+    build_prompt,
+    PromptContext,
+    BuiltPrompt,
+)
+
+
+# ---------------------------------------------------------------------------
+# Phase 18: Router integration helpers
+# ---------------------------------------------------------------------------
+def _log_router_decision(user_text: str, registry, start_time: float) -> Optional[RouterDecision]:
+    """Run the agent-core router alongside the existing pipeline.
+
+    This is NON-BLOCKING and never changes the existing control flow.
+    It logs the decision for observability and returns it for optional use.
+    """
+    try:
+        from wyzer.context.world_state import get_world_state
+        ws = get_world_state()
+        decision = router_route(
+            user_text=user_text,
+            world_state=ws,
+            tool_registry=registry,
+            compact_mode=False,
+            regex_router=hybrid_router,
+            last_tool_error=None,
+        )
+        logger = get_logger_instance()
+        logger.info(
+            f"[ROUTE] route={decision.route} confidence={decision.confidence:.2f} "
+            f"reasons={decision.reasons}"
+        )
+        return decision
+    except Exception as exc:
+        try:
+            get_logger_instance().debug(f"[ROUTE] router_route failed: {exc}")
+        except Exception:
+            pass
+        return None
+
+
+def _try_repair_once(
+    tool_name: str,
+    tool_args: Dict[str, Any],
+    error: Dict[str, Any],
+    user_text: str,
+    registry,
+) -> Optional[Dict[str, Any]]:
+    """Attempt a single REPAIR cycle using the LLM.
+
+    Returns corrected tool result dict on success, None on failure.
+    """
+    logger = get_logger_instance()
+    error_type = (error.get("type") or error.get("error_type") or "").lower()
+    if error_type not in REPAIR_ERROR_TYPES:
+        return None
+
+    try:
+        from wyzer.context.world_state import get_world_state
+        ws = get_world_state()
+
+        # Build REPAIR prompt
+        tool_schemas = []
+        tool_obj = registry.get(tool_name)
+        if tool_obj:
+            tool_schemas = [{
+                "name": tool_obj.name,
+                "description": tool_obj.description,
+                "args_schema": tool_obj.args_schema,
+            }]
+
+        ctx = PromptContext(
+            user_text=user_text,
+            tool_schemas=tool_schemas,
+            foreground_window=getattr(ws, "active_window_title", "") or "",
+            last_action=getattr(ws, "last_target", "") or "",
+            open_windows=getattr(ws, "open_windows", []) or [],
+            last_tool_error={
+                "tool_name": tool_name,
+                "args": tool_args,
+                "error_type": error_type,
+                "error_message": error.get("message") or str(error),
+            },
+        )
+        built = build_prompt("repair", compact=True, ctx=ctx)
+        logger.info(
+            f"[REPAIR] attempted=True tool={tool_name} "
+            f"tokens_est={built.tokens_est}"
+        )
+
+        # Call LLM with the repair prompt
+        from wyzer.core.orchestrator import _get_llm_client
+        client = _get_llm_client()
+        if client is None:
+            logger.info("[REPAIR] no LLM client available")
+            return None
+
+        import json as _json
+        raw_reply = client.chat(
+            built.system + "\n\n" + built.user,
+            max_tokens=120,
+            temperature=0.1,
+        )
+        if not raw_reply:
+            logger.info("[REPAIR] LLM returned empty")
+            return None
+
+        # Parse corrected tool call
+        try:
+            corrected = _json.loads(raw_reply)
+        except _json.JSONDecodeError:
+            logger.info(f"[REPAIR] LLM reply not JSON: {raw_reply[:80]}")
+            return None
+
+        corrected_tool = corrected.get("tool", tool_name)
+        corrected_args = corrected.get("args", {})
+        if not isinstance(corrected_args, dict):
+            return None
+
+        # Execute the corrected tool call
+        tool = registry.get(corrected_tool)
+        if tool is None:
+            return None
+
+        result = tool.run(**corrected_args)
+        has_error = isinstance(result, dict) and "error" in result
+        logger.info(f"[REPAIR] success={not has_error} tool={corrected_tool}")
+        if has_error:
+            return None
+        return result
+    except Exception as exc:
+        logger.warning(f"[REPAIR] exception: {exc}")
+        return None
+
 
 # Short varied responses for no-ollama mode when command isn't recognized
 _NO_OLLAMA_FALLBACK_REPLIES = [
@@ -743,6 +885,13 @@ _LEADING_CONFIRM_RE = re.compile(
 )
 
 
+# Strip leading action verbs for pending tool slot extraction
+_LEADING_ACTION_VERB_RE = re.compile(
+    r"^(?:close|quit|exit|shut|kill|stop|open|launch|start|switch\s+to|go\s+to)\s+",
+    re.IGNORECASE,
+)
+
+
 def extract_window_title(text: str) -> Optional[str]:
     """Extract a window title from a user's clarification utterance.
 
@@ -750,6 +899,7 @@ def extract_window_title(text: str) -> Optional[str]:
         "Yes, it's notepad."  → "notepad"
         "Notepad"             → "notepad"
         "Chrome browser"      → "chrome browser"
+        "Close Notepad"       → "notepad"  (strips action verbs)
         "yes"                 → None  (pure filler, no title)
 
     Returns:
@@ -764,6 +914,9 @@ def extract_window_title(text: str) -> Optional[str]:
 
     # Strip leading confirmation filler: "yes it's ..."
     cleaned = _LEADING_CONFIRM_RE.sub("", cleaned).strip()
+
+    # Strip leading action verbs ("close notepad" → "notepad")
+    cleaned = _LEADING_ACTION_VERB_RE.sub("", cleaned).strip()
 
     if not cleaned:
         return None
@@ -1633,6 +1786,9 @@ def handle_user_text(text: str) -> Dict[str, Any]:
         # Peek hybrid router BEFORE reply-only. This prevents informational-query
         # heuristics from hijacking deterministic commands (e.g., window/screen perception).
         hybrid_decision = hybrid_router.decide(text)
+
+        # Phase 18: Log agent-core router decision (observability, non-blocking)
+        _router_decision = _log_router_decision(text, registry, start_time)
         
         # =====================================================================
         # REPLY-ONLY FAST-PATH: Skip tools for conversational queries
@@ -1967,6 +2123,32 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                 # ===============================================================
                 
                 execution_summary, executed_intents = execute_tool_plan(hybrid_decision.intents, registry)
+
+                # ----- Phase 18: REPAIR trigger on tool failure -----
+                # If a tool failed with a slot/arg error, attempt one LLM repair.
+                for _r_idx, _r_res in enumerate(execution_summary.ran):
+                    if _r_res.ok:
+                        continue
+                    _r_err = _r_res.error if isinstance(_r_res.error, dict) else {}
+                    _r_etype = (_r_err.get("type") or "").lower()
+                    if _r_etype not in REPAIR_ERROR_TYPES:
+                        continue
+                    _r_args = {}
+                    if executed_intents and _r_idx < len(executed_intents):
+                        _r_args = executed_intents[_r_idx].args or {}
+                    repaired = _try_repair_once(
+                        _r_res.tool, _r_args, _r_err, text, registry,
+                    )
+                    if repaired is not None:
+                        # Swap the failed result with the repaired one
+                        execution_summary.ran[_r_idx] = ExecutionResult(
+                            tool=_r_res.tool, ok=True,
+                            result=repaired, error=None,
+                        )
+                        logger.info(f"[REPAIR] success=True tool={_r_res.tool}")
+                    break  # only repair the first failure
+                # ----- end Phase 18 REPAIR -----
+
                 # Always use _format_fastpath_reply to properly handle tool execution failures.
                 # The hybrid_decision.reply is just a prediction; we need to verify execution succeeded.
                 reply = _format_fastpath_reply(
@@ -1989,7 +2171,8 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                         # Re-route through hybrid router instead of just generating LLM reply
                         from wyzer.core.reference_resolver import (
                             is_move_it_to_monitor_request, resolve_move_it_to_monitor,
-                            is_window_action_it_request, resolve_window_action_it
+                            is_window_action_it_request, resolve_window_action_it,
+                            is_pronoun_action_request, resolve_pronoun_target,
                         )
                         from wyzer.context.world_state import get_world_state
                         
@@ -2006,8 +2189,16 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                         # executed_intents contains Intent objects with .tool attribute
                         last_tool = executed_intents[0].tool if executed_intents else None
                         app_opening_tools = {"open_target", "open_app", "launch_app"}
-                        max_retries = 3 if last_tool in app_opening_tools else 1
-                        retry_delay_ms = 300  # 300ms between retries
+                        _just_opened_app = last_tool in app_opening_tools
+                        max_retries = 4 if _just_opened_app else 1
+                        retry_delay_ms = 500 if _just_opened_app else 300
+
+                        # ── Proactive delay: give the app time to register a window ──
+                        # UWP apps (e.g. Windows 11 Notepad) can take 1-2 s to appear.
+                        if _just_opened_app:
+                            _APP_OPEN_SETTLE_MS = 1000
+                            logger.debug(f'[HYBRID] Waiting {_APP_OPEN_SETTLE_MS}ms for app window to register')
+                            time.sleep(_APP_OPEN_SETTLE_MS / 1000.0)
                         
                         # IMPORTANT: Capture the resolved target from the main intent BEFORE processing leftovers.
                         # All leftover parts (e.g., "move it", "full screen it") refer to the SAME target.
@@ -2122,6 +2313,83 @@ def handle_user_text(text: str) -> Dict[str, Any]:
                                 leftover_handled = True
                                 # After first window operation succeeds, reduce retries for subsequent ones
                                 max_retries = 1
+
+                            # ── Pronoun action catch-all: "close it", "shut it", "focus it", etc. ──
+                            # Handles any pronoun-based window action NOT caught by the
+                            # move-to-monitor or maximize/minimize/fullscreen handlers above.
+                            if not part_handled and is_pronoun_action_request(leftover_part):
+                                # Map verb → tool name
+                                _lp_lower = leftover_part.strip().lower()
+                                if _lp_lower.startswith(("close", "shut", "kill", "quit", "exit")):
+                                    _lp_tool = "close_window"
+                                    _lp_verb = "Closed"
+                                elif _lp_lower.startswith("focus"):
+                                    _lp_tool = "focus_window"
+                                    _lp_verb = "Focused"
+                                elif _lp_lower.startswith(("minimize", "minimise")):
+                                    _lp_tool = "minimize_window"
+                                    _lp_verb = "Minimized"
+                                elif _lp_lower.startswith(("maximize", "maximise", "fullscreen", "full screen", "expand")):
+                                    _lp_tool = "maximize_window"
+                                    _lp_verb = "Maximized"
+                                else:
+                                    _lp_tool = None
+                                    _lp_verb = ""
+
+                                if _lp_tool:
+                                    # Resolve target: prefer the captured original_resolved_target
+                                    _lp_target = original_resolved_target
+                                    if not _lp_target:
+                                        _lp_target_resolved, _ = resolve_pronoun_target(leftover_part, ws)
+                                        _lp_target = _lp_target_resolved
+                                    if _lp_target:
+                                        _lp_args = {"title": _lp_target, "_display_name": _lp_target}
+                                        logger.info(f'[HYBRID] Leftover part {part_idx + 1} is pronoun_action {_lp_tool}: title={_lp_target}')
+                                        try:
+                                            _lp_intent = {"tool": _lp_tool, "args": _lp_args}
+                                            _lp_summary = None
+                                            for _lp_attempt in range(max_retries):
+                                                if _lp_attempt > 0:
+                                                    time.sleep(retry_delay_ms / 1000.0)
+                                                _lp_summary, _ = execute_tool_plan([_lp_intent], registry)
+                                                if _lp_summary.ran and _lp_summary.ran[0].ok:
+                                                    break
+                                                _lp_err = _lp_summary.ran[0].error if _lp_summary.ran else None
+                                                if not _lp_err or (_lp_err if isinstance(_lp_err, dict) else {}).get("type") != "window_not_found":
+                                                    break
+                                            if _lp_summary and _lp_summary.ran and _lp_summary.ran[0].ok:
+                                                leftover_parts_handled.append(f"{_lp_verb} {_lp_target}.")
+                                                part_handled = True
+                                                leftover_handled = True
+                                                execution_summary.ran.extend(_lp_summary.ran)
+                                            else:
+                                                _lp_err = _lp_summary.ran[0].error if _lp_summary and _lp_summary.ran else None
+                                                leftover_parts_handled.append(_tool_error_to_speech(_lp_err, _lp_tool, _lp_args))
+                                                part_handled = True
+                                                leftover_handled = True
+                                        except Exception as _lp_exc:
+                                            logger.warning(f"[HYBRID] Leftover pronoun_action {_lp_tool} failed: {_lp_exc}")
+                                    else:
+                                        logger.warning(f"[HYBRID] Pronoun action '{leftover_part}' has no resolved target")
+
+                            # ── Generic leftover re-routing through hybrid_router ──
+                            # If still not handled, try routing through the regex router.
+                            # This catches tool commands that don't involve pronouns.
+                            if not part_handled:
+                                _lo_decision = hybrid_router.decide(leftover_part)
+                                if _lo_decision.mode == "tool_plan" and _lo_decision.intents:
+                                    if _hybrid_tool_plan_is_registered(_lo_decision.intents, registry):
+                                        logger.info(f'[HYBRID] Leftover part {part_idx + 1} re-routed to tool_plan: {[i.get("tool") for i in _lo_decision.intents]}')
+                                        try:
+                                            _lo_summary, _lo_exec = execute_tool_plan(_lo_decision.intents, registry)
+                                            _lo_reply_part = _format_fastpath_reply(leftover_part, _lo_exec, _lo_summary)
+                                            if _lo_reply_part:
+                                                leftover_parts_handled.append(_lo_reply_part)
+                                            part_handled = True
+                                            leftover_handled = True
+                                            execution_summary.ran.extend(_lo_summary.ran)
+                                        except Exception as _lo_exc:
+                                            logger.warning(f"[HYBRID] Leftover re-route failed: {_lo_exc}")
                         
                         # Combine all handled parts into the reply
                         if leftover_parts_handled:
@@ -3605,9 +3873,11 @@ def _parse_volume_scope_and_process(clause: str) -> Tuple[str, str]:
     cl = re.sub(r"^the\s+", "", cl)
 
     # "set <proc> volume ..." should treat <proc> as app.
-    m = re.match(r"^set\s+(?P<proc>.+?)\s+(?:volume|sound|audio)\b", cl)
+    # Use greedy match + strip articles to handle "set the spotify volume"
+    m = re.match(r"^set\s+(?P<proc>.+)\s+(?:volume|sound|audio)\b", cl)
     if m:
         proc = _strip_trailing_punct(m.group("proc")).strip()
+        proc = re.sub(r"^(?:the|my)\s+", "", proc)  # strip leading articles
         if proc and proc not in {"the", "my", "this", "that", "volume", "sound", "audio"}:
             return "app", proc
 
@@ -3616,7 +3886,9 @@ def _parse_volume_scope_and_process(clause: str) -> Tuple[str, str]:
     #   "set spotify volume to 30"
     #   "volume 30 for spotify"
     #   "turn down chrome"
-    m = re.search(r"\b(?:for|in|on)\s+(?P<proc>[a-z0-9][a-z0-9 _\-\.]{1,60})$", cl)
+    # Strip trailing percent/numbers so "volume for spotify to 30%" can match
+    cl_for_proc = re.sub(r"\s+(?:to|at|for)\s+\d{1,3}\s*%?\s*$", "", cl)
+    m = re.search(r"\b(?:for|in|on)\s+(?P<proc>[a-z0-9][a-z0-9 _\-\.]{1,60})$", cl_for_proc or cl)
     if m:
         proc = _strip_trailing_punct(m.group("proc")).strip()
         if proc:
@@ -4157,7 +4429,7 @@ def _fastpath_parse_clause(clause: str) -> Optional[List[Intent]]:
             percent = _extract_volume_percent(c_lower)
             if percent is not None:
                 # Require a reasonably clear set pattern.
-                if re.search(r"\b(set\s+)?(?:the\s+)?(?:master\s+)?(?:volume|sound|audio)\s+(?:to\s+)?\d{1,3}\s*%?\b", c_lower) or re.fullmatch(
+                if re.search(r"\b(set\s+)?(?:the\s+)?(?:master\s+)?(?:volume|sound|audio)\s+(?:(?:to|for|at)\s+)?\d{1,3}\s*%?\b", c_lower) or re.fullmatch(
                     r"(?:volume|sound|audio)\s+\d{1,3}\s*%?", c_lower
                 ):
                     args = {"scope": scope, "action": "set", "level": max(0, min(100, int(percent)))}
